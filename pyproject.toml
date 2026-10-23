@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "advanced-timegrapher"
+version = "0.1.0"
+description = "Software timegrapher for mechanical watches (PyQt6 GUI; measurement core under reconstruction)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "Alberto Pico Lara" }
+]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "sounddevice>=0.4.6",
+    "PyQt6>=6.6",
+    "pyqtgraph>=0.13",
+    "PyOpenGL",
+    "PyOpenGL_accelerate",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "pytest-qt",
+    "scipy",
+    "pre-commit",
+]
+
+[project.scripts]
+adv-tg = "adv_tg.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["adv_tg*"]
+
+[tool.setuptools.package-data]
+"adv_tg.ui" = ["assets/*.svg"]
+"adv_tg.utils" = ["db/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# E = pycodestyle, F = Pyflakes (imports/variables sin usar), I = isort (orden de imports)
+select = ["E", "F", "I"]
+
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
