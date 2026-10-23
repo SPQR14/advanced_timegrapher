@@ -30,8 +30,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          # libportaudio2 para sounddevice, xvfb y librerías xcb para PyQt6 headless
-          sudo apt-get install -y libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libasound2
+          # libportaudio2 y libasound2t64 (Ubuntu 24.04+) para audio; xvfb, xcb y gl/egl para PyQt6/PyOpenGL headless
+          sudo apt-get install -y libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libasound2t64 libegl1 libgl1
 
       - name: Install Python Dependencies
         run: |
