@@ -17,9 +17,11 @@ from typing import Self
 import numpy as np
 from numpy.typing import NDArray
 
-from wea.utils.logger_setup import LoggerSetup
+from adv_tg.utils.debugger import Debugger
+from adv_tg.utils.logger_setup import LoggerSetup
 
 logger = LoggerSetup.setup_logger(__name__)
+_dbg = Debugger.get(__name__)
 
 SYNTHETIC_DEVICE_NAME: str = "Synthetic Ground-Truth Generator"
 
@@ -44,6 +46,23 @@ class AudioDeviceInfo:
 
 
 def list_input_devices() -> list[AudioDeviceInfo]:
+    """Enumerate available audio input devices, always starting with the synthetic generator.
+
+    Traced wrapper around ``_enumerate_input_devices`` (see its docstring).
+    """
+    with _dbg.phase("enumerar_dispositivos_audio"):
+        devices = _enumerate_input_devices()
+        n_hw = len(devices) - 1
+        logger.info(
+            "Audio devices: %d total (%d hardware)%s",
+            len(devices),
+            n_hw,
+            "; fallback: synthetic source only" if n_hw == 0 else "",
+        )
+    return devices
+
+
+def _enumerate_input_devices() -> list[AudioDeviceInfo]:
     """Enumerate available audio input devices, always starting with the synthetic generator.
 
     Queries ``sounddevice.query_devices()`` and filters for physical/input-capable devices

@@ -1,5 +1,1 @@
-"""Real-time audio capture and lock-protected ring buffer utilities."""
-
-from wea.audio.ring_buffer import AudioRingBuffer
-
-__all__ = ["AudioRingBuffer"]
+"""Audio capture layer for adv_tg (capa de captura; pendiente de reconstrucción)."""

@@ -5,9 +5,11 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from wea.utils.logger_setup import LoggerSetup
+from adv_tg.utils.debugger import Debugger
+from adv_tg.utils.logger_setup import LoggerSetup
 
 logger = LoggerSetup.setup_logger(__name__)
+_dbg = Debugger.get(__name__)
 
 WATCH_DB_PATH: Path = Path(__file__).resolve().parent / "db" / "watch_db.csv"
 
@@ -20,7 +22,7 @@ def load_watch_db(csv_path: Path | str | None = None) -> dict[str, tuple[int, fl
 
     Args:
         csv_path: Optional override path to the CSV file. Defaults to
-            ``src/wea/utils/db/watch_db.csv``.
+            ``src/adv_tg/utils/db/watch_db.csv``.
 
     Returns:
         Ordered dictionary mapping ``caliber_name`` to ``(bph, lift_angle)``.
@@ -29,7 +31,7 @@ def load_watch_db(csv_path: Path | str | None = None) -> dict[str, tuple[int, fl
     presets: dict[str, tuple[int, float]] = {}
 
     if not path.exists():
-        logger.error("Watch database CSV not found at '%s'; using fallback Custom preset", path)
+        _dbg.file_read(path, ok=False, error="not found; using fallback Custom preset")
         return {"Custom": (21600, 52.0)}
 
     try:
@@ -65,5 +67,5 @@ def load_watch_db(csv_path: Path | str | None = None) -> dict[str, tuple[int, fl
     if "Custom" not in presets:
         presets = {"Custom": (21600, 52.0), **presets}
 
-    logger.info("Loaded %d watch caliber presets from '%s'", len(presets), path.name)
+    _dbg.file_read(path, calibers=len(presets))
     return presets

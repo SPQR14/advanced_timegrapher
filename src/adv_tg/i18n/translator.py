@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from wea.utils.logger_setup import LoggerSetup
+from adv_tg.utils.debugger import Debugger
+from adv_tg.utils.logger_setup import LoggerSetup
 
 logger = LoggerSetup.setup_logger(__name__)
+_dbg = Debugger.get(__name__)
 
 
 class Translator:
@@ -12,7 +14,7 @@ class Translator:
 
     DICTIONARIES: dict[str, dict[str, str]] = {
         "en": {
-            "app_title": "Watch Escape Analyzer EVO — Horological DSP Test Bench",
+            "app_title": "Advanced Timegrapher — Horological DSP Test Bench",
             "rate": "Rate",
             "beat_error": "Beat Error",
             "amplitude": "Amplitude",
@@ -82,9 +84,15 @@ class Translator:
                 "Clock Drift: {ppm:+.2f} ppm | Effective Fs: {fs:.2f} Hz | Bias: {bias:+.2f} s/d"
             ),
             "status_capture_format": "Audio received: {pct:.1f} % | Overflows: {ovf}",
+            "status_stopping": "STOPPING...",
+            "mock_mode": "MOCK",
+            "mock_tooltip": "Simulated data to test the GUI (no real measurement)",
+            "mock_badge": "MOCK · SIMULATED DATA",
+            "mock_no_hardware": "No hardware input device available: MOCK stays on",
+            "no_recording_available": "No recording available: measurement engine not implemented",
         },
         "es": {
-            "app_title": "Watch Escape Analyzer EVO — Banco de Pruebas DSP Horológico",
+            "app_title": "Advanced Timegrapher — Banco de Pruebas DSP Horológico",
             "rate": "Marcha",
             "beat_error": "Error de Batido",
             "amplitude": "Amplitud",
@@ -154,6 +162,12 @@ class Translator:
                 "Deriva de Reloj: {ppm:+.2f} ppm | Fs Efectiva: {fs:.2f} Hz | Sesgo: {bias:+.2f} s/d"
             ),
             "status_capture_format": "Audio recibido: {pct:.1f} % | Desbordes: {ovf}",
+            "status_stopping": "DETENIENDO...",
+            "mock_mode": "MOCK",
+            "mock_tooltip": "Datos simulados para probar la GUI (sin medición real)",
+            "mock_badge": "MOCK · DATOS SIMULADOS",
+            "mock_no_hardware": "No hay dispositivos de entrada de hardware: el MOCK sigue activo",
+            "no_recording_available": "No hay grabación: el motor de medición aún no está implementado",
         },
     }
 
@@ -173,8 +187,9 @@ class Translator:
         if normalized not in self.DICTIONARIES:
             logger.error("Unsupported locale '%s' requested", locale)
             raise ValueError(f"Unsupported locale '{locale}'. Supported: {list(self.DICTIONARIES)}")
+        old_locale = self._locale
         self._locale = normalized
-        logger.info("Translator locale set to '%s'", self._locale)
+        _dbg.state_change("Translator.locale", old_locale, self._locale)
 
     def tr(self, key: str, default: str | None = None) -> str:
         """Translate a horological key into the current locale."""

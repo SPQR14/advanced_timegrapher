@@ -1,5 +1,5 @@
 """Internationalization (i18n) module for horological terminology."""
 
-from wea.i18n.translator import Translator
+from adv_tg.i18n.translator import Translator
 
 __all__ = ["Translator"]

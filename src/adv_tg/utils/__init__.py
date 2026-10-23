@@ -1,6 +1,6 @@
-"""Shared utility exports for the ``wea`` package."""
+"""Shared utility exports for the ``adv_tg`` package."""
 
-from wea.utils.audio_io import (
+from adv_tg.utils.audio_io import (
     SYNTHETIC_DEVICE_NAME,
     AudioDeviceInfo,
     HardwareAudioCapture,
@@ -10,8 +10,8 @@ from wea.utils.audio_io import (
     preferred_audio_format,
     save_audio_recording,
 )
-from wea.utils.logger_setup import LoggerSetup
-from wea.utils.watch_db import WATCH_DB_PATH, load_watch_db
+from adv_tg.utils.logger_setup import LoggerSetup
+from adv_tg.utils.watch_db import WATCH_DB_PATH, load_watch_db
 
 __all__ = [
     "AudioDeviceInfo",
