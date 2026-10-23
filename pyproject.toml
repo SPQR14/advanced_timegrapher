@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wea"
+version = "0.2.0"
+description = "Watch Escape Analyzer EVO - High-precision horological DSP and acoustic telemetry suite"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "Alberto Pico Lara" }
+]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "sounddevice>=0.4.6",
+    "PyQt6>=6.6",
+    "pyqtgraph>=0.13",
+    "PyOpenGL",
+    "PyOpenGL_accelerate",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "pytest-qt",
+    "scipy",
+    "pre-commit",
+]
+
+[project.scripts]
+wea = "wea.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# E = pycodestyle, F = Pyflakes (imports/variables sin usar), I = isort (orden de imports)
+select = ["E", "F", "I"]
+
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+"__init__.py" = ["F401"]

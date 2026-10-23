@@ -1,0 +1,48 @@
+# macOS & Linux artifacts
+.DS_Store
+.AppleDouble
+._*
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# C/C++ & native extensions
+CMakeFiles/
+CMakeCache.txt
+*.o
+*.so
+*.dylib
+*.dll
+*.a
+
+# Qt / PyQt6
+*.qm
+*.moc
+ui_*.h
+
+# Audio captures & local models
+*.wav
+*.flac
+*.ogg
+*.raw
+*.npz
+*.onnx
+*.pt
+recordings/
+datasets/
+
+# Logs
+*.log
+logs/
+*logs/
