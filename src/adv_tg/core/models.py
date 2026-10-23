@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
-from wea.utils.logger_setup import LoggerSetup
+from adv_tg.utils.logger_setup import LoggerSetup
 
 logger = LoggerSetup.setup_logger(__name__)
 

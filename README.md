@@ -1,76 +1,109 @@
-# Watch Escape Analyzer EVO (`watch_escape_analyzerEVO`)
+# Advanced Timegrapher
 
-**Watch Escape Analyzer EVO** is a high-precision horological acoustic telemetry and escapement diagnostic suite engineered with a strictly decoupled architecture: a high-performance DSP Core (Python/C++ ready) paired with a real-time reactive UI built on **PyQt6** and **PyQtGraph**.
+Cronocomparador (timegrapher) por software para relojes mecánicos: escucha el tic-tac con un
+micrófono y mostrará marcha (s/d), error de batimiento (ms) y amplitud (°), con una GUI en
+PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 
----
+## Estado (v0.1.0)
 
-## Key Features
+- El núcleo de medición (DSP) se está **reconstruyendo desde cero, por capas**. Todavía no existe.
+- La GUI es el esqueleto: todos los paneles, exportaciones e idiomas (EN/ES) están, pero
+  **con un dispositivo de audio real todavía NO mide**: al pulsar INICIAR se avisa
+  "Motor de medición aún no implementado".
+- El botón **MOCK** (barra superior) activa un motor simulado que genera datos realistas
+  (marcha, error de batimiento, amplitud, forma de onda, deriva de reloj, calidad de señal)
+  para probar la GUI completa. Mientras está activo se ve la insignia "MOCK" en la barra de
+  estado y `[MOCK]` en el título. Los datos MOCK no son mediciones.
 
-- **Decoupled Architecture**: Clean separation between the real-time audio acquisition (`wea.audio`), the mathematical signal processing and synthetic modeling (`wea.core`), machine learning inference (`wea.ml`), and the graphical interface (`wea.ui`).
-- **Sub-Millisecond Swiss Lever Escapement Detection**: Dual-scale envelope extraction (global RMS beat detection + sub-millisecond Hilbert/fast-RMS micro-envelope) capable of isolating the three distinct acoustic impulses of a Swiss lever escapement:
-  - **P1 (Unlock)**: Pallet stone unlocking from the escape wheel tooth.
-  - **P2 (Impulse)**: Escape wheel tooth imparting energy to the pallet stone impulse plane.
-  - **P3 (Drop / Banking)**: Escape wheel tooth locking on the opposite pallet stone and fork banking impact.
-- **High-Precision Horological Telemetry**:
-  - **Rate (`s/d`)**: Sub-tenth second per day rate deviation measurement across standard and high-beat frequencies (`18,000` to `36,000 A/h`).
-  - **Beat Error (`ms`)**: Separation of alternating tick/tock intervals to quantify escapement symmetry with `< 0.1 ms` accuracy.
-  - **Balance Amplitude (`deg`)**: Exact derivation of balance wheel oscillation amplitude using the lift angle ($\theta_{\text{lift}}$) and the temporal delta $\Delta t = t_{P3} - t_{P1}$ via the sinusoidal balance motion equation:
-    $$\Phi = \frac{\theta_{\text{lift}}}{2 \sin(\pi f_0 \Delta t)}$$
-- **Case Harmonics Filtering**: Cascaded Second-Order Sections (SOS) zero-phase Butterworth bandpass filtering (`4 kHz – 18 kHz`) to suppress low-frequency mechanical/ambient rumble and isolate escapement impulse transients.
-- **Ground-Truth Synthetic Escape Generator**: Physics-based acoustic synthesizer (`SyntheticEscapeGenerator`) modeling damped multi-harmonic escapement impacts with configurable Rate, Beat Error, Amplitude, Lift Angle, and AWGN Signal-to-Noise Ratio (`snr_db`).
-- **ML-Ready Pipeline**: Structured telemetry and waveform extraction ready for anomaly detection and escapement fault classification.
-- **Bilingual Support (EN / ES)**: Built-in lightweight internationalization (`wea.i18n`) covering technical horological terminology in English and Spanish.
+| Capa | Contenido | Estado |
+|------|-----------|--------|
+| 1 | Captura: flujo de muestras sin bloqueos + herramienta de consola | pendiente |
+| 2 | Detector de batimientos incremental | pendiente |
+| 3 | Métricas: marcha, error de batimiento, amplitud | pendiente |
+| 4 | Reloj: deriva del ADC vs host + NTP, calibración manual opcional | pendiente |
+| 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | pendiente |
 
----
-
-## Project Structure
+## Estructura
 
 ```text
-watch_escape_analyzerEVO/
-├── pyproject.toml
-├── README.md
-├── src/
-│   └── wea/
-│       ├── __init__.py
-│       ├── audio/
-│       │   ├── __init__.py
-│       │   └── ring_buffer.py      # Thread-safe NumPy lock-protected ring buffer
-│       ├── core/
-│       │   ├── __init__.py
-│       │   ├── models.py           # WatchConfig, BeatEvent, TelemetryResult
-│       │   ├── synthetic.py        # Ground-Truth SyntheticEscapeGenerator
-│       │   └── dsp_pipeline.py     # EscapeDSPPipeline (SOS filter, P1-P3, telemetry)
-│       ├── i18n/
-│       │   ├── __init__.py
-│       │   └── translator.py       # Bilingual EN/ES horological dictionary
-│       ├── ml/
-│       │   └── __init__.py         # ML inference & feature extraction module
-│       └── ui/
-│           └── __init__.py         # PyQt6 + PyQtGraph real-time visualization
-└── tests/
-    └── test_dsp_accuracy.py        # Ground-truth validation suite
+src/adv_tg/
+├── __init__.py            # versión + aislamiento de DLL de Qt en Windows
+├── __main__.py            # python -m adv_tg
+├── main.py                # punto de entrada (adv-tg)
+├── audio/__init__.py      # capa de captura (pendiente)
+├── core/
+│   ├── __init__.py
+│   └── models.py          # WatchConfig, BeatEvent, BeatTelemetry, TelemetryResult
+├── i18n/
+│   ├── __init__.py
+│   └── translator.py      # textos EN/ES
+├── ml/__init__.py         # reservado
+├── mock/
+│   ├── __init__.py
+│   ├── generator.py       # señal y telemetría simuladas (numpy, sin DSP)
+│   └── worker.py          # MockStreamWorker (hilo propio)
+├── ui/
+│   ├── __init__.py
+│   ├── assets/            # flechas SVG de los spinbox/combos
+│   ├── main_window.py     # ventana principal (MainWin)
+│   ├── null_engine.py     # NullStreamWorker: placeholder para hardware
+│   ├── stream_worker_base.py  # BaseStreamWorker: contrato GUI <-> motor
+│   └── worker_factory.py  # create_worker(device_id)
+└── utils/
+    ├── __init__.py
+    ├── audio_io.py        # enumeración de dispositivos, guardado FLAC/Ogg
+    ├── db/watch_db.csv    # calibres (BPH, ángulo de levantamiento)
+    ├── debugger.py        # clase Debugger (trazas)
+    ├── logger_setup.py    # configuración de logging
+    └── watch_db.py        # carga del CSV de calibres
 ```
 
----
+## Instalación
 
-## Installation
-
-Requires **Python >= 3.10**.
+Requiere **Python >= 3.11**.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+python -m venv .venv
+.venv/bin/python -m pip install --upgrade pip          # Windows: .venv\Scripts\python.exe
+.venv/bin/python -m pip install -e ".[dev]"
 ```
 
-## Running Tests
+## Ejecución
 
 ```bash
-pytest
+adv-tg              # script instalado en el venv
+python -m adv_tg    # equivalente
 ```
 
----
+## Pruebas y lint
 
-## License
+```bash
+pytest                      # headless: tests/conftest.py fija QT_QPA_PLATFORM=offscreen
+ruff check .
+ruff format --check .
+```
 
-This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
+`ruff` no está en las dependencias `dev`; se usa el de `pre-commit` o uno instalado aparte.
+
+## Depuración
+
+- Log: `logs/adv_tg.log` en la raíz del repo (rotativo, 5 MB × 3 copias; incluye el nombre del
+  hilo). Los fallos nativos (segfaults) van a `logs/faulthandler.log`.
+- Por defecto la consola muestra INFO y el archivo DEBUG. Con `ADV_TG_DEBUG=1` la consola
+  también muestra DEBUG.
+- `adv_tg.utils.debugger.Debugger` (`Debugger.get(__name__)`): `phase()` (inicio/fin con
+  duración), `state_change()`, `process_start()/process_end()` (hilos, workers, timers),
+  `file_read()/file_write()`, el decorador `traced` y `throttled()` para rutas frecuentes.
+- Regla: **prohibido** loguear, bloquear o asignar memoria en callbacks de audio o bucles por
+  muestra; en slots de alta frecuencia solo `throttled` a DEBUG.
+
+## Windows
+
+Al importar el paquete se aíslan las DLL de Qt del venv frente a otras instalaciones
+(MiKTeX, Anaconda…): ver `_bootstrap_windows_dlls()` en `src/adv_tg/__init__.py`.
+
+## Licencia
+
+GNU General Public License v3.0 (ver `LICENSE`). El código de otros timegraphers con licencia
+incompatible (p. ej. `tg`, GPLv2-only) no se copia ni se porta: el núcleo es implementación
+propia.

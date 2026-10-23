@@ -1,4 +1,4 @@
-"""Main window and real-time PyQtGraph visualization for Watch Escape Analyzer EVO."""
+"""Main window and real-time PyQtGraph visualization for Advanced Timegrapher."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import QRectF, QSize, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QRectF, QSize, Qt, QTimer
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -43,22 +43,24 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from wea.core.dsp_pipeline import EscapeDSPPipeline
-from wea.core.models import BeatEvent, BeatTelemetry, TelemetryResult, WatchConfig
-from wea.core.ring_buffer import AudioRingBuffer
-from wea.core.synthetic import SyntheticEscapeGenerator
-from wea.i18n.translator import Translator
-from wea.ui.dsp_worker import DSPStreamWorker
-from wea.utils.audio_io import (
+from adv_tg.core.models import BeatTelemetry, TelemetryResult, WatchConfig
+from adv_tg.i18n.translator import Translator
+from adv_tg.mock.generator import generate_tick_train, save_wav
+from adv_tg.mock.worker import MockStreamWorker
+from adv_tg.ui.stream_worker_base import BaseStreamWorker
+from adv_tg.ui.worker_factory import create_worker
+from adv_tg.utils.audio_io import (
     AudioDeviceInfo,
     is_flac_supported,
     list_input_devices,
     save_audio_recording,
 )
-from wea.utils.logger_setup import LoggerSetup
-from wea.utils.watch_db import load_watch_db
+from adv_tg.utils.debugger import Debugger
+from adv_tg.utils.logger_setup import LoggerSetup
+from adv_tg.utils.watch_db import load_watch_db
 
 logger = LoggerSetup.setup_logger(__name__)
+_dbg = Debugger.get(__name__)
 
 
 def configure_pyqtgraph_gpu(enable_opengl: bool = False) -> bool:
@@ -121,155 +123,6 @@ class ComboPopupItemDelegate(QStyledItemDelegate):
         return size
 
 
-class SyntheticTelemetryWorker(QThread):
-    """Background worker thread that synthesizes and analyzes escapement audio in real time.
-
-    Connects `SyntheticEscapeGenerator`, `AudioRingBuffer`, and `EscapeDSPPipeline`
-    without blocking the PyQt6 UI thread.
-    """
-
-    telemetry_updated = pyqtSignal(object, object, float, float, object)
-    recording_ready = pyqtSignal(object, int)
-    session_finished = pyqtSignal()
-
-    def __init__(
-        self,
-        config: WatchConfig,
-        position: str = "DU",
-        stabilization_s: float = 2.0,
-        duration_s: float = 30.0,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.config = config
-        self.position = position
-        self.stabilization_s = float(stabilization_s)
-        self.duration_s = float(duration_s)
-        self._running = False
-        logger.info(
-            "SyntheticTelemetryWorker initialized (position=%s, stab=%.1fs, duration=%.1fs, bph=%d, fs=%d)",
-            self.position,
-            self.stabilization_s,
-            self.duration_s,
-            self.config.bph,
-            self.config.sample_rate,
-        )
-
-    def stop(self) -> None:
-        """Request cooperative termination of the worker loop."""
-        logger.info("Stopping SyntheticTelemetryWorker thread requested")
-        self._running = False
-
-    def run(self) -> None:
-        """Continuously synthesize, buffer, and process sliding acoustic windows."""
-        logger.info("Audio processing worker thread started")
-        self._running = True
-        fs = self.config.sample_rate
-        window_seconds = 3.0
-        target_record_samples = int(round(self.duration_s * fs))
-        recorded_chunks: list[np.ndarray] = []
-        recorded_count = 0
-
-        try:
-            ring_buffer = AudioRingBuffer(capacity=int(window_seconds * fs))
-            pipeline = EscapeDSPPipeline(config=self.config)
-
-            base_rate, base_be, base_amp = POSITION_VARIATION.get(
-                self.position, (+4.5, 0.35, 280.0)
-            )
-            rng = np.random.default_rng(int(time.time() * 1000) % (2**31 - 1))
-
-            start_wall = time.monotonic()
-            step_interval = 0.25
-            step_idx = 0
-            chunk_samples = int(0.6 * fs)
-            step_record_samples = max(1, int(round(step_interval * fs)))
-
-            while self._running:
-                elapsed = time.monotonic() - start_wall
-                if elapsed > self.duration_s + self.stabilization_s:
-                    break
-
-                inst_amp = base_amp + float(rng.normal(0.0, 2.5))
-                snr_db = 32.0 + float(rng.normal(0.0, 1.5))
-
-                # Synthesize a fresh acoustic window per step (with constant ground-truth rate/BE
-                # so the paper tape draws a straight line while the oscilloscope & audio waveform move live)
-                gen = SyntheticEscapeGenerator(config=self.config, seed=1000 + step_idx)
-                synth_signal = gen.generate(
-                    duration_s=window_seconds,
-                    true_rate_spd=base_rate,
-                    true_beat_error_ms=base_be,
-                    true_amplitude_deg=inst_amp,
-                    snr_db=snr_db,
-                )
-
-                ring_buffer.write(synth_signal)
-                window_data = ring_buffer.read_latest(int(window_seconds * fs))
-                telemetry, beats = pipeline.analyze(window_data)
-
-                if elapsed >= self.stabilization_s and recorded_count < target_record_samples:
-                    need = min(step_record_samples, target_record_samples - recorded_count)
-                    recorded_chunks.append(synth_signal[:need].copy())
-                    recorded_count += need
-
-                # Apply live acoustic micro-modulation to the displayed beat waveform
-                # so the real-time oscilloscope visibly animates on every frame
-                if beats:
-                    last_b = beats[-1]
-                    w = last_b.raw_waveform
-                    if len(w) > 0:
-                        t_local = np.arange(len(w), dtype=np.float64) / fs
-                        phase_shift = float(rng.uniform(0.0, 2.0 * np.pi))
-                        mod = 1.0 + 0.18 * np.sin(2.0 * np.pi * 1100.0 * t_local + phase_shift)
-                        jitter_noise = rng.normal(
-                            0.0, 0.04 * (float(np.max(np.abs(w))) or 1.0), size=len(w)
-                        )
-                        beats[-1] = BeatEvent(
-                            timestamp_p1=last_b.timestamp_p1,
-                            timestamp_p2=last_b.timestamp_p2,
-                            timestamp_p3=last_b.timestamp_p3,
-                            peak_energy=last_b.peak_energy,
-                            raw_waveform=(w * mod) + jitter_noise,
-                        )
-
-                # Shift window slice per step so the audio waveform scrolls dynamically
-                max_start = max(1, len(window_data) - chunk_samples)
-                start_idx = (step_idx * int(0.035 * fs)) % max_start
-                audio_slice = window_data[start_idx : start_idx + chunk_samples].copy()
-
-                if self._running:
-                    self.telemetry_updated.emit(telemetry, beats, elapsed, snr_db, audio_slice)
-
-                step_idx += 1
-                sleep_deadline = time.monotonic() + step_interval
-                while self._running and time.monotonic() < sleep_deadline:
-                    self.msleep(25)
-
-            if recorded_chunks:
-                full_rec = np.concatenate(recorded_chunks)
-                if len(full_rec) < target_record_samples:
-                    rem_s = (target_record_samples - len(full_rec)) / float(fs)
-                    gen_tail = SyntheticEscapeGenerator(config=self.config, seed=9999)
-                    tail = gen_tail.generate(
-                        duration_s=rem_s + 0.05,
-                        true_rate_spd=base_rate,
-                        true_beat_error_ms=base_be,
-                        true_amplitude_deg=base_amp,
-                        snr_db=32.0,
-                    )
-                    full_rec = np.concatenate(
-                        [full_rec, tail[: target_record_samples - len(full_rec)]]
-                    )
-                full_rec = full_rec[:target_record_samples]
-                self.recording_ready.emit(full_rec, fs)
-        except Exception as exc:
-            logger.error("Error inside audio processing worker thread: %s", exc, exc_info=True)
-        finally:
-            logger.info("Audio processing worker thread finished")
-            self.session_finished.emit()
-
-
 class HudCard(QFrame):
     """Industrial monospaced numeric HUD display card for a primary horological metric."""
 
@@ -325,7 +178,7 @@ class HudCard(QFrame):
 
 
 class MainWin(QMainWindow):
-    """Primary application window for Watch Escape Analyzer EVO."""
+    """Primary application window for Advanced Timegrapher."""
 
     COSC_MIN_SPD: float = -4.0
     COSC_MAX_SPD: float = +6.0
@@ -335,7 +188,13 @@ class MainWin(QMainWindow):
         logger.info("Initializing MainWin UI")
         self._gpu_enabled: bool = configure_pyqtgraph_gpu()
         self.translator = translator if translator is not None else Translator("en")
-        self.worker: SyntheticTelemetryWorker | None = None
+        # TODO(capa-5): reconectar al motor real (hoy: MockStreamWorker o NullStreamWorker)
+        self.dsp_worker: BaseStreamWorker | None = None
+        self._capture_state: str = "INACTIVO"
+        self._active_device_id: int | None = None
+        self._active_watch_config: WatchConfig | None = None
+        self._last_position: str = "DU"
+        self._last_hw_device_index: int | None = None
 
         # Telemetry history for statistics & horizontal paper tape trace
         self._rate_history: list[float] = []
@@ -349,6 +208,9 @@ class MainWin(QMainWindow):
         self._last_effective_fs: float = 48000.0
         self._last_drift_ppm: float = 0.0
         self._last_rate_bias_spd: float = 0.0
+        # MOCK-only drift detail (None while the engine does not provide it)
+        self._last_drift_sigma_ppm: float | None = None
+        self._last_drift_confidence: float | None = None
         self._osc_rng = np.random.default_rng(2026)
 
         # Audio recording state (same duration as test)
@@ -363,23 +225,18 @@ class MainWin(QMainWindow):
         self._apply_industrial_theme()
         self._build_ui()
 
-        # Real-time Qt DSP worker living in a dedicated QThread via moveToThread
-        self.dsp_thread = QThread(self)
-        self.dsp_worker = DSPStreamWorker(config=self.current_watch_config())
-        self.dsp_worker.moveToThread(self.dsp_thread)
-        self.dsp_worker.telemetry_ready.connect(self._on_telemetry_ready)
-        self.dsp_worker.waveform_ready.connect(self._on_waveform_ready)
-        self.dsp_worker.drift_updated.connect(self._on_drift_updated)
-        self.dsp_worker.capture_health.connect(self._on_capture_health)
-        self.dsp_worker.error_occurred.connect(self._on_worker_error)
-        self.dsp_worker.session_finished.connect(self._on_session_finished)
-        self.dsp_thread.start()
+        # TODO(capa-5): reconectar al motor real. Engine chosen per device by create_worker()
+        # (synthetic -> MockStreamWorker, hardware -> NullStreamWorker); each engine owns
+        # its threads, so no QThread/moveToThread is needed here.
+        self._apply_device_selection()
 
-        # Wire UI controls to update DSPStreamWorker configuration in real time
+        # Wire UI controls to update the engine configuration in real time
         self.cmb_bph.currentTextChanged.connect(self._on_watch_config_changed)
         self.spn_lift.valueChanged.connect(self._on_watch_config_changed)
         self.cmb_srate.currentIndexChanged.connect(self._on_watch_config_changed)
         self.cmb_device.currentIndexChanged.connect(self._on_device_changed)
+        self.cmb_position.currentTextChanged.connect(self._on_position_changed)
+        self.btn_mock.toggled.connect(self._on_mock_toggled)
 
         # Timer enforcing automatic test completion at (stabilization_s + duration_s)
         self._session_timer = QTimer(self)
@@ -683,6 +540,31 @@ class MainWin(QMainWindow):
                 color: #ffd740;
                 border-color: #ffd740;
             }}
+            QPushButton#MockButton {{
+                background-color: #1c2430;
+                color: #8b96a8;
+                border: 1px solid #2f3e52;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 11px;
+                font-weight: 800;
+                letter-spacing: 1px;
+            }}
+            QPushButton#MockButton:hover {{
+                border-color: #ff9e40;
+            }}
+            QPushButton#MockButton:checked {{
+                background-color: #ff6d00;
+                color: #120800;
+                border-color: #ff9e40;
+            }}
+            QLabel#MockBadge {{
+                background-color: #ff6d00;
+                color: #120800;
+                font-weight: 800;
+                padding: 1px 8px;
+                border-radius: 3px;
+            }}
             QTableWidget {{
                 background-color: #0d1117;
                 border: 1px solid #262f3d;
@@ -820,7 +702,7 @@ class MainWin(QMainWindow):
         self.lbl_stab.setObjectName("TopBarLabel")
         self.spn_stab = QSpinBox()
         self.spn_stab.setRange(0, 30)
-        self.spn_stab.setValue(2)
+        self.spn_stab.setValue(10)
         self.spn_stab.setSuffix(" s")
 
         # Test duration
@@ -861,6 +743,13 @@ class MainWin(QMainWindow):
             top_layout.addLayout(pair)
 
         top_layout.addStretch()
+
+        # MOCK toggle: simulated engine to test the whole GUI (kept in sync with cmb_device)
+        self.btn_mock = QPushButton("MOCK")
+        self.btn_mock.setObjectName("MockButton")
+        self.btn_mock.setCheckable(True)
+        self.btn_mock.setCursor(Qt.CursorShape.PointingHandCursor)
+        top_layout.addWidget(self.btn_mock, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         # Placeholder "Buy me a coffee" button in the top-right corner
         self.btn_buy_coffee = QPushButton("☕ Buy me a coffee")
@@ -1284,6 +1173,15 @@ class MainWin(QMainWindow):
         content_layout.addWidget(self.splitter)
         root_layout.addLayout(content_layout, stretch=1)
 
+        # Status bar: MOCK badge (only visible while simulated data is shown) + session state
+        self.lbl_mock_badge = QLabel()
+        self.lbl_mock_badge.setObjectName("MockBadge")
+        self.lbl_mock_badge.setVisible(False)
+        self.statusBar().addWidget(self.lbl_mock_badge)
+        self.lbl_session_status = QLabel()
+        self.lbl_session_status.setObjectName("StatValue")
+        self.statusBar().addPermanentWidget(self.lbl_session_status)
+
         # Status bar with live clock drift telemetry indicator
         self.lbl_drift_status = QLabel()
         self.lbl_drift_status.setObjectName("StatValue")
@@ -1330,10 +1228,10 @@ class MainWin(QMainWindow):
         return devices
 
     def refresh_audio_devices(self) -> list[AudioDeviceInfo]:
-        """Re-query available audio input devices and sync selection with DSPStreamWorker."""
+        """Re-query available audio input devices and sync selection with the engine."""
         devices = self._populate_audio_devices()
         if hasattr(self, "dsp_worker") and self.dsp_worker is not None:
-            self.dsp_worker.set_input_device(self.selected_device_id())
+            self._apply_device_selection()
         return devices
 
     def selected_device_id(self) -> int | None:
@@ -1347,11 +1245,147 @@ class MainWin(QMainWindow):
             return None
 
     def _on_device_changed(self, _index: int) -> None:
-        """Handle user changes to the IN Device selector and update DSPStreamWorker."""
+        """Handle user changes to the IN Device selector and update the engine."""
         device_id = self.selected_device_id()
-        logger.info("IN Device selection changed to device_id=%s", device_id)
-        if hasattr(self, "dsp_worker") and self.dsp_worker is not None:
-            self.dsp_worker.set_input_device(device_id)
+        _dbg.state_change(
+            "IN device", self._active_device_id, device_id, label=self.cmb_device.currentText()
+        )
+        self._apply_device_selection()
+
+    def is_mock_active(self) -> bool:
+        """Return True while the simulated (MOCK) engine is selected."""
+        return self.dsp_worker is not None and bool(self.dsp_worker.synthetic_mode)
+
+    def _apply_device_selection(self) -> None:
+        """Sync the MOCK button with ``cmb_device`` and install the matching engine."""
+        device_id = self.selected_device_id()
+        is_mock = device_id is None
+        if not is_mock:
+            self._last_hw_device_index = self.cmb_device.currentIndex()
+        if self.btn_mock.isChecked() != is_mock:
+            was_blocked = self.btn_mock.blockSignals(True)
+            self.btn_mock.setChecked(is_mock)
+            self.btn_mock.blockSignals(was_blocked)
+        self._install_worker(device_id)
+
+    def _on_mock_toggled(self, checked: bool) -> None:
+        """MOCK on: select the synthetic device. MOCK off: go back to the previous device."""
+        _dbg.state_change("MOCK", "ON" if not checked else "OFF", "ON" if checked else "OFF")
+        if checked:
+            target = 0
+        else:
+            target = self._last_hw_device_index
+            if target is None or not (0 < target < self.cmb_device.count()):
+                target = 1 if self.cmb_device.count() > 1 else None
+            if target is None:
+                # No hardware device to fall back to: MOCK stays on.
+                was_blocked = self.btn_mock.blockSignals(True)
+                self.btn_mock.setChecked(True)
+                self.btn_mock.blockSignals(was_blocked)
+                self.statusBar().showMessage(self.translator.tr("mock_no_hardware"), 6000)
+                logger.warning("MOCK cannot be disabled: no hardware input device available")
+                return
+        if self.cmb_device.currentIndex() != target:
+            was_blocked = self.cmb_device.blockSignals(True)
+            self.cmb_device.setCurrentIndex(target)
+            self.cmb_device.blockSignals(was_blocked)
+        self._apply_device_selection()
+
+    def _install_worker(self, device_id: int | None) -> None:
+        """Create (via ``create_worker``) and wire the engine for ``device_id`` if it changes type.
+
+        TODO(capa-5): reconectar al motor real (create_worker devolverá el worker real).
+        """
+        want_mock = device_id is None
+        old = self.dsp_worker
+        if old is not None and bool(old.synthetic_mode) == want_mock:
+            old.set_input_device(device_id)
+            self._active_device_id = device_id
+            return
+        if old is not None:
+            if old.isRunning():
+                logger.info("Engine change requested during a session; stopping capture first")
+                self.stop_capture()
+            old.shutdown()
+            _dbg.process_end(f"engine {type(old).__name__}", device_id=self._active_device_id)
+            if isinstance(old, MockStreamWorker):
+                old.drift_detail.disconnect()
+            for sig in (
+                old.telemetry_ready,
+                old.waveform_ready,
+                old.drift_updated,
+                old.capture_health,
+                old.error_occurred,
+                old.session_finished,
+            ):
+                sig.disconnect()
+            old.deleteLater()
+
+        self._active_watch_config = self.current_watch_config()
+        worker = create_worker(device_id, config=self._active_watch_config, parent=self)
+        worker.telemetry_ready.connect(self._on_telemetry_ready)
+        worker.waveform_ready.connect(self._on_waveform_ready)
+        worker.drift_updated.connect(self._on_drift_updated)
+        worker.capture_health.connect(self._on_capture_health)
+        worker.error_occurred.connect(self._on_worker_error)
+        worker.session_finished.connect(self._on_session_finished)
+        # MOCK-only extra (outside BaseStreamWorker): drift sigma / confidence
+        self._last_drift_sigma_ppm = None
+        self._last_drift_confidence = None
+        if isinstance(worker, MockStreamWorker):
+            worker.drift_detail.connect(self._on_mock_drift_detail)
+        self.dsp_worker = worker
+        self._active_device_id = device_id
+        _dbg.process_start(
+            f"engine {type(worker).__name__}",
+            device_id=device_id,
+            simulated=bool(worker.synthetic_mode),
+        )
+        self._update_mock_indicators()
+
+    def _update_mock_indicators(self) -> None:
+        """Show the MOCK badge (and title suffix) only while simulated data is in use."""
+        active = self.is_mock_active()
+        self.lbl_mock_badge.setVisible(active)
+        title = self.translator.tr("app_title")
+        self.setWindowTitle(f"{title} [MOCK]" if active else title)
+
+    def _on_position_changed(self, position: str) -> None:
+        """Feed the per-position base values to the engine (used by the MOCK)."""
+        base_rate, base_be, base_amp = POSITION_VARIATION.get(position, (+4.5, 0.35, 280.0))
+        _dbg.state_change("position", self._last_position, position)
+        self._last_position = position
+        if self.dsp_worker is not None:
+            self.dsp_worker.synthetic_rate_spd = base_rate
+            self.dsp_worker.synthetic_beat_error_ms = base_be
+            self.dsp_worker.synthetic_amplitude_deg = base_amp
+
+    _STATE_TR_KEYS: dict[str, str] = {
+        "INACTIVO": "status_idle",
+        "ESTABILIZANDO": "status_stabilizing",
+        "MIDIENDO": "status_running",
+        "DETENIENDO": "status_stopping",
+    }
+    _STATE_COLORS: dict[str, str] = {
+        "ESTABILIZANDO": "color: #ffab00;",
+        "MIDIENDO": "color: #00e676;",
+        "DETENIENDO": "color: #ff5252;",
+    }
+
+    def _set_capture_state(self, new_state: str, **ctx: object) -> None:
+        """Track INACTIVO -> ESTABILIZANDO -> MIDIENDO -> DETENIENDO -> INACTIVO."""
+        old_state = self._capture_state
+        if new_state == old_state:
+            return
+        self._capture_state = new_state
+        _dbg.state_change("captura", old_state, new_state, **ctx)
+        self._refresh_session_status_label()
+
+    def _refresh_session_status_label(self) -> None:
+        """Render the session state label in the status bar."""
+        key = self._STATE_TR_KEYS.get(self._capture_state, "status_idle")
+        self.lbl_session_status.setText(self.translator.tr(key))
+        self.lbl_session_status.setStyleSheet(self._STATE_COLORS.get(self._capture_state, ""))
 
     def _on_caliber_changed(self, caliber_name: str) -> None:
         """Update BPH and Lift Angle automatically when a caliber preset is selected."""
@@ -1368,9 +1402,16 @@ class MainWin(QMainWindow):
             )
 
     def _on_watch_config_changed(self, *_args: object) -> None:
-        """Forward live WatchConfig changes (BPH, Lift Angle, Sample Rate) to DSPStreamWorker."""
+        """Forward live WatchConfig changes (BPH, Lift Angle, Sample Rate) to the engine."""
         if hasattr(self, "dsp_worker") and self.dsp_worker is not None:
+            old = self._active_watch_config or self.current_watch_config()
             cfg = self.current_watch_config()
+            self._active_watch_config = cfg
+            _dbg.state_change(
+                "WatchConfig",
+                f"{old.bph} A/h, {old.lift_angle:.1f} deg, {old.sample_rate} Hz",
+                f"{cfg.bph} A/h, {cfg.lift_angle:.1f} deg, {cfg.sample_rate} Hz",
+            )
             self.dsp_worker.update_watch_config(cfg)
 
     def _on_language_changed(self, index: int) -> None:
@@ -1554,10 +1595,10 @@ class MainWin(QMainWindow):
                     )
                     rows_written += 1
 
-            logger.info("Saved %d telemetry result rows to CSV '%s'", rows_written, out_path)
+            _dbg.file_write(out_path, rows=rows_written)
             return out_path
         except Exception as exc:
-            logger.error("Failed to save telemetry CSV to '%s': %s", out_path, exc, exc_info=True)
+            _dbg.file_write(out_path, ok=False, error=exc)
             raise
 
     def export_test_results(self, file_path: Path | str | None = None) -> Path | None:
@@ -1641,15 +1682,10 @@ class MainWin(QMainWindow):
                         "positional_delta_spd": f"{max_delta:.2f}" if rates else "",
                     }
                 )
-            logger.info(
-                "Exported global positional test results (%d positions, delta=%.2f s/d) to '%s'",
-                len(positions_order),
-                max_delta,
-                out_path,
-            )
+            _dbg.file_write(out_path, positions=len(positions_order), delta_spd=round(max_delta, 2))
             return out_path
         except Exception as exc:
-            logger.error("Failed to export test results to '%s': %s", out_path, exc, exc_info=True)
+            _dbg.file_write(out_path, ok=False, error=exc)
             raise
 
     def _on_buy_coffee_clicked(self) -> None:
@@ -1759,10 +1795,10 @@ class MainWin(QMainWindow):
                 if not img.save(str(out_path)):
                     raise RuntimeError(f"Failed to save trace image to '{out_path}'")
 
-            logger.info("Exported audio traces to '%s'", out_path)
+            _dbg.file_write(out_path, kind=ext.lstrip("."))
             return out_path
         except Exception as exc:
-            logger.error("Failed to export traces to '%s': %s", out_path, exc, exc_info=True)
+            _dbg.file_write(out_path, ok=False, error=exc)
             raise
 
     def _paint_traces_to_printer(self, printer: QPrinter) -> None:
@@ -1826,21 +1862,25 @@ class MainWin(QMainWindow):
         ):
             return self._recorded_audio, self._recorded_sample_rate
 
+        # TODO(capa-5): reconectar al motor real (hoy solo el MOCK produce audio)
         pos = self.cmb_position.currentText()
         base_rate, base_be, base_amp = POSITION_VARIATION.get(pos, (+4.5, 0.35, 280.0))
         logger.info(
-            "Synthesizing test-length audio recording (duration=%.1f s, samples=%d, fs=%d Hz)",
+            "[MOCK] Synthesizing test-length tick train (duration=%.1f s, samples=%d, fs=%d Hz)",
             duration_s,
             expected_samples,
             cfg.sample_rate,
         )
-        gen = SyntheticEscapeGenerator(config=cfg, seed=2026)
-        signal = gen.generate(
+        signal = generate_tick_train(
             duration_s=duration_s,
-            true_rate_spd=base_rate,
-            true_beat_error_ms=base_be,
-            true_amplitude_deg=base_amp,
+            fs=cfg.sample_rate,
+            bph=cfg.bph,
+            rate_spd=base_rate,
+            beat_error_ms=base_be,
+            amplitude_deg=base_amp,
+            lift_angle_deg=cfg.lift_angle,
             snr_db=32.0,
+            seed=2026,
         )
         if len(signal) > expected_samples:
             signal = signal[:expected_samples]
@@ -1855,7 +1895,8 @@ class MainWin(QMainWindow):
         self, file_path: Path | str | None = None, prefer_flac: bool = True
     ) -> Path | None:
         """Record test-duration audio and offer to save it (default FLAC if supported, else Vorbis)."""
-        if file_path is None and self.worker is not None and self.worker.isRunning():
+        # TODO(capa-5): reconectar al motor real
+        if file_path is None and self.dsp_worker is not None and self.dsp_worker.isRunning():
             self._save_audio_on_finish = True
             logger.info(
                 "Audio recording armed for active test session; will prompt to save upon completion"
@@ -1868,6 +1909,14 @@ class MainWin(QMainWindow):
         self, file_path: Path | str | None = None, prefer_flac: bool = True
     ) -> Path | None:
         """Save the test-length audio recording to disk (FLAC by default if possible, else Ogg Vorbis)."""
+        # TODO(capa-5): reconectar al motor real (grabación de hardware vía _on_recording_ready)
+        if self.is_mock_active():
+            return self._save_mock_recording(file_path)
+        if self._recorded_audio is None:
+            logger.warning("No recording available: the measurement engine is not implemented yet")
+            self.statusBar().showMessage(self.translator.tr("no_recording_available"), 6000)
+            return None
+
         audio_data, sample_rate = self._ensure_test_length_recording()
         flac_ok = prefer_flac and is_flac_supported()
         default_ext = "flac" if flac_ok else "ogg"
@@ -1893,17 +1942,47 @@ class MainWin(QMainWindow):
         else:
             target_path = Path(file_path)
 
-        return save_audio_recording(
+        saved_path = save_audio_recording(
             file_path=target_path,
             samples=audio_data,
             sample_rate=sample_rate,
             prefer_flac=prefer_flac,
         )
+        _dbg.file_write(saved_path, samples=len(audio_data), fs=sample_rate)
+        return saved_path
+
+    def _save_mock_recording(self, file_path: Path | str | None = None) -> Path | None:
+        """Save the simulated MOCK tick train as a 16-bit WAV file."""
+        audio_data, sample_rate = self._ensure_test_length_recording()
+        test_name = self.txt_test_name.text().strip() or "watch_test"
+        if file_path is None:
+            chosen, _ = QFileDialog.getSaveFileName(
+                self,
+                self.translator.tr("dialog_save_audio"),
+                f"{test_name}_MOCK.wav",
+                "WAV Audio (*.wav)",
+            )
+            if not chosen:
+                logger.info("Audio recording save dialog cancelled by user")
+                return None
+            file_path = chosen
+        try:
+            out_path = save_wav(file_path, audio_data, sample_rate)
+        except Exception as exc:
+            _dbg.file_write(file_path, ok=False, error=exc, mock=True)
+            raise
+        _dbg.file_write(out_path, samples=len(audio_data), fs=sample_rate, mock=True)
+        return out_path
 
     def retranslate_ui(self) -> None:
         """Apply localized strings from `self.translator` to all widgets."""
         tr = self.translator.tr
         self.setWindowTitle(tr("app_title"))
+        self.btn_mock.setText(tr("mock_mode"))
+        self.btn_mock.setToolTip(tr("mock_tooltip"))
+        self.lbl_mock_badge.setText(tr("mock_badge"))
+        self._update_mock_indicators()
+        self._refresh_session_status_label()
 
         self.lbl_test_name.setText(tr("test_name"))
         self.txt_test_name.setPlaceholderText(tr("test_name_placeholder"))
@@ -1990,6 +2069,9 @@ class MainWin(QMainWindow):
         duration_s = float(self.spn_duration.value())
         total_limit_s = stab_s + duration_s
 
+        if self._capture_state == "ESTABILIZANDO" and elapsed_s >= stab_s:
+            self._set_capture_state("MIDIENDO", elapsed_s=round(elapsed_s, 2))
+
         display_s = min(elapsed_s, total_limit_s)
         mins = int(display_s) // 60
         secs = display_s % 60.0
@@ -2004,10 +2086,9 @@ class MainWin(QMainWindow):
             self.stop_capture()
 
     def start_capture(self) -> None:
-        """Start the real-time DSPStreamWorker session and reset plots."""
-        if (self.worker is not None and self.worker.isRunning()) or (
-            self.dsp_worker is not None and self.dsp_worker.isRunning()
-        ):
+        """Start the real-time engine session and reset plots."""
+        # TODO(capa-5): reconectar al motor real
+        if self.dsp_worker is None or self.dsp_worker.isRunning():
             return
 
         logger.info("Starting telemetry capture session")
@@ -2043,33 +2124,62 @@ class MainWin(QMainWindow):
         position = self.cmb_position.currentText()
         base_rate, base_be, base_amp = POSITION_VARIATION.get(position, (+4.5, 0.35, 280.0))
 
+        stab_s = float(self.spn_stab.value())
+        self._set_capture_state(
+            "ESTABILIZANDO" if stab_s > 0.0 else "MIDIENDO",
+            engine=type(self.dsp_worker).__name__,
+            position=position,
+        )
+
         self.dsp_worker.synthetic_rate_spd = base_rate
         self.dsp_worker.synthetic_beat_error_ms = base_be
         self.dsp_worker.synthetic_amplitude_deg = base_amp
+        if isinstance(self.dsp_worker, MockStreamWorker):
+            # MOCK-only extra (outside BaseStreamWorker): test timing for the simulation
+            self.dsp_worker.set_session_timing(stab_s, duration_s)
+        self._active_watch_config = config
         self.dsp_worker.set_input_device(self.selected_device_id())
         self.dsp_worker.update_watch_config(config)
+        _dbg.process_start(
+            "sesión de captura",
+            engine=type(self.dsp_worker).__name__,
+            bph=config.bph,
+            lift=config.lift_angle,
+            fs=config.sample_rate,
+            stab_s=stab_s,
+            duration_s=duration_s,
+        )
         self.dsp_worker.start_stream()
-        self._session_timer.start()
+        # NullStreamWorker finishes synchronously (session_finished already handled)
+        if self.dsp_worker.isRunning():
+            self._session_timer.start()
+            _dbg.process_start("session_timer", interval_ms=self._session_timer.interval())
 
     def stop_capture(self) -> None:
-        """Stop the running background DSP worker."""
+        """Stop the running background engine."""
+        # TODO(capa-5): reconectar al motor real
+        if self._session_timer.isActive():
+            _dbg.process_end("session_timer")
         self._session_timer.stop()
         self._capture_start_monotonic = None
+        if self._capture_state != "INACTIVO":
+            self._set_capture_state("DETENIENDO")
         if self.dsp_worker is not None and self.dsp_worker.isRunning():
-            logger.info("Stopping active DSPStreamWorker capture session")
+            logger.info("Stopping active %s capture session", type(self.dsp_worker).__name__)
             self.dsp_worker.stop_stream()
-        if self.worker is not None and self.worker.isRunning():
-            logger.info("Stopping active SyntheticTelemetryWorker capture session")
-            self.worker.stop()
-            self.worker.wait(1500)
         self._on_session_finished()
 
     def _on_session_finished(self) -> None:
         """Restore button and selector states once capture finishes."""
+        if self._capture_state == "INACTIVO":
+            return  # already handled (e.g. queued session_finished after stop_capture)
+        self._session_timer.stop()
+        self._capture_start_monotonic = None
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self._set_top_controls_enabled(True)
-        logger.info("Telemetry capture session finished")
+        _dbg.process_end("sesión de captura", engine=type(self.dsp_worker).__name__)
+        self._set_capture_state("INACTIVO")
         if self._save_audio_on_finish:
             self._save_audio_on_finish = False
             self.save_recorded_audio()
@@ -2089,155 +2199,12 @@ class MainWin(QMainWindow):
         ):
             widget.setEnabled(enabled)
 
-    def _on_telemetry_updated(
-        self,
-        telemetry: TelemetryResult,
-        beats: list[BeatEvent],
-        elapsed_s: float,
-        snr_db: float,
-        audio_chunk: np.ndarray | None = None,
-    ) -> None:
-        """Update HUD cards, statistics, horizontal paper tape, oscilloscope, and audio waveform."""
-        self._last_telemetry = telemetry
-        stab_s = float(self.spn_stab.value())
-
-        # Format elapsed time
-        mins = int(elapsed_s) // 60
-        secs = elapsed_s % 60.0
-        self.lbl_stat_elapsed_val.setText(f"{mins:02d}:{secs:04.1f}")
-
-        # Update Signal Quality / SNR bar
-        quality_pct = int(np.clip((snr_db / 50.0) * 100.0 * telemetry.confidence, 0.0, 100.0))
-        self.prg_snr.setValue(quality_pct)
-        self.lbl_snr_value.setText(f"{snr_db:.1f} dB ({int(telemetry.confidence * 100)}%)")
-
-        # Update HUD Cards
-        sign_str = "+" if telemetry.rate_spd >= 0 else ""
-        self.card_rate.set_value(f"{sign_str}{telemetry.rate_spd:.1f}")
-        self.card_beat_error.set_value(f"{telemetry.beat_error_ms:.2f}")
-        self.card_amplitude.set_value(f"{telemetry.amplitude_deg:.0f}°")
-
-        # Update Statistics & Horizontal Paper Tape after stabilization period
-        if elapsed_s >= stab_s:
-            t_meas = elapsed_s - stab_s
-            self._rate_history.append(telemetry.rate_spd)
-            cfg_now = self.current_watch_config()
-            self._session_records.append(
-                {
-                    "test_name": self.txt_test_name.text().strip() or "watch_test",
-                    "caliber": self.cmb_caliber.currentText(),
-                    "bph": cfg_now.bph,
-                    "lift_angle": f"{cfg_now.lift_angle:.1f}",
-                    "sample_rate": cfg_now.sample_rate,
-                    "position": self.cmb_position.currentText(),
-                    "record_type": "sample",
-                    "elapsed_s": f"{t_meas:.2f}",
-                    "rate_spd": f"{telemetry.rate_spd:.2f}",
-                    "beat_error_ms": f"{telemetry.beat_error_ms:.2f}",
-                    "amplitude_deg": f"{telemetry.amplitude_deg:.1f}",
-                    "confidence": f"{telemetry.confidence:.3f}",
-                    "snr_db": f"{snr_db:.1f}",
-                }
-            )
-
-            r_max = max(self._rate_history)
-            r_min = min(self._rate_history)
-            r_delta = r_max - r_min
-            r_mean = float(np.mean(self._rate_history))
-
-            self.lbl_stat_max_val.setText(f"{r_max:+.2f} s/d")
-            self.lbl_stat_min_val.setText(f"{r_min:+.2f} s/d")
-            self.lbl_stat_delta_val.setText(f"{r_delta:.2f} s/d")
-            self.lbl_stat_mean_val.setText(f"{r_mean:+.2f} s/d")
-
-            # Horizontal Paper Tape: X = Elapsed Time (s), Y = Deviation/Rate (s/d)
-            # Separate even/odd tracks visually by beat error asymmetry
-            half_be_offset = 0.5 * telemetry.beat_error_ms
-            self._tape_times_even.append(t_meas)
-            self._tape_rate_even.append(telemetry.rate_spd - half_be_offset)
-            self._tape_times_odd.append(t_meas)
-            self._tape_rate_odd.append(telemetry.rate_spd + half_be_offset)
-
-            self.tape_curve_even.setData(self._tape_times_even, self._tape_rate_even)
-            self.tape_curve_odd.setData(self._tape_times_odd, self._tape_rate_odd)
-
-        # Update Bottom-Left Oscilloscope and Bottom-Right Audio Waveform
-        fs = self.current_watch_config().sample_rate
-        if beats:
-            latest_beat = beats[-1]
-            wave = latest_beat.raw_waveform
-            if len(wave) > 0:
-                peak_abs = float(np.max(np.abs(wave))) or 1.0
-                norm_wave = wave / peak_abs
-                t_ms = (np.arange(len(wave), dtype=np.float64) / fs) * 1000.0
-
-                dt_p2 = (latest_beat.timestamp_p2 - latest_beat.timestamp_p1) * 1000.0
-                dt_p3 = (latest_beat.timestamp_p3 - latest_beat.timestamp_p1) * 1000.0
-
-                p3_idx = int(np.argmax(np.abs(norm_wave)))
-                t_p3_ms = float(t_ms[p3_idx])
-                t_p1_ms = max(0.2, t_p3_ms - dt_p3)
-                t_p2_ms = np.clip(t_p1_ms + dt_p2, t_p1_ms, t_p3_ms)
-
-                self.osc_wave_curve.setData(t_ms, norm_wave)
-                env_win = max(int(round(0.00015 * fs)), 3)
-                env_kernel = np.ones(env_win, dtype=np.float64) / float(env_win)
-                norm_env = np.convolve(np.abs(norm_wave), env_kernel, mode="same")
-                self.osc_envelope_curve.setData(t_ms, norm_env)
-                self.line_p1.setPos(t_p1_ms)
-                self.line_p2.setPos(t_p2_ms)
-                self.line_p3.setPos(t_p3_ms)
-
-                p1_idx = int(np.clip(round((t_p1_ms / 1000.0) * fs), 0, len(norm_wave) - 1))
-                p2_idx = int(np.clip(round((t_p2_ms / 1000.0) * fs), 0, len(norm_wave) - 1))
-
-                spots = [
-                    {
-                        "pos": (t_p1_ms, float(norm_wave[p1_idx])),
-                        "brush": pg.mkBrush("#00e676"),
-                        "pen": pg.mkPen("#ffffff", width=1),
-                    },
-                    {
-                        "pos": (t_p2_ms, float(norm_wave[p2_idx])),
-                        "brush": pg.mkBrush("#ffab00"),
-                        "pen": pg.mkPen("#ffffff", width=1),
-                    },
-                    {
-                        "pos": (t_p3_ms, float(norm_wave[p3_idx])),
-                        "brush": pg.mkBrush("#ff1744"),
-                        "pen": pg.mkPen("#ffffff", width=1),
-                    },
-                ]
-                self.osc_impulse_markers.setData(spots)
-
-        # Update Bottom-Right Audio Waveform Graph (peak-preserving decimation to avoid aliasing)
-        wave_stream = (
-            audio_chunk
-            if (audio_chunk is not None and len(audio_chunk) > 0)
-            else (beats[-1].raw_waveform if beats else None)
-        )
-        if wave_stream is not None and len(wave_stream) > 0:
-            max_amp = float(np.max(np.abs(wave_stream))) or 1.0
-            norm_stream = wave_stream / max_amp
-            n_pts = len(norm_stream)
-            max_bins = 2000
-            if n_pts > max_bins * 2:
-                bin_size = n_pts // max_bins
-                n_trim = bin_size * max_bins
-                reshaped = norm_stream[:n_trim].reshape(max_bins, bin_size)
-                y_min = np.min(reshaped, axis=1)
-                y_max = np.max(reshaped, axis=1)
-                y_dec = np.empty(max_bins * 2, dtype=np.float64)
-                y_dec[0::2] = y_min
-                y_dec[1::2] = y_max
-                t_stream_ms = np.linspace(0.0, (n_trim / fs) * 1000.0, max_bins * 2)
-                self.audio_waveform_curve.setData(t_stream_ms, y_dec)
-            else:
-                t_stream_ms = (np.arange(n_pts, dtype=np.float64) / fs) * 1000.0
-                self.audio_waveform_curve.setData(t_stream_ms, norm_stream)
-
     def _on_telemetry_ready(self, telemetry: BeatTelemetry | TelemetryResult) -> None:
-        """Slot receiving real-time BeatTelemetry from DSPStreamWorker."""
+        """Slot receiving real-time BeatTelemetry from the engine."""
+        if self._capture_state == "INACTIVO":
+            # Late telemetry still queued when the session stopped: ignore it so no stray
+            # point is added to the paper tape / statistics.
+            return
         rate_spd = float(telemetry.rate_spd)
         beat_error_ms = float(telemetry.beat_error_ms)
         amplitude_deg = float(telemetry.amplitude_deg)
@@ -2278,7 +2245,18 @@ class MainWin(QMainWindow):
         self.card_beat_error.set_value(f"{beat_error_ms:.2f}")
         self.card_amplitude.set_value(f"{amplitude_deg:.0f}°")
 
-        cfg_now = self.current_watch_config()
+        # Engine copy of the active config (avoids building a WatchConfig 4x/s)
+        cfg_now = self._active_watch_config or self.current_watch_config()
+        _dbg.throttled(
+            "telemetry_ready",
+            "telemetry rate=%+.2f s/d be=%.2f ms amp=%.0f deg conf=%.2f snr=%.1f dB",
+            rate_spd,
+            beat_error_ms,
+            amplitude_deg,
+            confidence,
+            raw_snr_db,
+            every_s=5.0,
+        )
         if should_record_tape:
             self._rate_history.append(rate_spd)
             self._session_records.append(
@@ -2389,7 +2367,7 @@ class MainWin(QMainWindow):
             self.stop_capture()
 
     def _on_waveform_ready(self, time_axis: np.ndarray, waveform: np.ndarray) -> None:
-        """Slot updating the real-time acoustic waveform curve from DSPStreamWorker."""
+        """Slot updating the real-time acoustic waveform curve from the engine."""
         if time_axis is not None and waveform is not None and len(time_axis) > 0:
             self.audio_waveform_curve.setData(time_axis, waveform)
 
@@ -2404,7 +2382,7 @@ class MainWin(QMainWindow):
         self._last_drift_ppm = float(drift_ppm)
         self._last_rate_bias_spd = float(rate_bias_spd)
 
-        self.lbl_stat_drift_val.setText(f"{drift_ppm:+.2f} ppm ({effective_fs:.1f} Hz)")
+        self._refresh_drift_stat_label()
         self.lbl_drift_status.setText(
             self.translator.tr("status_drift_format").format(
                 ppm=drift_ppm,
@@ -2412,12 +2390,32 @@ class MainWin(QMainWindow):
                 bias=rate_bias_spd,
             )
         )
-        logger.debug(
+        _dbg.throttled(
+            "drift_updated",
             "Clock drift telemetry updated: effective_fs=%.2f Hz, drift=%+.3f ppm, bias=%+.3f s/d",
             effective_fs,
             drift_ppm,
             rate_bias_spd,
+            every_s=5.0,
         )
+
+    def _on_mock_drift_detail(self, sigma_ppm: float, confidence: float) -> None:
+        """MOCK-only slot: simulated drift uncertainty (± sigma) and confidence."""
+        self._last_drift_sigma_ppm = float(sigma_ppm)
+        self._last_drift_confidence = float(confidence)
+        self._refresh_drift_stat_label()
+
+    def _refresh_drift_stat_label(self) -> None:
+        """Drift value in the statistics panel (with ± sigma and confidence when known)."""
+        ppm = self._last_drift_ppm
+        if self._last_drift_sigma_ppm is None or self._last_drift_confidence is None:
+            text = f"{ppm:+.2f} ppm ({self._last_effective_fs:.1f} Hz)"
+        else:
+            text = (
+                f"{ppm:+.2f} ± {self._last_drift_sigma_ppm:.2f} ppm "
+                f"({100.0 * self._last_drift_confidence:.0f} %)"
+            )
+        self.lbl_stat_drift_val.setText(text)
 
     def _on_capture_health(self, ingest_pct: float, overflows: int) -> None:
         """Slot updating the capture-health indicator (percentage of audio received)."""
@@ -2436,17 +2434,16 @@ class MainWin(QMainWindow):
         self.lbl_capture_health.setStyleSheet("color: #ff1744;" if pct < 98.0 else "")
 
     def _on_worker_error(self, message: str) -> None:
-        """Slot logging any error emitted by DSPStreamWorker safely on the UI thread."""
-        logger.error("DSPStreamWorker reported error: %s", message)
+        """Slot logging any error emitted by the engine safely on the UI thread."""
+        logger.error("%s reported error: %s", type(self.dsp_worker).__name__, message)
+        self.statusBar().showMessage(message, 8000)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         """Ensure background worker thread is cleanly stopped before window closes."""
-        logger.info("MainWin closing; stopping active worker and QThread if running")
-        self.stop_capture()
-        if hasattr(self, "dsp_worker") and self.dsp_worker is not None:
-            self.dsp_worker.shutdown()
-        if hasattr(self, "dsp_thread") and self.dsp_thread is not None:
-            if self.dsp_thread.isRunning():
-                self.dsp_thread.quit()
-                self.dsp_thread.wait(3000)
-        super().closeEvent(event)
+        # TODO(capa-5): reconectar al motor real (cada motor gestiona sus propios hilos)
+        with _dbg.phase("cierre_ventana", capture_state=self._capture_state):
+            self.stop_capture()
+            if hasattr(self, "dsp_worker") and self.dsp_worker is not None:
+                self.dsp_worker.shutdown()
+                _dbg.process_end(f"engine {type(self.dsp_worker).__name__}")
+            super().closeEvent(event)

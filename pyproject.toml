@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wea"
-version = "0.2.0"
-description = "Watch Escape Analyzer EVO - High-precision horological DSP and acoustic telemetry suite"
+name = "advanced-timegrapher"
+version = "0.1.0"
+description = "Software timegrapher for mechanical watches (PyQt6 GUI; measurement core under reconstruction)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
@@ -32,10 +32,15 @@ dev = [
 ]
 
 [project.scripts]
-wea = "wea.main:main"
+adv-tg = "adv_tg.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["adv_tg*"]
+
+[tool.setuptools.package-data]
+"adv_tg.ui" = ["assets/*.svg"]
+"adv_tg.utils" = ["db/*.csv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -51,5 +56,5 @@ select = ["E", "F", "I"]
 
 ignore = ["E501"]
 
-[lint.per-file-ignores]
+[tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
