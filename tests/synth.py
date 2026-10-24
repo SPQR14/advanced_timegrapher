@@ -143,6 +143,9 @@ def synth_watch(
     odd_pre_ramp: tuple[float, float] | None = None,
     odd_jitter_us: float = 0.0,
     rate_drift_s_per_day_per_min: float = 0.0,
+    quartz: bool = False,
+    quartz_precursor: tuple[float, float, float] | None = None,
+    shape_change_at_s: float | None = None,
 ) -> tuple[NDArray[np.float64], Truth]:
     """Generate a watch signal and its exact truth.
 
@@ -179,6 +182,13 @@ def synth_watch(
         rate_drift_s_per_day_per_min: The rate changes linearly with time,
             ``rate(t) = rate_s_per_day + drift * t / 60`` (t in s from the start); each beat
             period follows the rate at its own instant (the truth stays exact).
+        quartz: Quartz step motor: one burst per step (``bph`` = steps per hour); the truth
+            ``p1 = p2 = p3`` is the onset of the step (no escapement structure).
+        quartz_precursor: ``(delay_ms, level_min, level_max)``: a smaller burst ``delay_ms``
+            before each quartz step with a random level, so the step shape changes from step
+            to step (as the TMI VH31). It is part of the step; the truth stays the main onset.
+        shape_change_at_s: From this time on the bursts use other resonance modes (the sound
+            changes; exercises the re-anchoring of the template frame).
     """
     rng = np.random.default_rng(seed)
     n = int(round(seconds * fs))
@@ -215,6 +225,21 @@ def synth_watch(
         in_drop = any(s - duration < t0 + t_lift and t0 < s + d for s, d in dropouts)
         if silent or in_drop:
             removed.append(k)
+        elif quartz:
+            level, modes = _BURSTS[2]
+            if shape_change_at_s is not None and t0 >= shape_change_at_s:
+                modes = ((5200.0, 1.0, 0.35e-3), (8100.0, 0.5, 0.25e-3))
+            lv = level * (
+                1.0 + rng.uniform(-amp_variation, amp_variation) if amp_variation else 1.0
+            )
+            _burst(x, fs, t0, lv * _SCALE, modes + tuple(tails), duration)
+            if quartz_precursor is not None:
+                d_ms, lo, hi = quartz_precursor
+                _burst(x, fs, t0 - d_ms * 1e-3, lv * rng.uniform(lo, hi) * _SCALE, modes, duration)
+            ks.append(k)
+            p1s.append(t0 * fs)
+            p2s.append(t0 * fs)
+            p3s.append(t0 * fs)
         else:
             for i, (level, modes) in enumerate(_BURSTS):
                 lv = level * (p1_gain if i == 0 else 1.0)

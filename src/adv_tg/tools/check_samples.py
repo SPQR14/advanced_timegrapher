@@ -155,9 +155,10 @@ def resolve_config(path: Path, manifest: list[dict] | None = None) -> CalibreCon
 def check_file(path: Path, cfg: CalibreConfig) -> FileResult:
     """Run the detector on one file and apply the verdict criteria."""
     try:
-        summary, beats = analyze_file(path, cfg.bph, cfg.lift_angle, chunk=4096)
-        b1024 = detect_whole_file(path, cfg.bph, cfg.lift_angle, chunk=1024)
-        ball = detect_whole_file(path, cfg.bph, cfg.lift_angle, chunk=None)
+        q = cfg.informational  # the informational entries are the quartz references
+        summary, beats = analyze_file(path, cfg.bph, cfg.lift_angle, chunk=4096, quartz=q)
+        b1024 = detect_whole_file(path, cfg.bph, cfg.lift_angle, chunk=1024, quartz=q)
+        ball = detect_whole_file(path, cfg.bph, cfg.lift_angle, chunk=None, quartz=q)
     except (AudioFileError, ValueError) as exc:
         return FileResult(path, cfg, None, None, math.nan, "ERROR", [str(exc)])
     invariant = beats_equal(beats, ball) and beats_equal(b1024, ball)

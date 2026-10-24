@@ -40,7 +40,10 @@ Model and conventions
   one the synthetic coverage test checks) and a block-jackknife sigma (``*_sigma_block_*``,
   same contiguous blocks as the trend), which also captures the correlated timing noise of
   real recordings (2-4x larger there). The reported uncertainty (``*_uncertainty_*``) is the
-  larger of the two.
+  larger of the two. Each window reports its covariance sigma times ``window_sigma_factor``:
+  ``sqrt(reduced chi^2)`` of the window rates around the trend line when there are >= 6
+  windows, else the block/covariance ratio of the take; never below 1 (on the quartz
+  references the covariance sigma of a window was 1.4-4.8x too small).
 * **Beat error.** Each beat's P1 instant is projected from its parity template,
   ``t_p1 = t_fine - (onset_ref - onset_p1)``, and the same regression gives ``c``; the beat
   error is ``2 |c|`` (half the difference between the tic->tac and tac->tic intervals). If a
@@ -66,7 +69,7 @@ from __future__ import annotations
 import math
 from collections import deque
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from numpy.typing import NDArray
@@ -211,8 +214,9 @@ class WindowRate:
     end_s: float
     center_s: float
     rate_s_per_day: float
-    rate_sigma_s_per_day: float
+    rate_sigma_s_per_day: float  # covariance (white-noise model)
     n_beats: int
+    rate_uncertainty_s_per_day: float = math.nan  # covariance x correlated-noise factor
 
 
 @dataclass
@@ -246,6 +250,7 @@ class Metrics:
     rate_trend_s_per_day_per_min: float = math.nan
     rate_trend_sigma_s_per_day_per_min: float = math.nan
     rate_trend_flag: bool = False
+    window_sigma_factor: float = 1.0  # applied to the window covariance sigmas
     span_s: float = math.nan
     confidence: float = 0.0
     warnings: list[str] = field(default_factory=list)
@@ -524,6 +529,34 @@ def amplitude_from_templates(
     return mean, amps[0], amps[1], unc
 
 
+def _window_sigma_factor(m: Metrics) -> float:
+    """Factor for the window sigmas: correlated timing noise makes the covariance sigma of a
+    window too small (quartz references: real scatter 1.4-4.8x the declared one).
+
+    With >= 6 windows: ``sqrt(reduced chi^2)`` of the window rates around the trend line,
+    measured at the window scale itself (the correlation of the noise depends on the scale:
+    TMI VH31 x3.6 at 10 s, x1.6 at 30 s). With fewer windows (too few degrees of freedom):
+    the block-jackknife / covariance ratio of the whole take. Never below 1 (white noise).
+    Taking the maximum of both over-inflated (6-block jackknife ~30 % scatter).
+    """
+    f = 1.0
+    w = m.windows
+    if len(w) < 6:
+        if math.isfinite(m.rate_sigma_block_s_per_day) and m.rate_sigma_s_per_day > 0:
+            f = max(f, m.rate_sigma_block_s_per_day / m.rate_sigma_s_per_day)
+        return f
+    if len(w) >= 6:
+        x = np.array([v.center_s for v in w])
+        y = np.array([v.rate_s_per_day for v in w])
+        s = np.array([max(v.rate_sigma_s_per_day, 1e-9) for v in w])
+        wt = 1.0 / s**2
+        X = np.stack([np.ones(x.size), x - x.mean()], axis=1)
+        coef = np.linalg.solve(X.T @ (X * wt[:, None]), X.T @ (wt * y))
+        chi2 = float(np.sum(wt * (y - X @ coef) ** 2)) / (len(w) - 2)
+        f = max(f, math.sqrt(max(chi2, 0.0)))
+    return f
+
+
 def _confidence(m: Metrics, config: MetricsConfig) -> float:
     if not math.isfinite(m.rate_s_per_day):
         return 0.0
@@ -591,6 +624,11 @@ def compute_metrics(
     m.rate_uncertainty_s_per_day = float(
         np.nanmax([m.rate_sigma_s_per_day, m.rate_sigma_block_s_per_day])
     )
+    m.window_sigma_factor = _window_sigma_factor(m)
+    m.windows = [
+        replace(w, rate_uncertainty_s_per_day=w.rate_sigma_s_per_day * m.window_sigma_factor)
+        for w in m.windows
+    ]
     if (
         math.isfinite(m.rate_trend_sigma_s_per_day_per_min)
         and abs(m.rate_trend_s_per_day_per_min)

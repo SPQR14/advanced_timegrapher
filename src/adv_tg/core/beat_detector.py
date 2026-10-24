@@ -218,6 +218,30 @@ class BeatDetectorConfig:
             and it is the dominant cost at high beat rates (quartz, 16 beats/s): 2 is the
             smallest value that keeps detector + metrics >= 90x real time on the quartz take
             (84x -> 100x; mechanical ~100x -> ~110x). 1 = every beat.
+        template_refresh_min_s: ... and at most once every this many seconds of its parity
+            (default 0.25 s): the effective refresh is ``max(template_refresh_beats,
+            ceil(template_refresh_min_s / (2 P)))`` beats of the parity, so fast beat rates
+            (16/s quartz) do not pay a median every 125 ms. Below 14400 BPH it is 2.
+        template_reanchor_corr: Frame anchoring. When a template is first full, a copy is
+            kept as its reference; at every refresh the lag of the current template against
+            that reference is measured by cross-correlation, and ``t_fine`` marks the onset
+            measured once on the reference plus that lag. The frame then cannot drift (the
+            alignment chain random-walked by +-5 ms on the TMI VH31 quartz) and the timing
+            point does not jump with threshold onsets on ambiguous shapes. When the current
+            template correlates below this value with the reference (the sound changed), the
+            reference is replaced by the current template, timed at its live onset (default
+            0.8). Limit: the lag follows the centroid of the sound, so a gradual change of
+            the sound that moves its centroid relative to its onset biases the timing
+            (synthetic change of resonance modes: 70 µs, 0.07 s/d over 90 s).
+        template_anchor: Use the frame anchoring above. None (default) = only in quartz
+            mode: on mechanical takes the sound of a parity evolves (lobes, ramps) and the
+            lag against a fixed reference jumped too (4R36 rate uncertainty x3, Miyota beat
+            error 0.15 -> 0.22 ms), while the live onset is validated against tg/WAM.
+        quartz: Quartz step motor: one event per step, no escapement structure. P1/P2 are
+            not searched (``p3`` is the strongest sub-event of the step) and the template
+            spans +-``quartz_template_ms`` around the step, all of it used for the alignment;
+            its timing point is the onset of the step (first rise of the template).
+        quartz_template_ms: Half-width of the quartz template (default 25 ms).
         template_align_smooth_ms: Moving average applied to the envelope ONLY for the
             alignment (default 1 ms): it fuses the lobes of the drop into one burst, so the
             correlation does not jump between lobes whose relative level changes from beat to
@@ -272,6 +296,11 @@ class BeatDetectorConfig:
     template_front_lift_fraction: float = 0.4
     template_amp_mismatch_deg: float = 20.0
     template_refresh_beats: int = 2
+    template_refresh_min_s: float = 0.5
+    template_reanchor_corr: float = 0.8
+    template_anchor: bool | None = None
+    quartz: bool = False
+    quartz_template_ms: float = 25.0
 
     def __post_init__(self) -> None:
         fs = float(self.sample_rate)
@@ -328,8 +357,16 @@ class BeatDetectorConfig:
             raise ValueError("model_beats debe ser >= 6")
         if not 0.0 < self.saturation_level <= 1.0:
             raise ValueError("saturation_level fuera de (0, 1]")
+        if not self.template_refresh_min_s >= 0:
+            raise ValueError("template_refresh_min_s debe ser >= 0")
         if self.template_refresh_beats < 1:
             raise ValueError("template_refresh_beats debe ser >= 1")
+        if not 0.0 < self.template_reanchor_corr < 1.0:
+            raise ValueError(
+                f"template_reanchor_corr fuera de (0, 1): {self.template_reanchor_corr}"
+            )
+        if not self.quartz_template_ms > 0:
+            raise ValueError("quartz_template_ms debe ser positivo")
         if not 1 <= self.template_min_beats <= self.template_beats:
             raise ValueError("se requiere 1 <= template_min_beats <= template_beats")
         for name in ("template_search_ms", "template_post_ms"):
@@ -478,6 +515,18 @@ class _Tpl:
         # next search on the prediction instead of on the jittery per-beat anchor)
         self.off: deque[float] = deque(maxlen=16)
         self.pending = 0  # beats added since the last median
+        # frame anchoring: reference template (smoothed alignment region), the timing point
+        # measured on it and the lag of the current template against it (samples)
+        self.anchor: NDArray | None = None
+        self.onset_anchor = math.nan
+        self.lag = 0.0
+
+    @property
+    def onset_ref(self) -> float:
+        """Timing point of ``t_fine`` in the current template frame."""
+        if self.anchor is None:
+            return self.onset_p3
+        return self.onset_anchor + self.lag
 
 
 def _hilbert_fir(half: int) -> NDArray:
@@ -534,10 +583,20 @@ class BeatDetector:
         # 3600 BPH) a fixed 2 s window holds a single fold and could never gather the 3
         # members the lock needs; above 7200 BPH this changes nothing
         self.W_acq = int(round(max(c.acquisition_s, 8.0 * beat_period_s(c.bph)) * fs))
-        self.tpl_pre = int(math.ceil(self.tmax + 2.0 * ms))
-        self.tpl_post = int(math.ceil(c.template_post_ms * ms))
         self.tpl_search = max(1, int(round(c.template_search_ms * ms)))
-        self.tpl_burst = int(round(3.0 * ms))  # alignment uses the template from 3 ms before
+        # beats of one parity are 2 P apart
+        per_parity_s = 2.0 * beat_period_s(c.bph)
+        self.tpl_refresh = max(
+            c.template_refresh_beats, int(math.ceil(c.template_refresh_min_s / per_parity_s - 1e-9))
+        )
+        if c.quartz:
+            # the whole step, centred on it, and all of it for the alignment
+            self.tpl_pre = self.tpl_post = int(math.ceil(c.quartz_template_ms * ms))
+            self.tpl_burst = self.tpl_pre
+        else:
+            self.tpl_pre = int(math.ceil(self.tmax + 2.0 * ms))
+            self.tpl_post = int(math.ceil(c.template_post_ms * ms))
+            self.tpl_burst = int(round(3.0 * ms))  # alignment from 3 ms before the anchor
         n_al = max(1, int(round(c.template_align_smooth_ms * ms)))
         self._align_kernel = np.full(n_al, 1.0 / n_al)
         self.reset()
@@ -704,7 +763,7 @@ class BeatDetector:
                     envelope=t.env.copy(),
                     onset_p1=t.onset_p1,
                     onset_p3=p3,
-                    onset_ref=t.onset_p3,
+                    onset_ref=t.onset_ref,
                     p3_method=method,
                 )
             )
@@ -1287,6 +1346,8 @@ class BeatDetector:
         w_lo, w_hi = self._lift_window()
         ref = self._tlift_ref()
         p1 = p2 = p3 = math.nan
+        if c.quartz:  # one event per step: no escapement structure to look for
+            return self._finish(j, tp, tol, ai, a, height, snr, gate, math.nan, math.nan, a)
         back = members(a - self.tmax - self.slack, a - self.min_sp)
         b_on = cd.onset[back]
         in_p1 = back[(b_on >= a - w_hi - self.slack) & (b_on <= a - w_lo + self.slack)]
@@ -1340,6 +1401,26 @@ class BeatDetector:
                 cand = members(target - half, target + half)
                 if cand.size:
                     p2 = float(cd.onset[cand[np.argmin(np.abs(cd.onset[cand] - target))]])
+        return self._finish(j, tp, tol, ai, a, height, snr, gate, p1, p2, p3)
+
+    def _finish(
+        self,
+        j: int,
+        tp: float,
+        tol: float,
+        ai: int,
+        a: float,
+        height: float,
+        snr: float,
+        gate: float | None,
+        p1: float,
+        p2: float,
+        p3: float,
+    ) -> Beat | None:
+        """Common end of ``_examine``: reference instant, flags, model update, ``k``."""
+        c = self.config
+        cd = self._cands
+        ref = self._tlift_ref()
         # reference instant and residual
         if not math.isnan(p3):
             t_ref = p3
@@ -1353,7 +1434,9 @@ class BeatDetector:
         k0, k1 = cd.range(g0 - self.slack, g1 + self.slack)
         rel = (cd.peak[k0:k1] - cd.floor[k0:k1]) >= c.subevent_rel_threshold * height
         n_sub = int(np.count_nonzero(rel & ~cd.used[k0:k1]))
-        if outlier and len(pts) == 1:
+        # a lone sub-event far from the model is a stray click on a mechanical watch; a quartz
+        # step is always a single event, so it is kept (flagged) and timed by its template
+        if outlier and len(pts) == 1 and not c.quartz:
             cd.used[ai] = True
             self._rejected += 1
             return None
@@ -1478,17 +1561,72 @@ class BeatDetector:
         t.off.append(origin + pre - tp)
         t.pending += 1
         full = len(t.segs) == c.template_beats
-        if t.env is None or not full or t.pending >= c.template_refresh_beats:
+        if t.env is None or not full or t.pending >= self.tpl_refresh:
             t.env = np.median(np.stack(t.segs), axis=0)
-            t.onset_p3, t.onset_p1 = self._template_onsets(t.env)
-            t.onset_front = self._front_onset(t.env)
+            if c.quartz:
+                t.onset_p3, t.onset_p1 = self._quartz_onset(t.env), math.nan
+                t.onset_front = math.nan
+            else:
+                t.onset_p3, t.onset_p1 = self._template_onsets(t.env)
+                t.onset_front = self._front_onset(t.env)
             t.pending = 0
-        if len(t.segs) < c.template_min_beats or math.isnan(t.onset_p3):
+            anchor = c.quartz if c.template_anchor is None else c.template_anchor
+            if full and anchor:
+                self._anchor_frame(t)
+        ref = t.onset_ref
+        if len(t.segs) < c.template_min_beats or math.isnan(ref):
             return math.nan
-        # the live onset, not a frozen one: the template frame drifts slowly on real takes
-        # (a frozen reference ended ~0.4 ms off on the Miyota and broke the beat error);
-        # the live onset follows the physical point
-        return origin + t.onset_p3
+        return origin + ref
+
+    def _anchor_frame(self, t: _Tpl) -> None:
+        """Track the lag of a full template against its reference (see
+        ``template_reanchor_corr``); capture or replace the reference when needed."""
+        c = self.config
+        s = self.tpl_search
+        b0 = self.tpl_pre - self.tpl_burst
+        cur = np.convolve(t.env, self._align_kernel, mode="same")[b0:]
+        if t.anchor is None:
+            if math.isfinite(t.onset_p3):
+                t.anchor, t.onset_anchor, t.lag = cur, t.onset_p3, 0.0
+            return
+        ref = t.anchor[s:-s] if s > 0 else t.anchor
+        rz = ref - ref.mean()
+        cc = np.correlate(cur, rz, mode="valid")  # lags -s .. +s
+        i = int(np.argmax(cc))
+        w = cur[i : i + rz.size]
+        wz = w - w.mean()
+        den = float(np.sqrt(np.dot(rz, rz) * np.dot(wz, wz)))
+        d = 0.0
+        if 0 < i < cc.size - 1:
+            q = cc[i - 1] - 2.0 * cc[i] + cc[i + 1]
+            d = 0.5 * (cc[i - 1] - cc[i + 1]) / q if q < 0 else 0.0
+        lag = i + d - s
+        if den <= _TINY or cc[i] / den < c.template_reanchor_corr or i in (0, cc.size - 1):
+            # the sound changed (or moved beyond the search): new reference, timed at the
+            # onset of the new sound (on the real quartz takes this beat keeping the old point
+            # through the lag: TMI VH31 +0.46 -> +0.17 s/d off the card drift, Citizen
+            # +0.31 -> +0.22); continuity only when the new onset is not measurable
+            t.onset_anchor = t.onset_p3 if math.isfinite(t.onset_p3) else t.onset_anchor + t.lag
+            t.anchor, t.lag = cur, 0.0
+            return
+        t.lag = lag
+
+    def _quartz_onset(self, tm: NDArray) -> float:
+        """Onset of a quartz step on its template: first rise above the template noise."""
+        c = self.config
+        ms = self.fs / 1000.0
+        n0 = max(2, int(round(2.0 * ms)))
+        quiet = tm[:n0]
+        base = float(np.median(quiet))
+        spread = 1.4826 * float(np.median(np.abs(quiet - base)))
+        mx = int(np.argmax(tm))
+        thr = base + max(c.template_p3_fraction * (float(tm[mx]) - base), 6.0 * spread)
+        above = np.flatnonzero(tm[n0 : mx + 1] > thr)
+        if above.size == 0:
+            return math.nan
+        j = n0 + int(above[0]) - 1
+        dd = float(tm[j + 1] - tm[j])
+        return j + ((thr - float(tm[j])) / dd if dd > 0 else 0.0)
 
     def _front_onset(self, tm: NDArray) -> float:
         """P3 onset on a template as the foot of its first steep front (NaN if none).

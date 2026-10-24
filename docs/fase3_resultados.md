@@ -555,3 +555,118 @@ s/d por minuto).
        levantamiento y con la ventana de la plantilla adaptada a la duración del impulso.
   3. Opcional: estudiar por qué el ruido por paso es de 0.24 ms incluso en la señal más limpia
      (Bulova), para acercarse a las decenas de µs de un cronocomparador comercial.
+
+## 8. Robustecimiento de las fases 2 y 3
+
+Aplica los puntos 1 y 2 de la conclusión 7.6. Todo sobre la rama `feature/metrics` (tras el
+commit `1073e00`), sin commit.
+
+### 8.1 Fase 2: detector
+
+| Cambio | Motivo | Ámbito |
+|---|---|---|
+| **Modo cuarzo** (`BeatDetectorConfig.quartz`, `--quartz` en `detect_beats` y `measure`; `check_samples` lo activa en las entradas informativas) | Un motor paso a paso no tiene estructura de escape: un evento por paso, sin buscar P1/P2. La plantilla cubre ±25 ms alrededor del paso y se alinea entera; su punto de medida es el inicio del paso | Cuarzo |
+| **Pasos aislados conservados** | Un sub-evento suelto lejos del modelo es un clic en un mecánico, pero en cuarzo cada paso es un solo evento: ahora se marca `TIMING_OUTLIER` y se mide por la plantilla | Cuarzo (Bulova: 4738 → 4798 de 4800 pasos) |
+| **Marco de la plantilla fijado** (`template_anchor`, automático = solo cuarzo) | Se guarda una referencia de la plantilla llena y se mide por correlación el desplazamiento de la plantilla actual: el marco no puede derivar. Al cambiar el sonido (correlación < 0.8), referencia nueva medida en su inicio vivo | Cuarzo |
+| **Refresco de la plantilla como mucho cada 0.5 s** (`template_refresh_min_s`) | La plantilla de cuarzo es 2.5 veces más larga. A 16 pasos/s se recalcula cada 4; a 21600 y 28800 BPH sigue siendo cada 2 | Todos (cambia solo ≥ 36000 BPH) |
+| Arreglos de 7.3 (enganche ≥ 8 periodos, búferes, desfase acotado) | Ya descritos | Baja frecuencia |
+
+**Por qué la fijación del marco no se activa en los mecánicos:**
+
+- Se probó y empeoraba lo validado: el error de batimiento del Miyota pasaba de 0.15 a 0.22 ms
+  y la incertidumbre de la marcha del 4R36 se multiplicaba por 3.
+- En un mecánico el sonido de cada paridad evoluciona (lóbulos, rampas), y el desplazamiento
+  frente a una referencia fija también salta.
+- El inicio vivo, validado contra tg y WAM, sigue siendo el método para mecánicos.
+
+**Límite documentado:** el desplazamiento sigue el centro de masa del sonido. Un cambio
+gradual de la forma del paso que mueva ese centro respecto al inicio sesga la medida: con un
+cambio de modos de resonancia en sintético, 70 µs (0.07 s/d en 90 s), muy por debajo de la
+tolerancia de un cuarzo.
+
+### 8.2 Fase 3: incertidumbre de las ventanas
+
+- **Cálculo:** cada ventana declara su σ de covarianza por `window_sigma_factor`:
+  - con ≥ 6 ventanas, √χ² reducido de las tasas de ventana alrededor de la recta de tendencia
+    (estimación directa a la escala de la ventana);
+  - con menos, el cociente entre la σ por bloques y la de covarianza de la toma;
+  - nunca menos de 1.
+- **Lo que se descartó:** tomar el máximo de las dos estimaciones sobreestimaba (con ruido
+  blanco, 1.15–1.5), porque el *jackknife* de 6 bloques tiene ~30 % de dispersión.
+- **Salidas:** `WindowRate.rate_uncertainty_s_per_day`, el CSV de `measure` (columna nueva) y la
+  gráfica usan la incertidumbre corregida.
+
+| Toma | Dispersión real / declarada antes | Después |
+|---|---|---|
+| Bulova, 10 / 30 / 60 s | ×0.9 / ×0.9 / ×0.5 (tras el modo cuarzo) | ×0.9 / ×0.9 / ×0.4 |
+| TMI VH31, 10 / 30 / 60 s | ×3.6 / ×1.6 / ×3.5 | ×1.5 / ×1.1 / ×0.7 |
+| Citizen H874, 30 / 60 s | ×2.3 / ×1.5 | ×1.1 / ×0.6 |
+| Sintético, ruido blanco | — | factor 1.00 (3 semillas de 120 s) |
+
+**Matiz importante: la inhibición de los cuartos.**
+
+- El residuo de `t_fine` del Bulova tiene un **diente de sierra de periodo 9.97 s** (pico
+  espectral 12 veces por encima del fondo) y 463 µs pico a pico.
+- Es la **compensación por inhibición** del circuito del cuarzo: un comportamiento físico del
+  reloj, no ruido de medida. En el VH31 hay indicios a ~30 s.
+- **Consecuencias:**
+  - la marcha "instantánea" de un cuarzo varía dentro de cada ciclo de inhibición, y las
+    ventanas cortas tienen un sesgo real (Bulova: ventanas de 30 s con media −0.45 frente a
+    −0.72 global);
+  - **la marcha de un cuarzo debe medirse sobre muchos ciclos de inhibición**, como hace la
+    cifra global de 300 s. A tener en cuenta en la fase 4 (calibración con cuarzo);
+  - es también una validación de resolución: la cadena de medida resuelve estructuras de
+    décimas de milisegundo.
+- **Corrección de 7.5:** allí se dijo que en un cuarzo todo el jitter es ruido de medida. Es
+  cierto para la dispersión paso a paso (≈ 0.2–1.4 ms), no para las estructuras de segundos.
+- **Aviso para mecánicos:** el factor de las ventanas también absorbe variaciones reales de la
+  marcha entre ventanas, por ejemplo periodicidades del tren de engranajes en tomas largas. Es
+  una incertidumbre conservadora: en la GUI conviene mostrar el factor.
+
+### 8.3 Resultados
+
+**Cuartos** (300 s; criterio |marcha − (−0.72)| ≤ 0.49 + 2u):
+
+| Cuarzo | Antes de esta iteración | Ahora | Δ frente a −0.72 | Pasos | `t_fine` | Ruido por paso |
+|---|---|---|---|---|---|---|
+| Bulova (16/s) | −0.71 ± 0.005 | −0.72 ± 0.01 | **0.00** ✅ | 4798/4800 (antes 4738) | 99.7 % | 223/273 µs (antes 243/381) |
+| TMI VH31 (4/s) | +0.97 ± 0.60 | −0.55 ± 0.22 | **+0.17** ✅ (antes +1.69, en el límite) | 1200/1200 | 98 % (antes 74 %) | 1.0–1.4 ms (antes 3.2–3.5) |
+| Citizen H874 (1/s) | no enganchaba → −0.74 ± 0.12 | −0.50 ± 0.14 | **+0.22** ✅ | 300/300 | 89 % (antes 59 %) | 0.7–1.1 ms |
+
+**Mecánicos:** sin cambios respecto a las cifras validadas (6.4).
+
+| Grabación | Marcha | Error de batimiento | Amplitud | Factor de las ventanas |
+|---|---|---|---|---|
+| Miyota 9015 | +8.06 ± 0.38 | 0.15 ± 0.03 | 293° | 2.50 |
+| H-50 nuevo | +8.10 ± 0.50 | 0.35 ± 0.06 | 297° | 2.81 |
+| H-50 original | +11.46 ± 0.13 | 0.27 ± 0.05 | 292° | 1.18 |
+| Seiko 4R36 | −2.98 ± 0.62 | 0.20 ± 0.26 | 269° | 3.98 |
+
+**Sintético de cuarzo** (generador nuevo: `quartz`, `quartz_precursor`, `shape_change_at_s`):
+
+| Caso | Resultado |
+|---|---|
+| 16, 4 y 1 paso/s | Todos los pasos detectados; enganche ≤ 8.25 s; marcha a ≤ 0.005 s/d de la verdad |
+| Precursor de nivel aleatorio (forma variable, como el VH31) | Con fijación del marco, error de −0.004 s/d; sin ella, −0.033 |
+| Cambio del sonido a mitad de toma | Error de +0.067 s/d (límite documentado, tolerancia del test 0.1) |
+
+**Calidad:**
+
+- 406 tests pasan (15 nuevos de cuarzo y del factor de las ventanas), 2 saltados y 1 `xfail`
+  (los de 6.4).
+- Los 23 casos sintéticos de la especificación siguen dentro de tolerancia.
+- `check_samples` y `--self-test` dan código 0. Ruff limpio.
+- Los 7 archivos reales son invariantes al troceado.
+- Rendimiento: mecánicos 113–128×, cuartos 91–175×.
+
+### 8.4 Estado y límites que quedan
+
+- **Mecánicos:** la fase 3 cumple, sin cambios en lo validado.
+- **Cuartos:** los tres quedan dentro de su especificación frente a la deriva de la tarjeta
+  medida por tg. Sirven como referencias para la fase 4, siempre midiendo sobre muchos ciclos
+  de inhibición.
+- **Ruido por paso:** sigue siendo de 0.2–1.4 ms según la señal, lejos de las decenas de µs de
+  un cronocomparador comercial. Es la mejora pendiente más importante de cara a la fase 6.
+- **Fijación del marco:** solo en cuarzo. En mecánicos, el inicio vivo tiene el ruido conocido
+  ante rampas (6.8).
+- **`t_fine` en el Citizen:** el 11 % de los pasos no correlaciona con la plantilla (89 %).

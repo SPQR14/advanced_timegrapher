@@ -246,6 +246,43 @@ def test_window_rates_and_flat_trend() -> None:
     assert abs(m.rate_trend_s_per_day_per_min) < 3 * m.rate_trend_sigma_s_per_day_per_min
 
 
+def test_window_sigma_factor_is_about_one_for_white_noise() -> None:
+    """White noise: sqrt(reduced chi^2) of 11 windows (9 dof) is ~1 and only exceeds ~1.55
+    1 % of the time (99th percentile); it can inflate by chance, never deflate (>= 1)."""
+    factors = []
+    for seed in range(8, 16):
+        beats = _beats(6 * 120, jitter_us=(40.0, 40.0), seed=seed)  # ~120 s, 11 windows
+        m = compute_metrics(beats, _templates(), _cfg())
+        factors.append(m.window_sigma_factor)
+        for w in m.windows:
+            assert w.rate_uncertainty_s_per_day == pytest.approx(
+                w.rate_sigma_s_per_day * m.window_sigma_factor
+            )
+    assert min(factors) >= 1.0
+    assert float(np.median(factors)) <= 1.15
+    assert max(factors) <= 1.6
+
+
+def test_window_sigma_factor_covers_correlated_noise() -> None:
+    """A slow random walk on t_fine (correlated timing noise, as the template wander of a
+    real take): the covariance sigma of each window is too small; with the factor the window
+    rates fall within 2 sigma of the true rate."""
+    beats = _beats(6 * 300, jitter_us=(40.0, 40.0), seed=9)  # ~300 s, 30 windows
+    rng = np.random.default_rng(9)
+    walk = np.cumsum(rng.normal(0.0, 20e-6 * FS, len(beats)))
+    beats = [
+        Beat(b.k, b.p1, b.p2, b.p3, 3, -6, 30, 0, 0.9, b.flags, t_fine=b.t_fine + w)
+        for b, w in zip(beats, walk, strict=True)
+    ]
+    m = compute_metrics(beats, _templates(), _cfg())
+    assert m.window_sigma_factor > 2.0
+    rates = np.array([w.rate_s_per_day for w in m.windows])
+    raw = np.array([w.rate_sigma_s_per_day for w in m.windows])
+    unc = np.array([w.rate_uncertainty_s_per_day for w in m.windows])
+    assert np.mean(np.abs(rates - 4.0) <= 2 * raw) < 0.7
+    assert np.mean(np.abs(rates - 4.0) <= 2 * unc) >= 0.85
+
+
 def test_too_few_beats_gives_no_figures() -> None:
     m = compute_metrics(_beats(12), _templates(), _cfg())
     assert math.isnan(m.rate_s_per_day) and m.confidence == 0.0

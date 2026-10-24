@@ -100,7 +100,10 @@ def measure_file(
     info = audio_info(p)
     det = BeatDetector(
         BeatDetectorConfig(
-            sample_rate=info.sample_rate, bph=bph, lift_angle_deg=lift_angle_deg or 52.0
+            sample_rate=info.sample_rate,
+            bph=bph,
+            lift_angle_deg=lift_angle_deg or 52.0,
+            quartz=quartz,
         )
     )
     mcfg = MetricsConfig(
@@ -230,7 +233,15 @@ def write_csv(path: Path, r: MeasureResult) -> None:
     with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(
-            ["start_s", "end_s", "center_s", "rate_s_per_day", "rate_sigma_s_per_day", "n_beats"]
+            [
+                "start_s",
+                "end_s",
+                "center_s",
+                "rate_s_per_day",
+                "rate_sigma_s_per_day",
+                "rate_uncertainty_s_per_day",
+                "n_beats",
+            ]
         )
         for win in r.metrics.windows:
             w.writerow(
@@ -240,6 +251,7 @@ def write_csv(path: Path, r: MeasureResult) -> None:
                     f"{win.center_s:.3f}",
                     f"{win.rate_s_per_day:.3f}",
                     f"{win.rate_sigma_s_per_day:.3f}",
+                    f"{win.rate_uncertainty_s_per_day:.3f}",
                     win.n_beats,
                 ]
             )
@@ -261,7 +273,7 @@ def write_plot(path: Path, r: MeasureResult) -> bool:
     if m.windows:
         x = np.array([w.center_s for w in m.windows])
         y = np.array([w.rate_s_per_day for w in m.windows])
-        e = np.array([w.rate_sigma_s_per_day for w in m.windows])
+        e = np.array([w.rate_uncertainty_s_per_day for w in m.windows])
         a1.errorbar(x, y, yerr=e, fmt="o", capsize=3)
         if math.isfinite(m.rate_trend_s_per_day_per_min):
             xm = float(np.mean(x))

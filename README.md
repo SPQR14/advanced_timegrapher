@@ -299,7 +299,7 @@ audio):
 
 ```bash
 python -m adv_tg.tools.measure toma.flac --bph 28800 --lift-angle 51 --json m.json --csv v.csv --plot m.png
-python -m adv_tg.tools.measure cuarzo.flac --bph 57600 --quartz          # solo marcha
+python -m adv_tg.tools.measure cuarzo.flac --bph 57600 --quartz          # cuarzo: solo marcha, un evento por paso
 ```
 
 Validación (detalle en [`docs/fase3_resultados.md`](docs/fase3_resultados.md)):
@@ -311,10 +311,13 @@ Validación (detalle en [`docs/fase3_resultados.md`](docs/fase3_resultados.md)):
   vivo.
 - **Rendimiento:** ~110–128× el tiempo real con detector y métricas en relojes mecánicos y
   ~100–160× con cuartos.
-- **Cuartos de referencia** (Bulova 16/s, Citizen H874 1/s, TMI VH31 4/s; tomas de 300 s): el
-  Bulova y el Citizen reproducen la deriva de la tarjeta medida por tg (−0.72 s/d) con 0.01 y
-  0.02 s/d de diferencia. El VH31 queda en el límite (+0.97 ± 0.60) porque su plantilla se va a
-  la deriva: pendiente de robustecer antes de la fase 4 (`docs/fase3_resultados.md`, sección 7).
+- **Cuartos de referencia** (Bulova 16/s, TMI VH31 4/s y Citizen H874 1/s; tomas de 300 s, con
+  `--quartz`): los tres reproducen la deriva de la tarjeta medida por tg (−0.72 s/d) dentro de
+  su especificación (0.00, +0.17 y +0.22 s/d de diferencia). El Bulova muestra la compensación
+  por inhibición de 10 s del cuarzo: la marcha de un cuarzo debe medirse sobre muchos ciclos
+  (`docs/fase3_resultados.md`, secciones 7 y 8).
+- **Incertidumbre de la marcha por ventanas:** la σ de covarianza por un factor de ruido
+  correlacionado (`window_sigma_factor`, ≥ 1).
 
 ## Instalación
 

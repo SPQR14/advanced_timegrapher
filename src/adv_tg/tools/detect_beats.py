@@ -298,6 +298,7 @@ def analyze_file(
     *,
     chunk: int = DEFAULT_CHUNK,
     channel: str | int = "max_energy",
+    quartz: bool = False,
 ) -> tuple[Summary, list[Beat]]:
     """Detect beats in a file reading it block by block (incremental path).
 
@@ -319,6 +320,7 @@ def analyze_file(
                 sample_rate=info.sample_rate,
                 bph=bph,
                 lift_angle_deg=lift_angle_deg or 52.0,
+                quartz=quartz,
             )
             det = BeatDetector(cfg)
         t0 = time.perf_counter()
@@ -348,13 +350,20 @@ def analyze_file(
 
 
 def detect_whole_file(
-    path: Path | str, bph: float, lift_angle_deg: float | None = None, chunk: int | None = None
+    path: Path | str,
+    bph: float,
+    lift_angle_deg: float | None = None,
+    chunk: int | None = None,
+    quartz: bool = False,
 ) -> list[Beat]:
     """Read the file at once and detect (``chunk=None``: whole signal in one call)."""
     data = read_audio(path)
     x = select_channel(data)
     cfg = BeatDetectorConfig(
-        sample_rate=data.sample_rate, bph=bph, lift_angle_deg=lift_angle_deg or 52.0
+        sample_rate=data.sample_rate,
+        bph=bph,
+        lift_angle_deg=lift_angle_deg or 52.0,
+        quartz=quartz,
     )
     beats, _, _ = detect_array(x, cfg, chunk)
     return beats
@@ -513,6 +522,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("file", type=Path, help="archivo de audio (WAV o FLAC)")
     p.add_argument("--bph", type=float, required=True, help="batimientos por hora nominales")
     p.add_argument("--lift-angle", type=float, default=None, help="ángulo de levantamiento (°)")
+    p.add_argument("--quartz", action="store_true", help="reloj de cuarzo (un evento por paso)")
     p.add_argument(
         "--chunk", type=int, default=DEFAULT_CHUNK, help=f"muestras por bloque ({DEFAULT_CHUNK})"
     )
@@ -541,7 +551,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ERROR
     try:
         with _dbg.phase("detect_beats", file=str(args.file), bph=args.bph, chunk=args.chunk):
-            summary, beats = analyze_file(args.file, args.bph, args.lift_angle, chunk=args.chunk)
+            summary, beats = analyze_file(
+                args.file, args.bph, args.lift_angle, chunk=args.chunk, quartz=args.quartz
+            )
     except (AudioFileError, ValueError) as exc:
         print(f"ERROR: {exc}")
         return EXIT_ERROR

@@ -225,4 +225,6 @@ def test_consistent_templates_keep_the_level_onset() -> None:
     _, det = _run(x, 28800)
     for t in det.templates():
         assert t is not None
-        assert t.p3_method == "nivel" and t.onset_p3 == t.onset_ref
+        assert t.p3_method == "nivel"
+        # the timing point (reference onset + tracked lag) agrees with the live onset
+        assert abs(t.onset_p3 - t.onset_ref) < 3.0
