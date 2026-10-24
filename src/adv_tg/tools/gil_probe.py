@@ -698,6 +698,9 @@ def run_scenario(
 ) -> dict[str, Any]:
     """Run one scenario in a subprocess and return its JSON result."""
     env = dict(os.environ)
+    # On Windows a piped child would write in the ANSI code page (cp1252) and native
+    # libraries (Qt, PortAudio) may emit other bytes; force UTF-8 both ways.
+    env["PYTHONIOENCODING"] = "utf-8"
     if args.qpa:
         env["QT_QPA_PLATFORM"] = args.qpa
     iso = bool(args.isolated) if isolated is None else isolated
@@ -708,6 +711,8 @@ def run_scenario(
             cmd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=args.secs + 2 * SAFETY_MARGIN_S,
             env=env,
         )
