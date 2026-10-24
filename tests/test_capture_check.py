@@ -107,3 +107,19 @@ def test_list_with_fake_devices(
     assert main(["--list"]) == EXIT_OK
     out = capsys.readouterr().out
     assert "CM18 USB" in out and "predeterminado" in out and "Speakers" not in out
+
+
+def test_isolated_fake_source_ok(capsys: pytest.CaptureFixture[str]) -> None:
+    import multiprocessing as mp
+
+    code = main(["--isolated", "--fake-source", "--secs", "2", "--blocksize", "1024"])
+    out = capsys.readouterr().out
+    assert code == EXIT_OK, out
+    assert "proceso aparte" in out and "VEREDICTO: OK" in out
+    assert "Tramas perdidas    : 0" in out
+    assert mp.active_children() == []
+
+
+@pytest.mark.parametrize("argv", [["--fake-source"], ["--isolated", "--file", "x.wav"]])
+def test_isolated_argument_errors(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(argv) == EXIT_ERROR

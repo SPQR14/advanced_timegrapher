@@ -9,6 +9,11 @@ It opens the selected input device with ``AudioCapture`` + ``SampleStream`` and,
   over the samples received since the previous update,
 * ``capture_health`` (~2/s): ingest ratio (%) and the number of PortAudio status flags.
 
+Since phase 1d the PortAudio stream lives in a child process (``ProcessAudioCapture``): the
+GUI repaint holds this process's GIL for long stretches and an in-process callback would lose
+blocks. ``CAPTURE_IN_SEPARATE_PROCESS = False`` or ``ADV_TG_CAPTURE_INPROC=1`` forces the
+in-process ``AudioCapture`` (debugging).
+
 It never emits ``telemetry_ready`` nor ``drift_updated``: there is no beat detector, no
 metrics and no drift estimator yet.
 
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -36,6 +42,7 @@ import numpy as np
 from PyQt6.QtCore import QMetaObject, QObject, Qt, QThread, QTimer, pyqtSlot
 
 from adv_tg.audio.capture import AudioCapture
+from adv_tg.audio.process_capture import ProcessAudioCapture
 from adv_tg.core.models import WatchConfig
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
 from adv_tg.mock.generator import minmax_decimate
@@ -68,6 +75,9 @@ LEVEL_PERIOD_S: float = 0.1
 HEALTH_PERIOD_S: float = 0.5
 STOP_TIMEOUT_MS: int = 2000
 PERF_LOG_EVERY_S: float = 5.0
+# Diagnostics (phase 1c): a tick interval above this factor x TICK_MS counts as reader lag.
+READER_LAG_FACTOR: float = 2.0
+LEVEL_LOG_EVERY_S: float = 1.0
 
 # Level classification for the signal-quality bar (level/saturation only, no SNR).
 SATURATION_DBFS: float = -1.0
@@ -75,12 +85,33 @@ LOW_LEVEL_DBFS: float = -40.0
 NO_SIGNAL_DBFS: float = -70.0
 BAR_FLOOR_DBFS: float = -60.0
 
+# Capture isolation (phase 1d).
+CAPTURE_IN_SEPARATE_PROCESS: bool = True
+INPROC_ENV_VAR: str = "ADV_TG_CAPTURE_INPROC"
+
 CaptureFactory = Callable[..., Any]
 StreamFactory = Callable[[float], SampleStream]
 
 
+def capture_in_separate_process() -> bool:
+    """True unless ``CAPTURE_IN_SEPARATE_PROCESS`` is False or ``ADV_TG_CAPTURE_INPROC`` is set."""
+    forced = os.environ.get(INPROC_ENV_VAR, "").strip().lower() in ("1", "true", "yes", "on")
+    return CAPTURE_IN_SEPARATE_PROCESS and not forced
+
+
+def _default_capture_factory(stream: SampleStream, **kwargs: Any) -> Any:
+    """``ProcessAudioCapture`` by default, ``AudioCapture`` when forced in-process."""
+    if capture_in_separate_process():
+        return ProcessAudioCapture(stream, **kwargs)
+    return AudioCapture(stream, **kwargs)
+
+
 def _default_stream_factory(fs: float) -> SampleStream:
     return SampleStream(int(round(fs * BUFFER_S)), fs)
+
+
+def _round_or_na(value: float | None) -> Any:
+    return "n/a" if value is None else round(float(value), 1)
 
 
 def _dbfs(value: float) -> float:
@@ -192,6 +223,16 @@ class _CaptureReader(QObject):
         self._last_level_idx = 0
         self._waveforms = 0
         self._max_tick_ns = 0
+        # Diagnostics (phase 1c)
+        self._last_tick_ns = 0
+        self._lag_total_ns = 0
+        self._lag_count = 0
+        self._lvl_next_log = 0.0
+        self._lvl_peak = 0.0
+        self._lvl_sumsq = 0.0
+        self._lvl_n = 0
+        self._lvl_sat = False
+        self._lvl_blocks = 0
 
     # ------------------------------------------------------------------ open
     def _open(self) -> Any:
@@ -325,7 +366,11 @@ class _CaptureReader(QObject):
         st = self._stream.stats()
         logger.info(
             "Resumen captura (%s): %.1f s, plot %.1f FPS, tick máx %.2f ms, ingesta %.2f %%, "
-            "overflows %d, errores callback %d, callback máx %.0f µs, apertura %s",
+            "overflows %d, errores callback %d, callback máx %.0f µs, apertura %s, "
+            "callbacks %d, espera GIL media %.2f ms / p99 %.2f ms / máx %.2f ms, "
+            "callbacks con espera > 1 bloque %d, histograma GIL %s, "
+            "retraso del lector %.0f ms en %d ticks (> %.0fx %d ms), "
+            "backlog máx %s, retraso del padre máx %s ms, tramas perdidas %s",
             reason,
             elapsed,
             self._waveforms / elapsed if elapsed > 0 else 0.0,
@@ -335,19 +380,41 @@ class _CaptureReader(QObject):
             getattr(capture, "callback_errors", 0),
             getattr(capture, "max_callback_us", 0.0),
             self.open_params,
+            getattr(capture, "callbacks", 0),
+            getattr(capture, "gil_wait_mean_us", 0.0) / 1000.0,
+            getattr(capture, "gil_wait_p99_ms", 0.0),
+            getattr(capture, "gil_wait_max_us", 0.0) / 1000.0,
+            getattr(capture, "gil_wait_over_block", 0),
+            list(getattr(capture, "gil_wait_hist", ())),
+            self._lag_total_ns / 1e6,
+            self._lag_count,
+            READER_LAG_FACTOR,
+            TICK_MS,
+            getattr(capture, "backlog_max", "n/a"),
+            _round_or_na(getattr(capture, "parent_lag_max_ms", None)),
+            getattr(capture, "dropped_frames", "n/a"),
         )
         _dbg.process_end("CaptureReader", session=self._session, reason=reason)
 
     # ------------------------------------------------------------------ tick
     def _tick(self) -> None:
         t0 = time.perf_counter_ns()
+        if self._last_tick_ns:  # diagnostics: reader lag
+            interval = t0 - self._last_tick_ns
+            if interval > READER_LAG_FACTOR * TICK_MS * 1_000_000:
+                self._lag_total_ns += interval
+                self._lag_count += 1
+        self._last_tick_ns = t0
         capture = self._capture
         if capture is None or self._stopped:
             return
         try:
             if not capture.is_active:
                 self._stopped = True
-                self._owner._finish(self._session, "El dispositivo de audio dejó de enviar datos.")
+                message = getattr(capture, "last_error", None) or (
+                    "El dispositivo de audio dejó de enviar datos."
+                )
+                self._owner._finish(self._session, message)
                 self._teardown("el dispositivo se detuvo")
                 return
             self._emit_waveform()
@@ -406,6 +473,33 @@ class _CaptureReader(QObject):
         peak_db = _dbfs(float(np.max(np.abs(x))))
         rms_db = _dbfs(math.sqrt(float(np.mean(x * x))))
         self._owner.level_updated.emit(peak_db, rms_db, peak_db >= SATURATION_DBFS)
+        self._log_level_1s(x, peak_db >= SATURATION_DBFS)
+
+    def _log_level_1s(self, x: np.ndarray, saturated: bool) -> None:
+        """Diagnostics: DEBUG level summary once per second (to calibrate the quality bar)."""
+        self._lvl_peak = max(self._lvl_peak, float(np.max(np.abs(x))))
+        self._lvl_sumsq += float(np.dot(x, x))
+        self._lvl_n += x.size
+        self._lvl_sat = self._lvl_sat or saturated
+        now = time.perf_counter()
+        if now < self._lvl_next_log:
+            return
+        self._lvl_next_log = now + LEVEL_LOG_EVERY_S
+        blocks = self._stream.stats().blocks
+        _dbg.throttled(
+            "capture_level_1s",
+            "nivel 1 s: pico %.1f dBFS, RMS %.1f dBFS, saturated=%s, bloques %d",
+            _dbfs(self._lvl_peak),
+            _dbfs(math.sqrt(self._lvl_sumsq / self._lvl_n)) if self._lvl_n else -math.inf,
+            self._lvl_sat,
+            blocks - self._lvl_blocks,
+            every_s=LEVEL_LOG_EVERY_S * 0.5,
+        )
+        self._lvl_peak = 0.0
+        self._lvl_sumsq = 0.0
+        self._lvl_n = 0
+        self._lvl_sat = False
+        self._lvl_blocks = blocks
 
 
 class CaptureStreamWorker(BaseStreamWorker):
@@ -428,7 +522,7 @@ class CaptureStreamWorker(BaseStreamWorker):
         parent: QObject | None = None,
     ) -> None:
         super().__init__(config, parent=parent)
-        self._capture_factory: CaptureFactory = capture_factory or AudioCapture
+        self._capture_factory: CaptureFactory = capture_factory or _default_capture_factory
         self._stream_factory: StreamFactory = stream_factory or _default_stream_factory
         self._lock = threading.Lock()
         self._session = 0

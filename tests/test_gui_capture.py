@@ -118,3 +118,32 @@ def test_mock_flow_still_works(window, qtbot) -> None:
     assert window.prg_snr.value() > 0
     window.stop_capture()
     assert not window.dsp_worker.isRunning()
+
+
+def test_close_window_during_isolated_capture_leaves_no_child(
+    window, qtbot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import multiprocessing as mp
+
+    from adv_tg.audio.process_capture import ProcessAudioCapture
+
+    def isolated_factory(stream, **kw):
+        return ProcessAudioCapture(stream, fake_source="tone", open_timeout_s=30.0, **kw)
+
+    def create_isolated(device_id, config=None, *, seed=None, parent=None):
+        if device_id is None:
+            worker = MockStreamWorker(config, seed=seed, parent=parent)
+        else:
+            worker = CaptureStreamWorker(config, capture_factory=isolated_factory, parent=parent)
+        worker.set_input_device(device_id)
+        return worker
+
+    monkeypatch.setattr(mw, "create_worker", create_isolated)
+    window.cmb_device.setCurrentIndex(1)
+    window.start_capture()
+    hw = window.dsp_worker
+    qtbot.waitUntil(lambda: window.prg_snr.value() > 0, timeout=30_000)
+    assert len(mp.active_children()) == 1
+    window.close()
+    assert not hw.isRunning()
+    qtbot.waitUntil(lambda: mp.active_children() == [], timeout=5000)

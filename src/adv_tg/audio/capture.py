@@ -8,18 +8,30 @@ effective sample rate, tracing) happens outside the callback and uses the ``Debu
 
 ``sounddevice`` is imported lazily so that this module can be imported on machines without
 PortAudio (tests, CI).
+
+Diagnostics (phase 1c): the callback also estimates how long the audio thread waited before
+the Python code could run (mostly waiting for the GIL). The very first thing the callback does
+is read the PortAudio stream clock (``stream.time``, i.e. ``Pa_GetStreamTime``); PortAudio
+stamps ``time_info.currentTime`` on the same clock right before invoking the C callback, so
+``stream.time - time_info.currentTime`` is the delay between the native callback and the
+Python code (GIL acquisition plus the small ``sounddevice``/cffi wrapper overhead). Only
+counters and a preallocated histogram are updated (no logging, no significant allocation).
 """
 
 from __future__ import annotations
 
+import array
 import time
+from bisect import bisect_right
 from types import ModuleType
 from typing import Any, Literal
 
+from adv_tg.audio.gil_stats import GIL_WAIT_EDGES_MS, hist_percentile_ms
+from adv_tg.audio.gil_stats import GIL_WAIT_EDGES_US as _GIL_WAIT_EDGES_US
 from adv_tg.core.sample_stream import SampleStream
 from adv_tg.utils.debugger import Debugger
 
-__all__ = ["AudioCapture", "load_sounddevice"]
+__all__ = ["GIL_WAIT_EDGES_MS", "AudioCapture", "hist_percentile_ms", "load_sounddevice"]
 
 _dbg = Debugger.get(__name__)
 
@@ -92,12 +104,40 @@ class AudioCapture:
         self.status_flags = 0
         self.callback_errors = 0
         self._max_callback_ns = 0
+        # Diagnostics (phase 1c): GIL wait estimate, filled by the callback.
+        self._pa_clock: Any = None
+        self._gil_n = 0
+        self._gil_sum_us = 0.0
+        self._gil_max_us = 0.0
+        self._gil_hist = array.array("q", [0] * (len(GIL_WAIT_EDGES_MS) + 1))
+        self.gil_wait_over_block = 0
+        self.gil_wait_invalid = 0
 
     # ------------------------------------------------------------------ counters
     @property
     def max_callback_us(self) -> float:
         """Longest callback duration observed, in microseconds."""
         return self._max_callback_ns / 1e3
+
+    @property
+    def gil_wait_max_us(self) -> float:
+        """Longest estimated wait before the Python callback ran, in microseconds."""
+        return self._gil_max_us
+
+    @property
+    def gil_wait_mean_us(self) -> float:
+        """Mean estimated wait before the Python callback ran, in microseconds."""
+        return self._gil_sum_us / self._gil_n if self._gil_n else 0.0
+
+    @property
+    def gil_wait_hist(self) -> tuple[int, ...]:
+        """Counts per bucket of ``GIL_WAIT_EDGES_MS`` (last bucket: ``>= 500 ms``)."""
+        return tuple(self._gil_hist)
+
+    @property
+    def gil_wait_p99_ms(self) -> float:
+        """99th percentile of the wait (bucket upper edge, capped at the maximum), in ms."""
+        return min(hist_percentile_ms(self._gil_hist, 0.99), self._gil_max_us / 1000.0)
 
     @property
     def is_active(self) -> bool:
@@ -113,6 +153,10 @@ class AudioCapture:
     # ------------------------------------------------------------------ callback
     def _callback(self, indata: Any, frames: int, time_info: Any, status: Any) -> None:
         """PortAudio callback (real-time thread): write, count, nothing else."""
+        try:  # diagnostics: read the PortAudio clock first (see module docstring)
+            pa_now = self._pa_clock.time
+        except Exception:
+            pa_now = 0.0
         t0 = time.perf_counter_ns()
         try:
             self.callbacks += 1
@@ -124,6 +168,27 @@ class AudioCapture:
         dt = time.perf_counter_ns() - t0
         if dt > self._max_callback_ns:
             self._max_callback_ns = dt
+        try:
+            self._record_gil_wait(pa_now, time_info, frames)
+        except Exception:
+            self.gil_wait_invalid += 1
+
+    def _record_gil_wait(self, pa_now: float, time_info: Any, frames: int) -> None:
+        """Update the GIL-wait counters (callback thread; no logging, no allocation)."""
+        current = time_info.currentTime
+        if not pa_now or not current:
+            self.gil_wait_invalid += 1
+            return
+        wait_us = (pa_now - current) * 1e6
+        if wait_us < 0.0:
+            wait_us = 0.0
+        self._gil_n += 1
+        self._gil_sum_us += wait_us
+        if wait_us > self._gil_max_us:
+            self._gil_max_us = wait_us
+        self._gil_hist[bisect_right(_GIL_WAIT_EDGES_US, wait_us)] += 1
+        if frames > 0 and wait_us > frames * 1e6 / self.sample_rate:
+            self.gil_wait_over_block += 1
 
     # ------------------------------------------------------------------ control
     def start(self) -> None:
@@ -179,6 +244,7 @@ class AudioCapture:
                 callback=self._callback,
             )
             self.actual_sample_rate = float(sd_stream.samplerate)
+            self._pa_clock = sd_stream
             self._sd_stream = sd_stream
             if not self.sample_rate_matches:
                 _dbg.logger.error(
@@ -212,6 +278,12 @@ class AudioCapture:
             status_flags=self.status_flags,
             callback_errors=self.callback_errors,
             max_callback_us=round(self.max_callback_us, 1),
+            gil_wait_mean_us=round(self.gil_wait_mean_us, 1),
+            gil_wait_p99_ms=self.gil_wait_p99_ms,
+            gil_wait_max_us=round(self.gil_wait_max_us, 1),
+            gil_wait_over_block=self.gil_wait_over_block,
+            gil_wait_invalid=self.gil_wait_invalid,
+            gil_wait_hist=list(self._gil_hist),
         )
 
     def close(self) -> None:

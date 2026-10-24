@@ -32,7 +32,10 @@ src/adv_tg/
 ├── main.py                # punto de entrada (adv-tg)
 ├── audio/
 │   ├── __init__.py
-│   └── capture.py         # AudioCapture: InputStream mono float32 -> SampleStream
+│   ├── capture.py         # AudioCapture: InputStream mono float32 -> SampleStream (en proceso)
+│   ├── capture_process.py # proceso hijo de captura (sin Qt): callback -> deque -> tubería
+│   ├── gil_stats.py       # estadística de espera por el GIL (compartida)
+│   └── process_capture.py # ProcessAudioCapture: misma interfaz, captura en proceso aparte
 ├── core/
 │   ├── __init__.py
 │   ├── models.py          # WatchConfig, BeatEvent, BeatTelemetry, TelemetryResult
@@ -47,7 +50,9 @@ src/adv_tg/
 │   └── worker.py          # MockStreamWorker (hilo propio)
 ├── tools/
 │   ├── __init__.py
-│   └── capture_check.py   # CLI de verificación de la captura (fase 1)
+│   ├── README.md          # notas de las herramientas (gil_probe, hallazgos)
+│   ├── capture_check.py   # CLI de verificación de la captura (fase 1)
+│   └── gil_probe.py       # banco de pruebas GIL / hilos / GUI (fases 1c-1d)
 ├── ui/
 │   ├── __init__.py
 │   ├── assets/            # flechas SVG de los spinbox/combos
@@ -97,7 +102,30 @@ callback, pico en dBFS y aviso de posible saturación si el pico ≥ -1 dBFS) y 
 `VEREDICTO: OK` (código de salida 0) significa que el dispositivo y la tubería entregan el
 audio completo. `NO CUMPLE` (código 1) indica qué criterio falló y qué probar
 (`--latency high`, `--blocksize 1024` o `4096`, otro dispositivo). Código 2: error de
-dispositivo o de argumentos. Aún no hay resultados con hardware real.
+dispositivo o de argumentos. Validado con el CM18 (ingesta 100 %).
+
+### Captura en proceso aparte (fase 1d)
+
+Mientras la GUI repinta, el hilo principal retiene el GIL en tramos largos (llamadas C/C++ de
+Qt/pyqtgraph). Si el callback de audio vive en el mismo proceso, espera ese GIL hasta cientos
+de ms y CoreAudio descarta bloques **sin avisar** (overflows = 0): en la GUI real se llegó a
+recibir solo ~17–25 % del audio (diagnóstico con `gil_probe`, ver `src/adv_tg/tools/README.md`).
+`sys.setswitchinterval` no ayuda y bloques más grandes solo mitigan.
+
+Por eso la GUI captura con `ProcessAudioCapture`: el stream de PortAudio vive en un **proceso
+hijo** (`multiprocessing`, contexto `spawn`) que no importa Qt y tiene su propio GIL. El hijo
+envía los bloques por una tubería con su marca de tiempo `perf_counter_ns` (reloj común a todos
+los procesos), y un hilo del proceso de la GUI los escribe en el `SampleStream`. Si la GUI se
+congela, el hijo acumula y el padre se pone al día después, sin perder muestras
+(`dropped_frames` debe ser 0).
+
+- Forzar la captura en el mismo proceso (depuración): `ADV_TG_CAPTURE_INPROC=1 adv-tg`.
+- Log del proceso hijo: `logs/adv_tg_capture.log` (archivo propio; nunca comparte handler con
+  `logs/adv_tg.log`). Al parar, el resumen de sesión de `adv_tg.log` incluye `backlog máx`,
+  `retraso del padre máx` y `tramas perdidas`.
+- Verificación: `python -m adv_tg.tools.capture_check --isolated --device N --secs 30` y
+  `python -m adv_tg.tools.gil_probe --all --isolated --device N --secs 20` (con la ventana de
+  la GUI visible al frente).
 
 ## Instalación
 
@@ -129,7 +157,8 @@ ruff format --check .
 ## Depuración
 
 - Log: `logs/adv_tg.log` en la raíz del repo (rotativo, 5 MB × 3 copias; incluye el nombre del
-  hilo). Los fallos nativos (segfaults) van a `logs/faulthandler.log`.
+  hilo). Los fallos nativos (segfaults) van a `logs/faulthandler.log`. El proceso hijo de
+  captura escribe en `logs/adv_tg_capture.log`.
 - Por defecto la consola muestra INFO y el archivo DEBUG. Con `ADV_TG_DEBUG=1` la consola
   también muestra DEBUG.
 - `adv_tg.utils.debugger.Debugger` (`Debugger.get(__name__)`): `phase()` (inicio/fin con

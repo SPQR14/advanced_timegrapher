@@ -28,6 +28,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from adv_tg.audio.capture import AudioCapture, load_sounddevice
+from adv_tg.audio.process_capture import ProcessAudioCapture
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
 from adv_tg.utils.debugger import Debugger
 
@@ -315,6 +316,13 @@ def _print_summary(stream: SampleStream, source: _Source, verdict: Verdict) -> N
     )
     print(f"Avisos de estado   : {source.status_flags}  (p. ej. input overflow)")
     print(f"Errores en callback: {source.callback_errors}")
+    if isinstance(source, ProcessAudioCapture):
+        print(f"Tramas perdidas    : {source.dropped_frames}  (debe ser 0; captura aislada)")
+        print(f"Backlog máximo     : {source.backlog_max} bloques en el proceso hijo")
+        print(f"Retraso padre máx  : {source.parent_lag_max_ms:.1f} ms")
+        print(
+            f"Bloques en el padre: {source.frames_received} (enviados por el hijo: {source.seq_sent})"
+        )
     if verdict.ok:
         print("VEREDICTO: OK — la captura entrega el audio completo.")
         return
@@ -342,6 +350,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--latency", choices=("low", "high"), default="high", help="latencia PortAudio")
     p.add_argument("--secs", type=float, default=30.0, help="duración de la prueba en segundos")
     p.add_argument("--wav", type=Path, default=None, help="guarda lo capturado en este WAV")
+    p.add_argument(
+        "--isolated",
+        action="store_true",
+        help="captura en un proceso aparte (ProcessAudioCapture), como la GUI",
+    )
+    p.add_argument(
+        "--fake-source",
+        action="store_true",
+        help="con --isolated: fuente falsa en el proceso hijo (sin micrófono)",
+    )
     p.add_argument(
         "--wav-format",
         choices=("int16", "float32"),
@@ -394,6 +412,10 @@ def _validate(args: argparse.Namespace) -> str | None:
         return f"--secs debe ser un número positivo (recibido {args.secs})"
     if args.file is not None and args.device is not None:
         return "--file y --device son incompatibles"
+    if args.file is not None and args.isolated:
+        return "--file y --isolated son incompatibles"
+    if args.fake_source and not args.isolated:
+        return "--fake-source requiere --isolated"
     return None
 
 
@@ -453,13 +475,30 @@ def main(argv: list[str] | None = None) -> int:
         secs = args.secs
         blocksize = args.blocksize
         stream = SampleStream(_capacity(fs, secs, args.wav is not None), fs)
-        source = AudioCapture(
-            stream, device=args.device, sample_rate=fs, blocksize=blocksize, latency=args.latency
-        )
+        if args.isolated:
+            source = ProcessAudioCapture(
+                stream,
+                device=args.device,
+                sample_rate=fs,
+                blocksize=blocksize,
+                latency=args.latency,
+                fake_source="tone" if args.fake_source else None,
+            )
+        else:
+            source = AudioCapture(
+                stream,
+                device=args.device,
+                sample_rate=fs,
+                blocksize=blocksize,
+                latency=args.latency,
+            )
         dev = args.device if args.device is not None else "predeterminado"
+        if args.fake_source:
+            dev = "FALSO (proceso hijo)"
+        mode = "proceso aparte" if args.isolated else "en proceso"
         print(
             f"Capturando {secs:g} s del dispositivo {dev} a {fs} Hz "
-            f"(blocksize={blocksize}, latency={args.latency})."
+            f"(blocksize={blocksize}, latency={args.latency}, {mode})."
         )
 
     with _dbg.phase("capture_check", replay=replay, secs=secs, blocksize=blocksize):
