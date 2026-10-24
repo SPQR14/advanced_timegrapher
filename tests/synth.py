@@ -69,6 +69,27 @@ def _burst(
     out[n] += level * y
 
 
+def _ramp(
+    out: NDArray[np.float64],
+    fs: float,
+    t_end: float,
+    ramp: tuple[float, float],
+    level: float,
+    rng: np.random.Generator,
+) -> None:
+    """Band noise whose envelope rises linearly over ``ramp[0]`` ms up to ``t_end``."""
+    dur = ramp[0] * 1e-3
+    n0 = max(0, math.ceil((t_end - dur) * fs))
+    n1 = min(out.size, math.ceil(t_end * fs))
+    if n1 <= n0:
+        return
+    tau = np.arange(n0, n1) / fs - (t_end - dur)
+    y = np.zeros(tau.size)
+    for f0 in (2500.0, 4200.0, 6100.0, 8300.0):
+        y += np.sin(2.0 * np.pi * f0 * tau + rng.uniform(0, 2 * np.pi))
+    out[n0:n1] += level * ramp[1] * (tau / dur) * y / 2.0
+
+
 def _band_rms(x: NDArray[np.float64], fs: float) -> float:
     spec = np.fft.rfft(x)
     f = np.fft.rfftfreq(x.size, 1.0 / fs)
@@ -118,6 +139,8 @@ def synth_watch(
     impulsive_noise_rate_hz: float = 0.0,
     slow_gain_drift: float = 0.0,
     tail_modes: int = 0,
+    odd_drop_lobe: tuple[float, float, float] | None = None,
+    odd_pre_ramp: tuple[float, float] | None = None,
 ) -> tuple[NDArray[np.float64], Truth]:
     """Generate a watch signal and its exact truth.
 
@@ -141,6 +164,14 @@ def synth_watch(
         impulsive_noise_rate_hz: Poisson rate of spurious clicks (P1-like amplitude).
         slow_gain_drift: +- fraction of slow (7 s) sinusoidal gain drift.
         tail_modes: 0-3 extra low resonance modes with longer tails per burst.
+        odd_drop_lobe: ``(delay_ms, level_min, level_max)``: on odd ``k`` the drop rings as
+            two lobes, the second ``delay_ms`` after P3 with a random level (relative to P3)
+            in ``[level_min, level_max]``. The loudest lobe then changes from beat to beat and
+            differs from even ``k`` (as in the ETA C07 / H-50). The true P3 stays the onset of
+            the first lobe.
+        odd_pre_ramp: ``(duration_ms, level)``: on odd ``k`` a slowly rising, noise-like
+            ramp (level relative to P3) ends at the true P3 onset, as the friction before the
+            drop of the Seiko 4R36 tac. The true P3 is still the onset of the drop itself.
     """
     rng = np.random.default_rng(seed)
     n = int(round(seconds * fs))
@@ -180,6 +211,12 @@ def synth_watch(
                     )
                 ms = ms + tuple(tails)
                 _burst(x, fs, t0 + offsets[i], lv * _SCALE, ms, duration)
+                if i == 2 and odd_pre_ramp is not None and k % 2 == 1:
+                    _ramp(x, fs, t0 + offsets[i], odd_pre_ramp, lv * _SCALE, rng)
+                if i == 2 and odd_drop_lobe is not None and k % 2 == 1:
+                    delay_ms, lo, hi = odd_drop_lobe
+                    lobe = lv * rng.uniform(lo, hi) * _SCALE
+                    _burst(x, fs, t0 + offsets[i] + delay_ms * 1e-3, lobe, ms, duration)
             ks.append(k)
             p1s.append((t0 + offsets[0]) * fs)
             p2s.append((t0 + offsets[1]) * fs)

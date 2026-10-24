@@ -91,6 +91,6 @@ def match(beats: list[Beat], truth: Truth, tol_ms: float = 1.0) -> Match:
 
 
 def beat_array(beats: list[Beat]) -> np.ndarray:
-    """``(k, p1, p2, p3, flags)`` rows, NaN replaced by -1 for exact comparisons."""
-    rows = [[b.k, b.p1, b.p2, b.p3, int(b.flags)] for b in beats]
-    return np.nan_to_num(np.array(rows, dtype=np.float64).reshape(-1, 5), nan=-1.0)
+    """``(k, p1, p2, p3, flags, t_fine)`` rows, NaN replaced by -1 for exact comparisons."""
+    rows = [[b.k, b.p1, b.p2, b.p3, int(b.flags), b.t_fine] for b in beats]
+    return np.nan_to_num(np.array(rows, dtype=np.float64).reshape(-1, 6), nan=-1.0)

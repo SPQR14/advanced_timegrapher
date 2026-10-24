@@ -16,6 +16,16 @@ Physical definitions (one definition for the whole system):
 Phase-model reference instant: **P3** when it was resolved, otherwise **P1**. P3 (the drop
 of the pallet on the escape wheel) is normally the loudest and most stable sound, while P1
 can be weak (e.g. ETA C07): anchoring the timing on P1 would fail on such calibres.
+
+Fine timing (``Beat.t_fine``) and per-parity templates (``ParityTemplate``): tic and tac can
+sound differently (e.g. the drop rings as two lobes and the loudest one is not the same in
+tic and tac). Per-beat onsets then time tic and tac at different physical points, which
+shows up as a spurious beat error and a jittery residual. The detector therefore keeps one
+envelope template per parity of ``k`` (median of the last aligned beats) and aligns each
+beat to the template of its parity by cross-correlation. ``t_fine`` is the P3 onset of the
+template carried to that beat; ``ParityTemplate`` gives the P1 and P3 onsets measured on the
+(clean, averaged) template. Layer 3 computes the rate from ``t_fine``, the beat error from
+the template P1 onsets and the amplitude from the template t_lift (P1 onset -> P3 onset).
 """
 
 from __future__ import annotations
@@ -24,9 +34,13 @@ import math
 from dataclasses import dataclass
 from enum import IntFlag
 
+import numpy as np
+from numpy.typing import NDArray
+
 __all__ = [
     "Beat",
     "BeatFlags",
+    "ParityTemplate",
     "amplitude_from_lift_time",
     "balance_frequency_hz",
     "beat_period_s",
@@ -121,6 +135,10 @@ class Beat:
         confidence: Heuristic quality in [0, 1] (see ``beat_detector``); not a calibrated
             probability.
         flags: ``BeatFlags``.
+        t_fine: Fine timing instant: the P3 onset of the template of this beat's parity,
+            placed on this beat by cross-correlation of the envelope. Same physical point for
+            tic and tac and much less jitter than ``p3``. NaN while the template of that
+            parity is not mature yet or when the beat does not match it.
     """
 
     k: int
@@ -133,6 +151,7 @@ class Beat:
     residual_samples: float
     confidence: float
     flags: BeatFlags
+    t_fine: float = math.nan
 
     @property
     def reference(self) -> float:
@@ -143,3 +162,38 @@ class Beat:
     def t_lift_samples(self) -> float:
         """``p3 - p1`` in samples (NaN unless both are resolved)."""
         return self.p3 - self.p1
+
+
+@dataclass(frozen=True)
+class ParityTemplate:
+    """Envelope template of one parity of ``k`` (0 = even, 1 = odd).
+
+    Which parity is "tic" is a convention; what matters is that both are measured the same
+    way. Indices are relative to the start of ``envelope`` (sample units, sub-sample).
+
+    Attributes:
+        parity: 0 for even ``k``, 1 for odd ``k``.
+        n_beats: Beats in the median.
+        envelope: Median envelope of the aligned beats (copy).
+        onset_p1: P1 onset on the template (first rise above the template noise), NaN if
+            not found.
+        onset_p3: P3 onset used for the t_lift (start of the drop), NaN if not found. It is
+            the level onset unless tic and tac disagree in amplitude (see ``p3_method``).
+        onset_ref: The template point that ``Beat.t_fine`` marks (level onset of P3). The
+            P1 instant of a beat is ``t_fine - (onset_ref - onset_p1)``.
+        p3_method: "nivel" (backward crossing from the first lobe) or "frente" (foot of the
+            first steep front), chosen so that tic and tac imply the same amplitude.
+    """
+
+    parity: int
+    n_beats: int
+    envelope: NDArray[np.float64]
+    onset_p1: float
+    onset_p3: float
+    onset_ref: float = math.nan
+    p3_method: str = "nivel"
+
+    @property
+    def t_lift_samples(self) -> float:
+        """``onset_p3 - onset_p1`` in samples (NaN if either is missing)."""
+        return self.onset_p3 - self.onset_p1

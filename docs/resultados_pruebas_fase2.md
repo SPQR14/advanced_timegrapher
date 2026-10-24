@@ -37,9 +37,15 @@ Valida lo que quedó pendiente en `docs/resultados_fase2_win.md`, sección "Qué
 - **El campo "Periodo" de `detect_beats` no sirve como estimador de marcha.** Da −0.017 % en el
   cuarzo (equivale a +15 s/d), cuando la regresión da −0.4 s/d.
 
-**Conclusión:** la fase 2 queda validada en lo que exigen sus criterios (detección y estructura).
-Antes de calcular magnitudes de medida en la fase 3 conviene atender los puntos de
-"Recomendaciones" (sección 4).
+**Conclusión (actualizada en las secciones 6 y 7):** contrastado con tg 0.8.0 y Watch Accuracy
+Meter (`docs/samples/tests.csv`), el detector queda dentro de banda en error de batimiento y
+amplitud en todos los calibres, y en marcha en todos salvo el Seiko 4R36, cuya grabación tiene
+otra marcha que la medida en vivo (sección 7.3). **Antes de la iteración 7:** el error de batimiento y la amplitud del H-50 se
+han corregido con una **alineación fina por plantillas de tic y tac** en el detector
+(`Beat.t_fine`, `BeatDetector.templates()`). Con ella las tres grabaciones con referencia de
+tg quedan a ≤ 1.4 s/d en marcha y ≤ 0.25 ms en error de batimiento, y la amplitud del H-50 baja
+de +31° a +25° (Miyota, +2°). El Bulova reproduce la deriva de la tarjeta que mide tg
+(−0.69 frente a −0.72 s/d).
 
 ## Entorno
 
@@ -479,7 +485,18 @@ Lectura:
 
 ## 4. Recomendaciones antes de la fase 3
 
-Primero los bloqueantes; el resto, de menor a mayor coste:
+Primero los bloqueantes; el resto, de menor a mayor coste.
+
+**Estado tras la sección 6:**
+
+- 1 (error de batimiento) y 2 (inicio del P1 débil): **resueltos** con las plantillas por
+  paridad.
+- 8 (precisión temporal): **resuelto**. El σ por paridad baja a 110–220 µs en las paridades
+  limpias.
+- 6 (P3 mal asignados): **mitigado**. `t_fine` no depende del P3 de cada batimiento.
+- 4 y 9: pasan a la fase 3 (sección 6.6).
+- 5, 7 y 10 siguen abiertos.
+
 
 1. **Error de batimiento en el H-50 (bloqueante):** averiguar por qué tic y tac quedan
    desfasados ~0.75 ms en todos los sub-eventos, cuando tg mide 0.3 ms. Hay que reproducirlo en
@@ -509,8 +526,9 @@ Primero los bloqueantes; el resto, de menor a mayor coste:
    plantilla adaptativa por sub-evento. En el Miyota bajaría el jitter de ~400 µs a ~100 µs, lo
    que mejora directamente la resolución de la marcha por ventanas cortas y del error de
    batimiento.
-9. **Indicador de saturación por batimiento** en `BeatFlags`, en lugar de normalizar
-   (sección 3.3).
+9. **Indicador de saturación por batimiento:** ya existe (`BeatFlags.SATURATED`, |x| ≥ 0.99
+   en el batimiento). Falta que la fase 3 excluya o pondere a la baja esos batimientos, en
+   lugar de normalizar (sección 3.3).
 10. **Test de log de la fase 1:** aplicar el arreglo de una línea propuesto en el informe de
    Windows, aunque aquí haya pasado.
 
@@ -520,6 +538,309 @@ Primero los bloqueantes; el resto, de menor a mayor coste:
 - **Runner de macOS del CI:** las pruebas se hicieron en la Mac local con los mismos comandos,
   no en el runner.
 - **Diagnóstico de los relojes:** fuera del alcance. Faltan posiciones y estado de carga.
+
+## 6. Cierre de la fase 2: alineación fina con plantillas por paridad
+
+Implementado a partir del commit `4f1451a`, sin commit todavía.
+
+### 6.1 Causa del error de batimiento del H-50
+
+Se apilaron las envolventes de todos los tic y de todos los tac sobre una rejilla común
+`a + P·k`, sin término de paridad:
+
+- En el **tac** del H-50, la caída (P3) suena en **dos lóbulos y el segundo es el más
+  fuerte**. El detector toma como ancla el sub-evento más fuerte, así que P3 sale ~2 ms tarde
+  (+1.0 ms frente a −1.1 ms del tic).
+- P1 se busca desde ese ancla a una distancia igual al t_lift acumulado y cae en un pico
+  intermedio (−7.1 ms) en lugar del inicio real (−10.1 ms).
+- **En las envolventes medias, tic y tac empiezan a la vez** (P1 en −10.0 y −10.1 ms), lo que
+  cuadra con los 0.3 ms de tg.
+- Que el error se viera igual con P1, P2 y P3 se explica porque toda la estructura del tac
+  estaba desplazada.
+
+Se descartaron dos alternativas:
+
+- **Unir lóbulos sobre los candidatos discretos:** los valles entre lóbulos cambian demasiado
+  de un batimiento a otro.
+- **Umbrales fijos sobre la envolvente de cada batimiento:** lo que arregla el H-50 rompe el
+  Miyota, cuyo tac tiene P1 y P2 tan fuertes como P3. Sería sobreajustar.
+
+### 6.2 Solución
+
+El concepto de trabajar sobre una forma de onda promediada es el que usa tg; la implementación
+es propia y no se ha portado código de tg.
+
+- **Una plantilla por paridad de `k`:** el detector mantiene la mediana de los últimos 24
+  batimientos alineados de cada paridad.
+- **Alineación:** cada batimiento se alinea con la plantilla de su paridad por correlación
+  cruzada, solo sobre el estallido de la caída. Se usa una envolvente suavizada a 1 ms para que
+  los lóbulos se fundan y la correlación no salte entre ellos.
+- **Inicios sobre la plantilla limpia:**
+  - **P3:** primer punto que alcanza el 40 % del máximo en los 2.5 ms anteriores (primer
+    lóbulo); desde ahí, cruce hacia atrás del 20 %.
+  - **P1:** primera subida sobre el ruido de la plantilla dentro de la ventana física.
+- **`Beat.t_fine`:** el inicio de P3 de la plantilla, llevado a cada batimiento. Es el mismo
+  punto físico en tic y en tac.
+- **`BeatDetector.templates()`:** devuelve las dos plantillas (`ParityTemplate`) con
+  `onset_p1`, `onset_p3` y `t_lift_samples`.
+- **Siembra:** la plantilla se crea con la predicción de un modelo de fase maduro, nunca con el
+  ancla de un batimiento suelto. Durante el arranque se aceptan todos los batimientos.
+- **Propiedades:** las plantillas sobreviven a los re-enganches, y el resultado sigue siendo
+  invariante al troceado (verificado con `t_fine` incluido).
+- **Rendimiento:** baja de ~150× a ~95–120× el tiempo real.
+- **Configuración:** 11 parámetros nuevos `template_*`, documentados en `BeatDetectorConfig`.
+
+**Convención de amplitud (decisión del usuario):** t_lift = inicio de P1 → inicio de P3,
+medido en las plantillas. tg usa un heurístico propio (suavizado de máximo decreciente con
+umbrales escalonados), que no se ha imitado.
+
+### 6.3 Resultados en sintético
+
+Opción nueva del generador: `odd_drop_lobe`, un segundo lóbulo de la caída en los `k` impares,
+1.5 ms después y con un nivel aleatorio de 0.6–1.6 veces el primero.
+
+| Caso (30 s, SNR 30 dB) | Error de batimiento real | Con P3 por batimiento | Con `t_fine` | σ `t_fine` |
+|---|---|---|---|---|
+| Limpio, 28800 | 0.5 ms | 0.500 | 0.501 | 8 µs |
+| Dos lóbulos, 28800 | 0.5 ms | **0.942** | 0.494 | 12 µs |
+| Dos lóbulos, 21600 | 0.3 ms | **1.084** | 0.296 | 12 µs |
+| Dos lóbulos + realismo, 21600 | 0.3 ms | **1.197** | 0.303 | 27 µs |
+
+- El t_lift de las plantillas queda a 1–3 muestras de la verdad, que es menos del 1 % de
+  amplitud a 18000, 21600 y 28800 BPH.
+- Con un P1 muy débil (10 %), la plantilla devuelve NaN en P1 en vez de un valor erróneo.
+
+### 6.4 Resultados en las grabaciones reales
+
+La marcha y el error de batimiento se calculan con `a + P·k + c·(−1)^k` sobre `t_fine`, cada
+paridad ponderada por 1/σ² de su residuo. El error de batimiento se toma en los inicios de P1
+de las plantillas. Es el cálculo que se propone para la fase 3; aquí está hecho con un script
+de validación.
+
+| Grabación | tg (s/d / ms / °) | Marcha | Error de batimiento | Amplitud | σ tic / tac | `t_fine` |
+|---|---|---|---|---|---|---|
+| H-50 nuevo | +7 / 0.3 / 272 | +8.08 ± 0.18 | 0.36 | 297° | 146 / 517 µs | 164 / 180 |
+| H-50 original | +10 / 0.2 / 280 | +11.31 ± 0.12 | 0.25 | 291° | 111 / 234 µs | 166 / 181 |
+| Miyota 9015 | +9 / 0.0 / 291 | +8.06 ± 0.15 | 0.15 | 293° | 216 / 225 µs | 229 / 245 |
+| Bulova (cuarzo) | −0.72 (tarjeta +8.3 ppm) | **−0.69** | — | — | 229 / 330 µs | 4690 / 4738 |
+| Seiko 4R36 (sin referencia) | ? | −2.97 ± 0.25 | 0.34 | 304° | 134 / 826 µs | 166 / 181 |
+
+Antes de este cambio, con P3 por batimiento:
+
+| Grabación | Marcha | Error de batimiento | Amplitud |
+|---|---|---|---|
+| H-50 nuevo | +7.67 | **1.49** | 303° |
+| H-50 original | +7.42 | **0.90** | 315° |
+| Miyota | +8.05 | 0.03 | 297° |
+
+Interpretación:
+
+- **Error de batimiento:** en los dos H-50 pasa de ×5 a ≤ 0.2 ms de diferencia con tg. En el
+  Miyota sube de 0.03 a 0.15 ms (tg 0.0), que sigue dentro de la resolución.
+- **Marcha:**
+  - Las tres quedan a ±1.4 s/d de tg y con el mismo signo de error en los dos H-50.
+  - La diferencia restante es del orden de la variación entre ventanas de 10 s (±1–3 s/d) y de
+    lo que puede separar a dos programas que no miden sobre el mismo intervalo.
+  - El **Bulova** reproduce casi exacto la deriva de la tarjeta que mide tg (+8.3 ppm). Es la
+    mejor validación de que `t_fine` mide bien la marcha.
+- **Amplitud:** Miyota a +2° de tg y H-50 original a +11°. El H-50 nuevo queda a +25° (9 %).
+  Con la convención elegida, ese desvío es una diferencia de definición con tg, no un fallo de
+  detección (sección 2.7).
+- **El tac del H-50 y del 4R36 es intrínsecamente más ruidoso** (σ de 500–800 µs frente a
+  110–220 µs del tic). Por eso la fase 3 **debe ponderar por paridad**; sin ponderar, el tac
+  arrastra la marcha del H-50 nuevo hasta +10.7 s/d.
+- **Seiko 4R36:** grabación nueva, fuera de muestra (no se ajustó nada con ella). Destapó dos
+  fallos de la siembra de plantillas, ya corregidos:
+  - una plantilla anclada en P2;
+  - una plantilla bloqueada durante el arranque.
+
+  Su tac tiene una rampa de ~3 ms antes del frente de la caída, y el inicio de P3 cae al
+  principio de la rampa. **Hace falta la referencia de tg del 4R36** para validarlo. Tampoco
+  está en la tabla de calibres de `check_samples` (21600 BPH, LA 53°).
+
+### 6.5 Herramientas y tests
+
+- **`detect_beats`:**
+  - imprime la cobertura de `t_fine`, el σ por paridad, el desfase de P1 entre tic y tac y el
+    t_lift y la amplitud de las plantillas (como comprobaciones, no medidas);
+  - el CSV tiene una columna `t_fine`;
+  - el "Periodo" aparece marcado como orientativo.
+- **`check_samples`:**
+  - tres columnas nuevas;
+  - dos criterios de OK nuevos: `t_fine` en ≥ 80 % de los batimientos y t_lift de las
+    plantillas dentro del rango físico.
+- **Tests:**
+  - `tests/test_beat_detector_templates.py`, 24 tests: sintético con y sin dos lóbulos, marcha,
+    error de batimiento, amplitud por plantillas, P1 débil, copias y validación de
+    configuración;
+  - la invarianza al troceado compara también `t_fine`;
+  - el test de grabaciones reales exige un desfase de P1 entre tic y tac < 0.5 ms (antes,
+    1.5 ms en el H-50).
+- **Suite completa:** 279 de 279 pasan. Ruff sin avisos. `check_samples` y `--self-test` salen
+  con código 0.
+
+### 6.6 Pendiente para la fase 3
+
+1. Calcular la marcha con la regresión **ponderada por paridad** sobre `t_fine`.
+2. Calcular el error de batimiento con los inicios de P1 de las plantillas, cuando existan, y
+   si no con `t_fine`.
+3. Calcular la amplitud con el t_lift de las plantillas.
+4. Excluir o ponderar los batimientos `SATURATED`.
+
+## 7. Iteración con la matriz de referencia (tg 0.8.0 y Watch Accuracy Meter) y el Seiko 4R36
+
+### 7.1 Referencias y condiciones
+
+`docs/samples/tests.csv`:
+
+| Calibre | tg 0.8.0 (s/d / ms / °) | Watch Accuracy Meter (s/d / ms / °) |
+|---|---|---|
+| Miyota 9015 | +8 / 0.1 / 295 | +7 / 0.1 / 304 |
+| Hamilton H-50 | +9 / 0.3 / 293 | +9 / 0.3 / 290 |
+| Seiko 4R36 | +4 / 0.3 / 275 | +3 / 0.2 / 272 |
+
+- **Condiciones:** mismo micrófono, misma habitación, esfera arriba y cuerda completa.
+- **Watch Accuracy Meter (WAM):** según el usuario, coincide casi siempre con los Weishi 1000 y
+  1900 (9 de cada 10 casos).
+- **Asignación de las filas:** el H-50 se compara con `hamilton_h50new.flac`, la toma más
+  reciente. `hamilton_h50.flac` mantiene su referencia de tg de `fases-nucleo.md`
+  (+10 / 0.2 / 280).
+- **Ninguna referencia procede de analizar los mismos archivos:** son medidas en vivo, así que
+  pueden no cubrir el mismo intervalo de tiempo que la grabación.
+- **Incertidumbre de la propia referencia:**
+  - tg y WAM difieren hasta 1 s/d, 0.1 ms y 9°;
+  - para el H-50 nuevo, tg dio +7 / 0.3 / 272 en una sesión anterior frente a
+    +9 / 0.3 / 293 en esta, lo que supone 20° de diferencia entre sesiones del mismo
+    instrumento.
+
+### 7.2 Criterios de aceptación y de optimización
+
+**Banda de aceptación:** el intervalo entre tg y WAM, ampliado con estas tolerancias:
+
+| Magnitud | Tolerancia | Justificación |
+|---|---|---|
+| Marcha | ±1.5 s/d | Diferencia entre instrumentos (1 s/d) + error estadístico de 30 s (±0.2 s/d) + intervalos de medida distintos |
+| Error de batimiento | ±0.15 ms | Diferencia entre instrumentos (0.1 ms) + resolución |
+| Amplitud | ±12° | Diferencia entre instrumentos (9°) + LA ±1° (≈ ±2 %, ±6°) |
+
+**Reglas para cambiar el algoritmo:**
+
+1. Todo cambio responde a un **mecanismo físico observado en la señal** (lóbulos, rampa,
+   frente de impacto, igualdad de amplitud entre tic y tac), no al ajuste de un número de
+   referencia.
+2. El fenómeno se **reproduce antes en sintético con verdad exacta**: el método anterior debe
+   fallar ahí y el nuevo, acertar. Esos casos quedan como tests.
+3. **Sin parámetros por calibre:** los mismos valores por defecto para todos los archivos.
+4. **No regresión:**
+   - las demás grabaciones siguen dentro de banda;
+   - la exactitud en sintético no empeora;
+   - se mantiene la invarianza al troceado;
+   - el rendimiento no baja de ~90× el tiempo real.
+
+### 7.3 Seiko 4R36: lo que encontró la prueba fuera de muestra
+
+Tres problemas en total. Los dos primeros ya se corrigieron en la sección 6.4.
+
+1. **Plantilla de los impares anclada en P2:** en el tac del 4R36, P2 suena tan fuerte como P3
+   y la plantilla se sembró sobre el ancla de un batimiento suelto. Corregido: se siembra con
+   la predicción del modelo maduro.
+2. **Plantilla de los pares bloqueada durante 30 batimientos:** su primer batimiento era
+   ruidoso y los siguientes no alcanzaban la correlación mínima. Corregido: durante el
+   calentamiento se aceptan todos.
+3. **Amplitud del tac de 341° frente a 267° del tic:**
+   - **Causa:** una **rampa lenta de ~3 ms antes del frente de la caída**, y el inicio por
+     nivel cae al principio de la rampa. Es detectable sin referencias, porque el volante no
+     puede tener amplitudes distintas en tic y tac.
+   - **Corrección (iteración 7):**
+     - **Segunda definición del inicio de P3 en la plantilla, el "frente":** el pie de la
+       tangente en el punto de máxima pendiente del primer tramo abrupto (≥ 50 % de la
+       pendiente máxima). Es una técnica de detección de llegadas: el sonido de un impacto
+       empieza con un frente abrupto y una rampa lenta no lo es. La búsqueda se limita al 40 %
+       del t_lift antes del máximo, para dejar fuera P2.
+     - **Selector por coherencia física:** se usa el inicio por nivel en las dos paridades
+       salvo que sus amplitudes discrepen más de 20°. En ese caso se elige la combinación
+       (nivel o frente en cada paridad) cuyas amplitudes coinciden mejor.
+     - El frente por sí solo **no** sirve para todos los calibres: en el Miyota, cuyo tac sube
+       de forma gradual, daría 332°. Por eso es un respaldo y no un sustituto.
+     - `t_fine` sigue marcando el inicio por nivel (`ParityTemplate.onset_ref`), así que la
+       marcha y el error de batimiento no cambian con la elección; solo cambia el t_lift.
+   - **Sintético** (nueva opción `odd_pre_ramp` del generador):
+     - solo con el inicio por nivel, el t_lift de los impares se equivoca en 27–69 muestras
+       (hasta 363° frente a 290°);
+     - con el selector, todas las combinaciones quedan a 1–4 muestras (< 1 %).
+     - **Límite:** una rampa corta a 21600 BPH crea solo 16° de desacuerdo, por debajo del
+       umbral. Queda con +7° (2.6 %) de error, dentro de tolerancia.
+
+**Marcha del 4R36: −3.15 s/d frente a +3/+4 de las referencias.** No es un error de detección.
+
+- **Todos los estimadores coinciden en una marcha negativa para esta grabación:**
+
+| Estimador | Marcha (s/d) |
+|---|---|
+| P1 por paridad (σ 38 / 67 µs, P1 sin ambigüedad) | −5.04 / −5.21 (±0.05–0.07) |
+| P2 por paridad | −4.99 / −4.38 |
+| P3 por paridad | −3.56 / −3.99 |
+| `t_fine`, paridad limpia | −3.24 ± 0.16 |
+| Autocorrelación de la envolvente (sin detector) | −4.0 a −5.4 |
+| Cronocomparador de la habilidad `relojeria-dsp` (independiente) | −4.98 |
+
+- **La marcha sube dentro de la propia toma:** con P1, de −2.1 s/d (10–20 s) a +2.3 s/d
+  (20–30 s); con `t_fine`, de −0.9 a +4.0 s/d. El tramo final se acerca a las referencias.
+- **Interpretación:** el reloj se estaba asentando, recién dado cuerda o recién colocado,
+  durante los 30 s. tg y WAM lo midieron en otro momento.
+- **No es la tarjeta:** el mismo equipo da la marcha correcta en el Miyota y el H-50, y el
+  Bulova reproduce la deriva de +8.3 ppm.
+- **Para comparar la marcha del 4R36** hace falta una grabación más larga, de ≥ 2 min y tras
+  ≥ 1 min de reposo, o medir con tg y WAM sobre la reproducción del mismo archivo.
+
+### 7.4 Resultados finales frente a la banda de referencia
+
+Método:
+
+- **Marcha:** regresión robusta `a + P·k + c·(−1)^k` sobre `t_fine`, cada paridad ponderada
+  por 1/σ².
+- **Error de batimiento:** en los P1 de las plantillas.
+- **Amplitud:** t_lift de las plantillas (inicio de P1 → inicio de P3), media de tic y tac.
+
+| Grabación | Referencia | Marcha (s/d) | Δ banda | Error de batimiento (ms) | Δ banda | Amplitud | Δ banda | P3 por | σ par/impar (µs) |
+|---|---|---|---|---|---|---|---|---|---|
+| Miyota 9015 | tg +8/0.1/295 · WAM +7/0.1/304 | +8.06 ± 0.15 | +0.06 ✅ | 0.15 | +0.05 ✅ | 293° | −2 ✅ | nivel/nivel | 216 / 225 |
+| H-50 nuevo | tg +9/0.3/293 · WAM +9/0.3/290 | +8.08 ± 0.17 | −0.92 ✅ | 0.36 | +0.06 ✅ | 297° | +4 ✅ | nivel/nivel | 146 / 517 |
+| H-50 original | tg +10/0.2/280 (`fases-nucleo`) | +11.31 ± 0.12 | +1.31 ✅ | 0.25 | +0.05 ✅ | 291° | +11 ✅ | nivel/nivel | 111 / 234 |
+| Seiko 4R36 | tg +4/0.3/275 · WAM +3/0.2/272 | −3.15 ± 0.16 | −6.15 ⚠️ (7.3) | 0.34 | +0.04 ✅ | 269° | −3 ✅ | frente/frente | 132 / 832 |
+| Bulova (cuarzo) | tarjeta +8.3 ppm según tg → −0.72 s/d | −0.71 | +0.01 ✅ | — | — | — | — | — | 243 / 384 |
+
+**Evolución de las magnitudes del detector a lo largo de las iteraciones:**
+
+| | Fase 2 inicial (P3 por batimiento) | Plantillas (sección 6) | Iteración 7 |
+|---|---|---|---|
+| Error de batimiento del H-50 nuevo | 1.49 ms ❌ | 0.36 ✅ | 0.36 ✅ |
+| Error de batimiento del H-50 original | 0.90 ms ❌ | 0.25 ✅ | 0.25 ✅ |
+| Amplitud del 4R36 | 250° (mediana por batimiento) ❌ | 304° ❌ | **269°** ✅ |
+| Marcha del Bulova | −0.45 s/d | −0.69 | −0.71 ✅ |
+| Jitter de la paridad limpia | 500–700 µs | 110–220 µs | 110–220 µs |
+
+**Estado:**
+
+- `check_samples`: OK en las 4 grabaciones mecánicas e INFO en el cuarzo, con código 0.
+- `--self-test`: código 0.
+- Tests: 288 de 288, incluidos 8 nuevos de la rampa y el selector, y el test de grabaciones
+  reales sobre el 4R36.
+- Ruff sin avisos.
+
+### 7.5 Límites conocidos que pasan a la fase 3
+
+- **Jitter de la paridad ambigua:** el tac del H-50 y del 4R36 tiene 500–830 µs, frente a
+  110–220 µs de la limpia. **La fase 3 debe ponderar por paridad**; sin ponderar, la marcha del
+  H-50 nuevo se iría a +10.7 s/d.
+- **Calentamiento:** ~6 batimientos hasta que el modelo de fase madura, más 6 por paridad
+  (~3 s a 21600 BPH), sin `t_fine`.
+- **Umbral del selector (20°):** desacuerdos menores no se corrigen. En el peor caso
+  sintético, +7° (2.6 %).
+- **La marcha cambia dentro de una toma** (4R36). La fase 3 debe dar la marcha por ventanas y
+  su tendencia, no solo un promedio, y avisar cuando la tendencia supera la incertidumbre.
+- **Comparación con las referencias:** las referencias son medidas en vivo. Para la fase 6
+  conviene medir con tg y WAM sobre la reproducción del mismo archivo.
 
 ## Reproducción
 

@@ -10,6 +10,10 @@ Criteria for the mechanical ones: count within +-1 % of the beats expected from 
 detected beat (the lock/backfill time is discounted), tic/tac alternate without parity
 jumps, median interval within 1 % of nominal, P3 in >= 95 % of the beats, median t_lift in
 the physical range (when P1 is resolved) and chunk invariance.
+
+Fine timing (per-parity templates): ``t_fine`` in >= 80 % of the beats and a tic/tac offset
+at the template P1 onsets below 0.5 ms. Before the templates, the two-lobe drop of the H-50
+tac gave ~1.5 ms there while tg measures 0.3 ms (see docs/resultados_pruebas_fase2.md).
 """
 
 from __future__ import annotations
@@ -54,6 +58,8 @@ def test_real_mechanical_recording(path: Path | None) -> None:
     assert s.p3_pct >= 95.0
     assert s.parity_ok is not False
     assert result.invariant
+    assert s.fine_pct >= 80.0
+    assert s.fine_beat_offset_ms < 0.5
     if s.p1_pct >= 50.0:
         assert math.isfinite(s.t_lift_median_ms)
         assert result.verdict == "OK", result.reasons

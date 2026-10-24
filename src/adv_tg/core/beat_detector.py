@@ -55,7 +55,17 @@ Pipeline
    its lift time agrees with at least 2 of the last 8 beats; a lone early sub-event is
    classified as P1 or P2 by the amplitude each hypothesis implies (``typical_amplitude_deg``);
    three consecutive outliers that agree re-seed the model (the timing really moved).
-8. **Losses**: a beat without anchor leaves a gap in ``k`` (``round(dt / P)``); after
+8. **Fine timing (per-parity templates)**: for each beat, the envelope around the
+   predicted instant is cross-correlated with the template of its parity (``k`` even / odd;
+   median of the last ``template_beats`` aligned beats), only over the drop burst. The P3
+   onset is measured once on the template (backward crossing of ``template_p3_fraction``
+   of the burst maximum) and carried to the beat: ``Beat.t_fine``. The P1 onset is measured
+   on the template too (first rise above the template noise). Averaging removes the
+   beat-to-beat changes of which lobe of the drop is loudest, so tic and tac are timed at
+   the same physical point (no spurious beat error) with much less jitter than the per-beat
+   onsets. Templates survive relocks (same watch); they only depend on the beats in order,
+   so chunk invariance holds.
+9. **Losses**: a beat without anchor leaves a gap in ``k`` (``round(dt / P)``); after
    ``max_missed`` consecutive losses the lock is dropped and re-acquired, ``k`` continuing
    from the last beat. Stream overruns (``advance``) and runs of digital silence are data
    gaps: beats predicted inside them are not counted as losses toward re-acquisition and the
@@ -97,6 +107,7 @@ from scipy import signal
 from adv_tg.core.beat_types import (
     Beat,
     BeatFlags,
+    ParityTemplate,
     amplitude_from_lift_time,
     beat_period_s,
     lift_time_window_s,
@@ -169,6 +180,37 @@ class BeatDetectorConfig:
         dropout_min_ms: Runs of exact zeros this long are data gaps (default 10 ms).
         period_warn: Warn when the observed period deviates more than this (default 1 %).
         post_group_ms: Span after the last sub-event that still belongs to the beat (6 ms).
+        template_beats: Beats per parity in the template median (default 24).
+        template_min_beats: Aligned beats a template needs before ``t_fine`` is given (6).
+        template_search_ms: Alignment search half-range around the expected position (1.5).
+        template_post_ms: Template span after the anchor (default 6 ms); before it, the span
+            covers the longest physical lift time plus 2 ms, so P1 is inside.
+        template_p3_fraction: P3 onset on the template: backward crossing of this fraction of
+            the drop burst (from its preceding minimum to its maximum) (default 0.2), starting
+            from the first lobe of the burst (see ``template_lobe_fraction``).
+        template_lobe_fraction: The first lobe of the drop is the earliest point that reaches
+            this fraction of the burst maximum within ``template_burst_ms`` before the maximum
+            (default 0.4), so a later, louder lobe does not move the onset.
+        template_burst_ms: Span before the burst maximum where its first lobe is searched
+            (default 2.5 ms; shorter than the P2-P3 spacing of real calibres).
+        template_p1_fraction: P1 onset on the template: first rise above the template noise
+            by this fraction of the burst maximum, or 6 robust sigmas if larger (0.04).
+        template_min_corr: Normalised correlation a beat needs to be aligned and added to the
+            template (default 0.5); below it ``t_fine`` is NaN.
+        template_front_fraction: Second definition of the P3 onset on a template, the
+            "steep front": the earliest stretch whose slope reaches this fraction of the
+            steepest slope of the drop (default 0.5); the onset is the foot of the tangent at
+            its steepest point. A slow ramp before the drop (Seiko 4R36 tac) is not a front.
+        template_front_lift_fraction: The front is searched within this fraction of the
+            running t_lift before the drop maximum (default 0.4), which keeps P2 out.
+        template_amp_mismatch_deg: The balance has the same amplitude in tic and tac. When the
+            two templates (level onsets) imply amplitudes further apart than this (default
+            20°), the level/front combination whose amplitudes agree best is used for the
+            template t_lift. ``t_fine`` always uses the level onset (``onset_ref``).
+        template_align_smooth_ms: Moving average applied to the envelope ONLY for the
+            alignment (default 1 ms): it fuses the lobes of the drop into one burst, so the
+            correlation does not jump between lobes whose relative level changes from beat to
+            beat. Onsets are still measured on the unsmoothed template.
     """
 
     sample_rate: float
@@ -205,6 +247,19 @@ class BeatDetectorConfig:
     dropout_min_ms: float = 10.0
     period_warn: float = 0.01
     post_group_ms: float = 6.0
+    template_beats: int = 24
+    template_min_beats: int = 6
+    template_search_ms: float = 1.5
+    template_post_ms: float = 6.0
+    template_p3_fraction: float = 0.2
+    template_lobe_fraction: float = 0.4
+    template_burst_ms: float = 2.5
+    template_p1_fraction: float = 0.04
+    template_min_corr: float = 0.5
+    template_align_smooth_ms: float = 1.0
+    template_front_fraction: float = 0.5
+    template_front_lift_fraction: float = 0.4
+    template_amp_mismatch_deg: float = 20.0
 
     def __post_init__(self) -> None:
         fs = float(self.sample_rate)
@@ -261,6 +316,27 @@ class BeatDetectorConfig:
             raise ValueError("model_beats debe ser >= 6")
         if not 0.0 < self.saturation_level <= 1.0:
             raise ValueError("saturation_level fuera de (0, 1]")
+        if not 1 <= self.template_min_beats <= self.template_beats:
+            raise ValueError("se requiere 1 <= template_min_beats <= template_beats")
+        for name in ("template_search_ms", "template_post_ms"):
+            if not getattr(self, name) > 0:
+                raise ValueError(f"{name} debe ser positivo (recibido {getattr(self, name)})")
+        if not self.template_amp_mismatch_deg > 0:
+            raise ValueError(
+                f"template_amp_mismatch_deg debe ser positivo: {self.template_amp_mismatch_deg}"
+            )
+        if not self.template_burst_ms > 0:
+            raise ValueError(f"template_burst_ms debe ser positivo: {self.template_burst_ms}")
+        for name in (
+            "template_p3_fraction",
+            "template_p1_fraction",
+            "template_min_corr",
+            "template_lobe_fraction",
+            "template_front_fraction",
+            "template_front_lift_fraction",
+        ):
+            if not 0.0 < getattr(self, name) < 1.0:
+                raise ValueError(f"{name} fuera de (0, 1): {getattr(self, name)}")
 
 
 @dataclass(frozen=True)
@@ -375,6 +451,20 @@ class _Cands:
         return int(np.searchsorted(self.onset, a)), int(np.searchsorted(self.onset, b))
 
 
+class _Tpl:
+    """Template of one parity: last aligned envelope segments, their median and onsets."""
+
+    def __init__(self, n: int) -> None:
+        self.segs: deque[NDArray] = deque(maxlen=n)
+        self.env: NDArray | None = None
+        self.onset_p1 = math.nan
+        self.onset_p3 = math.nan  # level onset: the point t_fine marks
+        self.onset_front = math.nan  # steep-front onset (alternative for the t_lift)
+        # template origin + pre minus the phase-model prediction, last beats (centres the
+        # next search on the prediction instead of on the jittery per-beat anchor)
+        self.off: deque[float] = deque(maxlen=16)
+
+
 def _hilbert_fir(half: int) -> NDArray:
     n = np.arange(-half, half + 1)
     h = np.zeros(n.size)
@@ -426,6 +516,12 @@ class BeatDetector:
         self.dropout_min = max(1, int(round(c.dropout_min_ms * ms)))
         self.W_noise = int(round(c.noise_window_s * fs))
         self.W_acq = int(round(c.acquisition_s * fs))
+        self.tpl_pre = int(math.ceil(self.tmax + 2.0 * ms))
+        self.tpl_post = int(math.ceil(c.template_post_ms * ms))
+        self.tpl_search = max(1, int(round(c.template_search_ms * ms)))
+        self.tpl_burst = int(round(3.0 * ms))  # alignment uses the template from 3 ms before
+        n_al = max(1, int(round(c.template_align_smooth_ms * ms)))
+        self._align_kernel = np.full(n_al, 1.0 / n_al)
         self.reset()
 
     # ------------------------------------------------------------------ public API
@@ -458,6 +554,7 @@ class BeatDetector:
         self._tl_obs: deque[float] = deque(maxlen=8)
         self._tl_fwd: deque[float] = deque(maxlen=8)
         self._after_gap = False
+        self._tpl = [_Tpl(self.config.template_beats), _Tpl(self.config.template_beats)]
         self._start_run(0)
 
     def process(self, chunk: ArrayLike, start_index: int) -> list[Beat]:
@@ -563,6 +660,67 @@ class BeatDetector:
             nominal_period_samples=self.period_nom,
             warnings=tuple(self._warnings),
         )
+
+    def templates(self) -> tuple[ParityTemplate | None, ParityTemplate | None]:
+        """Current templates for even and odd ``k`` (None until a parity has one).
+
+        ``onset_p3`` (used for the t_lift) is the level onset of both templates unless their
+        implied amplitudes disagree by more than ``template_amp_mismatch_deg``; then each
+        parity takes the level or the steep-front onset, whichever combination makes the two
+        amplitudes agree best (ties prefer the level onset). ``onset_ref`` is always the
+        level onset, the point ``t_fine`` marks.
+        """
+        methods = self._p3_methods()
+        out: list[ParityTemplate | None] = []
+        for parity, t in enumerate(self._tpl):
+            if t.env is None:
+                out.append(None)
+                continue
+            method = methods[parity]
+            p3 = t.onset_front if method == "frente" else t.onset_p3
+            out.append(
+                ParityTemplate(
+                    parity=parity,
+                    n_beats=len(t.segs),
+                    envelope=t.env.copy(),
+                    onset_p1=t.onset_p1,
+                    onset_p3=p3,
+                    onset_ref=t.onset_p3,
+                    p3_method=method,
+                )
+            )
+        return out[0], out[1]
+
+    def _p3_methods(self) -> tuple[str, str]:
+        """P3 onset definition per parity for the t_lift ("nivel" or "frente")."""
+        c = self.config
+        t0, t1 = self._tpl
+        default = ("nivel", "nivel")
+        if t0.env is None or t1.env is None:
+            return default
+
+        def amp(p3: float, p1: float) -> float:
+            tl = (p3 - p1) / self.fs
+            if not (math.isfinite(tl) and tl > 0):
+                return math.nan
+            return amplitude_from_lift_time(tl, c.lift_angle_deg, c.bph)
+
+        a0, a1 = amp(t0.onset_p3, t0.onset_p1), amp(t1.onset_p3, t1.onset_p1)
+        if not (math.isfinite(a0) and math.isfinite(a1)):
+            return default
+        if abs(a0 - a1) <= c.template_amp_mismatch_deg:
+            return default
+        best: tuple[float, int, tuple[str, str]] | None = None
+        for m0 in ("nivel", "frente"):
+            for m1 in ("nivel", "frente"):
+                b0 = amp(t0.onset_front if m0 == "frente" else t0.onset_p3, t0.onset_p1)
+                b1 = amp(t1.onset_front if m1 == "frente" else t1.onset_p3, t1.onset_p1)
+                if not (math.isfinite(b0) and math.isfinite(b1)):
+                    continue
+                key = (abs(b0 - b1), (m0 == "frente") + (m1 == "frente"), (m0, m1))
+                if best is None or key[:2] < best[:2]:
+                    best = key
+        return best[2] if best is not None else default
 
     # ------------------------------------------------------------------ runs and gaps
     def _start_run(self, start: int) -> None:
@@ -872,6 +1030,8 @@ class BeatDetector:
         self._missed_run = 0
         self._outliers: deque[tuple[int, float, float]] = deque(maxlen=3)
         self._k_offset: int | None = None
+        for t in self._tpl:
+            t.off.clear()
         tol = self._tol()
         j = int(math.ceil((self._acq_from - phase) / self._period))
         self._j = j
@@ -1211,6 +1371,7 @@ class BeatDetector:
             self._missed += max(0, k - self._last_k - 1)
         self._last_k = k
         self._last_ref = t_ref
+        t_fine = self._fine(k, a, tp)
         conf = self._confidence(snr, p1, p2, p3, residual, flags)
         self._emitted += 1
         self._n_p[0] += not math.isnan(p1)
@@ -1227,7 +1388,140 @@ class BeatDetector:
             residual_samples=residual,
             confidence=conf,
             flags=flags,
+            t_fine=t_fine,
         )
+
+    # ------------------------------------------------------------------ fine timing
+    def _fine(self, k: int, a: float, tp: float) -> float:
+        """Align this beat to the template of its parity; return ``t_fine`` (or NaN)."""
+        c = self.config
+        t = self._tpl[k & 1]
+        pre, post, s = self.tpl_pre, self.tpl_post, self.tpl_search
+        if t.env is None:
+            # seed on the prediction of a mature phase model (robust P3), never on the anchor
+            # of a single beat: early on the anchor can be P2 or a late lobe, and the template
+            # would keep that frame for good
+            if self._gate() is None:
+                return math.nan
+            center = tp
+        else:
+            center = tp + float(np.median(t.off)) if t.off else tp
+        ci = int(round(center))
+        s0, s1 = ci - pre - s, ci + post + s
+        if s0 < self._env.start or s1 > self._env.end or self._in_dropout(s0, s1):
+            return math.nan
+        seg = self._env.get(s0, s1)
+        if t.env is None:
+            lag = float(s)
+        else:
+            # correlate only the drop burst: P1/P2 move with the amplitude, P3 is the clock
+            b0 = pre - self.tpl_burst
+            kern = self._align_kernel
+            burst = np.convolve(t.env, kern, mode="same")[b0:]
+            bz = burst - burst.mean()
+            nb = float(np.sqrt(np.dot(bz, bz)))
+            region = np.convolve(seg, kern, mode="same")[b0 : b0 + burst.size + 2 * s]
+            cc = np.correlate(region, bz, mode="valid")
+            i = int(np.argmax(cc))
+            w = region[i : i + burst.size]
+            wz = w - w.mean()
+            den = nb * float(np.sqrt(np.dot(wz, wz)))
+            warming = len(t.segs) < c.template_min_beats  # median of a few beats: accept all
+            if den <= _TINY or (not warming and cc[i] / den < c.template_min_corr):
+                return math.nan
+            d = 0.0
+            if 0 < i < cc.size - 1:
+                q = cc[i - 1] - 2.0 * cc[i] + cc[i + 1]
+                d = 0.5 * (cc[i - 1] - cc[i + 1]) / q if q < 0 else 0.0
+            lag = i + d
+        origin = s0 + lag  # absolute index of the template's first sample on this beat
+        li = int(round(lag))
+        t.segs.append(seg[li : li + pre + post].copy())
+        t.off.append(origin + pre - tp)
+        t.env = np.median(np.stack(t.segs), axis=0)
+        t.onset_p3, t.onset_p1 = self._template_onsets(t.env)
+        t.onset_front = self._front_onset(t.env)
+        if len(t.segs) < c.template_min_beats or math.isnan(t.onset_p3):
+            return math.nan
+        return origin + t.onset_p3
+
+    def _front_onset(self, tm: NDArray) -> float:
+        """P3 onset on a template as the foot of its first steep front (NaN if none).
+
+        Arrival-time picking: the drop is an impact, so its sound starts with a steep front.
+        The earliest stretch whose slope reaches ``template_front_fraction`` of the steepest
+        slope within ``template_front_lift_fraction`` x t_lift before the drop maximum is the
+        front; the onset is where the tangent at its steepest point meets the level just
+        before it. A slow ramp before the drop does not qualify as a front.
+        """
+        c = self.config
+        ms = self.fs / 1000.0
+        m0 = max(0, self.tpl_pre - int(round(1.5 * ms)))
+        mx = m0 + int(np.argmax(tm[m0:]))
+        ref = self._tlift_ref()
+        back_ms = 2.0 * c.template_burst_ms
+        if ref is not None:
+            back_ms = min(back_ms, max(1.5, c.template_front_lift_fraction * ref / ms))
+        h = max(1, int(round(0.1 * ms)))  # slope over +-0.1 ms
+        lo = max(h, mx - int(round(back_ms * ms)))
+        mx = min(mx, tm.size - 1 - h)
+        if mx - lo < 2:
+            return math.nan
+        g = (tm[lo + h : mx + 1 + h] - tm[lo - h : mx + 1 - h]) / (2 * h)
+        gmax = float(np.max(g))
+        if gmax <= 0.0:
+            return math.nan
+        steep = g >= c.template_front_fraction * gmax
+        s = int(np.argmax(steep))
+        e = s
+        while e + 1 < g.size and steep[e + 1]:
+            e += 1
+        i = lo + s + int(np.argmax(g[s : e + 1]))
+        p0 = max(0, i - int(round(1.0 * ms)))
+        floor = float(np.min(tm[p0 : i + 1]))
+        slope = float(g[i - lo])
+        return max(float(p0), i - (float(tm[i]) - floor) / slope)
+
+    def _template_onsets(self, tm: NDArray) -> tuple[float, float]:
+        """(P3 onset, P1 onset) on a template, in template indices (NaN if not found)."""
+        c = self.config
+        ms = self.fs / 1000.0
+        pre = self.tpl_pre
+        m0 = max(0, pre - int(round(1.5 * ms)))
+        mx = m0 + int(np.argmax(tm[m0:]))
+        burst = int(round(c.template_burst_ms * ms))
+        b0 = max(0, mx - burst)  # where the first lobe is searched
+        bb = max(0, mx - 2 * burst)  # where the burst starts from (baseline, low crossing)
+        base = float(np.min(tm[bb : mx + 1]))
+        height = float(tm[mx]) - base
+        # first lobe: earliest point of the burst window at template_lobe_fraction of the max
+        first = b0 + int(np.argmax(tm[b0 : mx + 1] >= base + c.template_lobe_fraction * height))
+        level = base + c.template_p3_fraction * height
+        below = np.flatnonzero(tm[bb:first] < level)
+        if below.size == 0:
+            return math.nan, math.nan
+        j = bb + int(below[-1])
+        d = float(tm[j + 1] - tm[j])
+        p3 = j + ((level - float(tm[j])) / d if d > 0 else 0.0)
+        # P1: first rise above the template noise inside the physical lift-time window
+        n0 = max(2, int(round(1.0 * ms)))
+        quiet = tm[:n0]
+        b1 = float(np.median(quiet))
+        spread = 1.4826 * float(np.median(np.abs(quiet - b1)))
+        thr = b1 + max(c.template_p1_fraction * (float(tm[mx]) - b1), 6.0 * spread)
+        lo = max(n0, int(math.floor(p3 - self.tmax)))
+        hi = int(math.floor(p3 - self.tmin))
+        if hi <= lo:
+            return p3, math.nan
+        above = np.flatnonzero(tm[lo:hi] > thr)
+        if above.size == 0 or above[0] == 0:
+            # nothing rises above the noise, or the window already starts above it (no clean
+            # rise to time): P1 is not resolvable on this template
+            return p3, math.nan
+        j = lo + int(above[0]) - 1
+        d = float(tm[j + 1] - tm[j])
+        p1 = j + ((thr - float(tm[j])) / d if d > 0 else 0.0)
+        return p3, p1
 
     def _is_p1(self, a: float, x: float, back_onsets: NDArray) -> bool:
         """Decide whether the earliest sub-event ``x`` before the anchor ``a`` is P1 or P2."""

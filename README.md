@@ -21,7 +21,7 @@ PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 |------|-----------|--------|
 | 0 | Esqueleto: GUI, modo MOCK, Debugger, CI | **terminada** (v0.1.0) |
 | 1 | Captura: flujo de muestras sin bloqueos + herramienta de consola; captura en proceso aparte (1d) y audio real en la GUI sin medir (1b) | **terminada**; validada con el CM18 (ingesta 100 %) |
-| 2 | Detector de batimientos incremental (P1/P2/P3) + audio WAV/FLAC | **en validación**: pasa con sintético y con las grabaciones reales; quedan pendientes en el H-50 (ver [`docs/resultados_pruebas_fase2.md`](docs/resultados_pruebas_fase2.md)) |
+| 2 | Detector de batimientos incremental (P1/P2/P3), alineación fina por plantillas de tic y tac (`t_fine`) + audio WAV/FLAC | **en cierre**: validado con sintético y con 5 grabaciones reales; frente a tg queda a ≤ 1.4 s/d y ≤ 0.25 ms (ver [`docs/resultados_pruebas_fase2.md`](docs/resultados_pruebas_fase2.md), sección 6) |
 | 3 | Métricas: marcha, error de batimiento, amplitud | pendiente |
 | 4 | Reloj: deriva del ADC vs host + NTP, calibración manual opcional | pendiente |
 | 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | pendiente |
@@ -179,6 +179,17 @@ Toda lectura y escritura de archivos de audio pasa por `adv_tg.utils.audio_files
   si falta, P1. P1/P3 sin evidencia quedan en `NaN` con su flag; nunca se rellenan con el
   modelo.
 
+**Alineación fina por plantillas** (`Beat.t_fine`, `BeatDetector.templates()`): tic y tac
+pueden sonar distinto (p. ej. en el H-50 la caída del tac tiene dos lóbulos y el más fuerte
+cambia de un batimiento a otro), y entonces los inicios por batimiento miden tic y tac en
+puntos físicos distintos: un error de batimiento falso y un residuo ruidoso. El detector
+mantiene una plantilla de envolvente por paridad de `k` (mediana de los últimos 24 batimientos
+alineados), alinea cada batimiento con la suya por correlación (solo sobre la caída) y mide
+los inicios de P1 y P3 una sola vez, sobre la plantilla limpia. `t_fine` es ese inicio de P3
+llevado a cada batimiento: el mismo punto físico en tic y tac. La fase 3 calculará la marcha
+con `t_fine` (regresión ponderada por paridad), el error de batimiento con los P1 de las
+plantillas y la amplitud con su t_lift (inicio de P1 → inicio de P3).
+
 **Uso como biblioteca**: `process(chunk, start_index)` devuelve solo batimientos nuevos y
 definitivos; `advance(sample_stream)` lee lo llegado al `SampleStream` y trata un
 desbordamiento como hueco (`AFTER_GAP`, sin reiniciar `k`); `flush()` al final del archivo.
@@ -198,13 +209,15 @@ python -m adv_tg.tools.check_samples --self-test     # sin grabaciones: genera 3
 ```
 
 `check_samples` asigna el calibre por el nombre del archivo (`c07`/`h50`/`hamilton` → 21600
-BPH, LA 50°; `9015`/`miyota` → 28800 BPH, LA 51°; `nm10`/`bulova` → cuarzo, informativo) o
+BPH, LA 50°; `9015`/`miyota` → 28800 BPH, LA 51°; `4r36`/`seiko` → 21600 BPH, LA 53°;
+`nm10`/`bulova` → cuarzo, informativo) o
 por un manifiesto JSON (`[{"pattern": "c07", "bph": 21600, "lift_angle": 50}]`), repite la
 detección con otro troceado para comprobar la invarianza y guarda una tabla Markdown en
 `logs/check_samples_<fecha>.md` con veredicto OK/REVISAR por archivo (conteo ±1 %, P3 en
-≥ 95 % de los batimientos, tic/tac sin saltos de paridad, t_lift físico, invarianza).
+≥ 95 % de los batimientos, tic/tac sin saltos de paridad, t_lift físico, invarianza, `t_fine`
+en ≥ 80 % de los batimientos y t_lift de las plantillas en el rango físico).
 
-**Rendimiento y exactitud** (sintético, 48 kHz): ~90–140× tiempo real en un núcleo; a
+**Rendimiento y exactitud** (sintético, 48 kHz): ~95–120× tiempo real en un núcleo; a
 SNR ≥ 20 dB, 0 falsos y 0 perdidos; error de P3 tras restar el sesgo constante de ~2,1
 muestras: mediana < 0,3 y p95 < 1 muestra a 25 dB.
 
@@ -220,9 +233,13 @@ muestras: mediana < 0,3 y p95 < 1 muestra a 25 dB.
   red, colas largas y SNR 20 dB, P1 puede tener hasta ~0,2 ms de incertidumbre.
 - BPH mal configurado (> 6 % de diferencia): no engancha y avisa; la mitad del BPH real sí
   engancharía (contaría solo los tic o los tac).
-- En el Hamilton H-50 real (P1 débil) con SNR bajo se observan P3 mal asignados (~7 % de los
-  batimientos, residuo de +5 a +11 ms) y un t_lift bimodal (posible confusión P1/P2). Con una
-  toma limpia la detección se corrige, pero la marcha según P1 y según P3 aún difiere ~2.5 s/d.
+- Los P1/P2/P3 por batimiento siguen siendo frágiles cuando tic y tac suenan distinto (H-50:
+  P3 en un lóbulo tardío, P1 desplazado); por eso las métricas usan `t_fine` y las plantillas,
+  no los inicios por batimiento.
+- La paridad con la caída ambigua (tac del H-50 y del 4R36) tiene un jitter de 500–800 µs,
+  frente a 110–220 µs de la limpia: la fase 3 debe ponderar por paridad.
+- `t_fine` necesita un calentamiento: ~6 batimientos hasta que el modelo de fase madura y 6
+  más por paridad hasta que madura su plantilla.
 - El detector es invariante a la ganancia: normalizar no cambia nada. Limitar o comprimir los
   picos (o aplicar AGC) sesga la medida igual que la saturación; no se aplica en la ruta de
   medida (ver sección 3 del informe de pruebas).
@@ -233,12 +250,21 @@ muestras: mediana < 0,3 y p95 < 1 muestra a 25 dB.
 | Grabación | Encontrados / esperados | P1 / P3 | σ residuo | Veredicto `check_samples` |
 |-----------|-------------------------|---------|-----------|---------------------------|
 | Miyota 9015 (28800 BPH) | 245 / 244.1 | 98 % / 100 % | 631 µs | OK |
+| Seiko 4R36 (21600 BPH) | 181 / 180.1 | 97 % / 99 % | 217 µs | OK |
 | Hamilton H-50 (21600 BPH), toma original saturada | 181 / 182.3 | 63 % / 100 % | 289 µs | OK |
 | Hamilton H-50, toma nueva (pico −9.4 dBFS) | 180 / 179.5 | 97 % / 100 % | 388 µs | OK |
 | Bulova NM10 (cuarzo) | 4738 / 4799.3 | 81 % / 84 % | 354 µs | INFO (no evalúa) |
 
 - La precisión por batimiento en señal real (σ de cientos de µs) es mucho peor que en
-  sintético (~5 µs).
+  sintético (~5 µs); con `t_fine` baja a 110–220 µs en las paridades limpias.
+- Frente a tg 0.8.0 y Watch Accuracy Meter (`docs/samples/tests.csv`; con `t_fine`, regresión
+  ponderada por paridad y plantillas): error de batimiento y amplitud dentro de banda (±0.15 ms,
+  ±12°) en los cuatro calibres mecánicos; marcha dentro de ±1.5 s/d salvo el 4R36, cuya
+  grabación tiene otra marcha que la medida en vivo (el reloj se asentaba durante la toma). El
+  Bulova reproduce la deriva de la tarjeta que mide tg (−0.71 frente a −0.72 s/d).
+- Inicio de P3 en la plantilla: por nivel (cruce hacia atrás desde el primer lóbulo); si tic y
+  tac discrepan en amplitud más de 20° (no es físico), se usa el pie del primer frente abrupto
+  donde haga falta (rampa lenta antes de la caída, como el tac del 4R36).
 - El "Periodo" que imprime `detect_beats` es una mediana de intervalos, **no** un estimador de
   marcha (en el cuarzo se desvía el equivalente a ~15 s/d); la marcha se calculará por
   regresión en la fase 3.

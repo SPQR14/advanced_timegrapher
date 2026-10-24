@@ -30,7 +30,13 @@ from pathlib import Path
 import numpy as np
 
 from adv_tg.core.beat_detector import BeatDetector, BeatDetectorConfig, DetectorStats
-from adv_tg.core.beat_types import Beat, BeatFlags, amplitude_from_lift_time, beat_period_s
+from adv_tg.core.beat_types import (
+    Beat,
+    BeatFlags,
+    ParityTemplate,
+    amplitude_from_lift_time,
+    beat_period_s,
+)
 from adv_tg.utils.audio_files import (
     AudioFileError,
     audio_info,
@@ -49,6 +55,7 @@ __all__ = [
     "detect_array",
     "main",
     "parity_check",
+    "fine_timing",
     "summarize",
 ]
 
@@ -92,6 +99,15 @@ class Summary:
     implied_amplitude_deg: float | None
     parity_ok: bool | None
     warnings: list[str] = field(default_factory=list)
+    # fine timing (per-parity templates); checks of the alignment, NOT the layer-3 metrics
+    fine_pct: float = math.nan
+    fine_sigma_even_us: float = math.nan
+    fine_sigma_odd_us: float = math.nan
+    fine_beat_offset_ms: float = math.nan
+    template_t_lift_even_ms: float = math.nan
+    template_t_lift_odd_ms: float = math.nan
+    template_amplitude_deg: float | None = None
+    template_p3_method: str = "—"
 
 
 def detect_array(
@@ -114,13 +130,14 @@ def detect_array(
 
 
 def beats_equal(a: list[Beat], b: list[Beat], tol: float = 1e-6) -> bool:
-    """True if both lists have the same ``k``, flags and instants (within ``tol`` samples)."""
+    """True if both lists have the same ``k``, flags and instants, ``t_fine`` included
+    (within ``tol`` samples)."""
     if len(a) != len(b):
         return False
     for x, y in zip(a, b, strict=True):
         if x.k != y.k or x.flags != y.flags:
             return False
-        for u, v in ((x.p1, y.p1), (x.p2, y.p2), (x.p3, y.p3)):
+        for u, v in ((x.p1, y.p1), (x.p2, y.p2), (x.p3, y.p3), (x.t_fine, y.t_fine)):
             if math.isnan(u) != math.isnan(v) or (not math.isnan(u) and abs(u - v) > tol):
                 return False
     return True
@@ -155,6 +172,54 @@ def parity_check(beats: list[Beat], window: int = 30) -> bool | None:
     return bool(np.all(signs == signs[0]))
 
 
+def fine_timing(
+    beats: list[Beat],
+    templates: tuple[ParityTemplate | None, ParityTemplate | None],
+    fs: float,
+) -> dict[str, float]:
+    """Checks of the fine timing: coverage, per-parity jitter and tic/tac offset at P1.
+
+    * ``fine_sigma_*_us``: robust std of the residual of a line fitted to ``t_fine`` of each
+      parity separately (each parity has its own jitter; the H-50 tac is much noisier).
+    * ``fine_beat_offset_ms``: tic/tac offset of the P1 onsets carried by the templates
+      (``t_fine`` minus the template t_lift of its parity), from ``a + P k + c (-1)^k``
+      weighted by parity (1/sigma^2), as ``2 |c|``. A plausibility check of the alignment;
+      the beat-error metric is layer 3.
+    """
+    out = {
+        "fine_pct": math.nan,
+        "fine_sigma_even_us": math.nan,
+        "fine_sigma_odd_us": math.nan,
+        "fine_beat_offset_ms": math.nan,
+    }
+    if not beats:
+        return out
+    k = np.array([b.k for b in beats], dtype=np.float64)
+    t = np.array([b.t_fine for b in beats])
+    ok = np.isfinite(t)
+    out["fine_pct"] = 100.0 * float(np.count_nonzero(ok)) / len(beats)
+    sig: dict[int, float] = {}
+    for par, key in ((0, "fine_sigma_even_us"), (1, "fine_sigma_odd_us")):
+        m = ok & (k % 2 == par)
+        if np.count_nonzero(m) < 6:
+            continue
+        coef = np.polyfit(k[m], t[m], 1)
+        r = t[m] - np.polyval(coef, k[m])
+        sig[par] = 1.4826 * float(np.median(np.abs(r - np.median(r))))
+        out[key] = sig[par] / fs * 1e6
+    # P1 of each beat = t_fine - (onset_ref - onset_p1) of its parity's template
+    lifts = [tp.onset_ref - tp.onset_p1 if tp is not None else math.nan for tp in templates]
+    if len(sig) == 2 and all(math.isfinite(v) for v in lifts):
+        p1 = t - np.where(k % 2 == 0, lifts[0], lifts[1])
+        w = np.where(k % 2 == 0, 1.0 / max(sig[0], 1e-6) ** 2, 1.0 / max(sig[1], 1e-6) ** 2)
+        m = ok
+        X = np.stack([np.ones(m.sum()), k[m], np.where(k[m] % 2 == 0, 1.0, -1.0)], axis=1)
+        sw = np.sqrt(w[m])
+        coef, *_ = np.linalg.lstsq(X * sw[:, None], (p1[m] - p1[m][0]) * sw, rcond=None)
+        out["fine_beat_offset_ms"] = 2.0 * abs(float(coef[2])) / fs * 1e3
+    return out
+
+
 def summarize(
     beats: list[Beat],
     stats: DetectorStats,
@@ -168,6 +233,7 @@ def summarize(
     duration_s: float,
     bph: float,
     lift_angle_deg: float | None,
+    templates: tuple[ParityTemplate | None, ParityTemplate | None] = (None, None),
 ) -> Summary:
     """Build the ``Summary`` of a detection run."""
     fs = float(sample_rate)
@@ -182,6 +248,11 @@ def summarize(
     pct = (lambda v: 100.0 * v) if n else (lambda v: 0.0)
     period = stats.period_samples / fs
     nominal = beat_period_s(bph)
+    fine = fine_timing(beats, templates, fs)
+    tl_tpl = [tp.t_lift_samples / fs if tp is not None else math.nan for tp in templates]
+    amp_tpl = None
+    if lift_angle_deg and all(math.isfinite(v) and v > 0 for v in tl_tpl):
+        amp_tpl = float(np.mean([amplitude_from_lift_time(v, lift_angle_deg, bph) for v in tl_tpl]))
     return Summary(
         file=file,
         format=format,
@@ -212,6 +283,11 @@ def summarize(
         implied_amplitude_deg=amp,
         parity_ok=parity_check(beats),
         warnings=list(stats.warnings),
+        template_t_lift_even_ms=tl_tpl[0] * 1e3,
+        template_t_lift_odd_ms=tl_tpl[1] * 1e3,
+        template_amplitude_deg=amp_tpl,
+        template_p3_method="/".join(tp.p3_method if tp is not None else "—" for tp in templates),
+        **fine,
     )
 
 
@@ -266,6 +342,7 @@ def analyze_file(
         duration_s=frames / info.sample_rate,
         bph=bph,
         lift_angle_deg=lift_angle_deg,
+        templates=det.templates(),
     )
     return summary, beats
 
@@ -314,8 +391,24 @@ def print_summary(s: Summary) -> None:
     print(f"Enganche           : {_fmt(s.lock_time_s, '.2f')} s")
     print(f"Tiempo real        : {s.realtime_factor:.0f}x")
     print(
-        f"Periodo            : {_fmt(s.period_ms, '.4f')} ms observado vs "
-        f"{s.nominal_period_ms:.4f} ms nominal ({_fmt(s.period_deviation_pct, '+.3f')} %)"
+        f"Periodo (orientat.): {_fmt(s.period_ms, '.4f')} ms observado vs "
+        f"{s.nominal_period_ms:.4f} ms nominal ({_fmt(s.period_deviation_pct, '+.3f')} %); "
+        "no es la marcha (la fase 3 la calcula por regresión)"
+    )
+    print(
+        f"Alineación fina    : t_fine en {_fmt(s.fine_pct, '.1f')} % de los batimientos; "
+        f"σ par/impar {_fmt(s.fine_sigma_even_us, '.0f')} / {_fmt(s.fine_sigma_odd_us, '.0f')} µs; "
+        f"desfase P1 tic/tac {_fmt(s.fine_beat_offset_ms, '.2f')} ms"
+    )
+    tpl_amp = (
+        f"; amplitud implícita {_fmt(s.template_amplitude_deg, '.0f')}°"
+        if s.template_amplitude_deg is not None
+        else ""
+    )
+    print(
+        f"Plantillas         : t_lift par/impar {_fmt(s.template_t_lift_even_ms, '.2f')} / "
+        f"{_fmt(s.template_t_lift_odd_ms, '.2f')} ms{tpl_amp}; P3 por {s.template_p3_method} "
+        "(comprobación, NO es la medida)"
     )
     par = {True: "sí", False: "NO", None: "n/d (error de batimiento ~0)"}[s.parity_ok]
     print(f"Tic/tac alternan   : {par}")
@@ -349,6 +442,7 @@ def write_csv(path: Path, beats: list[Beat], fs: float) -> None:
                 "confidence",
                 "flags",
                 "flag_names",
+                "t_fine",
             ]
         )
         for b in beats:
@@ -367,6 +461,7 @@ def write_csv(path: Path, beats: list[Beat], fs: float) -> None:
                     f"{b.confidence:.3f}",
                     int(b.flags),
                     names,
+                    f"{b.t_fine:.4f}",
                 ]
             )
     _dbg.file_write(path, rows=len(beats))

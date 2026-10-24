@@ -17,6 +17,7 @@ name contains       BPH         LA     note
 ==================  ==========  =====  ===============
 c07 / h50 / hamilton  21600     50°    weak P1 (ETA C07)
 9015 / miyota       28800       51°    "normal" case
+4r36 / seiko        21600       53°    slow ramp before the tac drop
 nm10 / bulova       57600       —      quartz, informational only
 ==================  ==========  =====  ===============
 
@@ -61,6 +62,7 @@ EXIT_ERROR = 2
 COUNT_TOLERANCE = 0.01
 MIN_P3_PCT = 95.0
 MIN_P1_PCT_FOR_LIFT = 50.0
+MIN_FINE_PCT = 80.0
 AMPLITUDE_RANGE = (90.0, 400.0)
 
 
@@ -77,6 +79,7 @@ class CalibreConfig:
 BUILTIN_TABLE: tuple[tuple[tuple[str, ...], CalibreConfig], ...] = (
     (("c07", "h50", "hamilton"), CalibreConfig(21600, 50.0, False, "tabla: ETA C07 / H-50")),
     (("9015", "miyota"), CalibreConfig(28800, 51.0, False, "tabla: Miyota 9015")),
+    (("4r36", "seiko"), CalibreConfig(21600, 53.0, False, "tabla: Seiko 4R36")),
     (("nm10", "bulova"), CalibreConfig(57600, None, True, "tabla: Bulova cuarzo (informativo)")),
 )
 
@@ -172,6 +175,14 @@ def check_file(path: Path, cfg: CalibreConfig) -> FileResult:
         notes.append(f"t_lift n/d: P1 solo en {summary.p1_pct:.0f} % de los batimientos")
     elif not t_lo <= tl <= t_hi:
         reasons.append("t_lift mediano fuera del rango físico")
+    if summary.fine_pct < MIN_FINE_PCT or not math.isfinite(summary.fine_pct):
+        reasons.append(
+            f"alineación fina en {_f(summary.fine_pct, '.0f')} % de los batimientos "
+            f"(< {MIN_FINE_PCT:g} %)"
+        )
+    amp_tpl = summary.template_amplitude_deg
+    if amp_tpl is not None and not AMPLITUDE_RANGE[0] <= amp_tpl <= AMPLITUDE_RANGE[1]:
+        reasons.append(f"t_lift de las plantillas fuera del rango físico ({amp_tpl:.0f}°)")
     if not invariant:
         reasons.append("no invariante al troceado")
     verdict = "REVISAR" if reasons else "OK"
@@ -188,7 +199,9 @@ def _f(v: float | None, spec: str) -> str:
 _HEADER = (
     "| archivo | formato | fs | duración (s) | BPH/LA | esperados | encontrados | perdidos "
     "| rechazados | % P1/P2/P3 | t_lift med (ms) | amplitud implícita (°) [plausib.] "
-    "| σ residuo (µs) | tic/tac sin saltos | invariante | tiempo real | avisos | veredicto |"
+    "| σ residuo (µs) | t_fine % · σ par/impar (µs) | desfase P1 tic/tac (ms) "
+    "| t_lift plantillas (ms) · amplitud (°) "
+    "| tic/tac sin saltos | invariante | tiempo real | avisos | veredicto |"
 )
 
 
@@ -200,16 +213,26 @@ def _row(r: FileResult, base: Path) -> str:
     la = f"{r.config.lift_angle:g}" if r.config.lift_angle else "—"
     s = r.summary
     if s is None:
-        return f"| {name} | — | — | — | {r.config.bph:g}/{la} |" + " — |" * 12 + f" {r.verdict} |"
+        return f"| {name} | — | — | — | {r.config.bph:g}/{la} |" + " — |" * 15 + f" {r.verdict} |"
     par = {True: "sí", False: "no", None: "n/d"}[s.parity_ok]
     inv = {True: "sí", False: "no", None: "—"}[r.invariant]
     warn = "; ".join(s.warnings + r.reasons + r.notes) or "—"
     amp = _f(s.implied_amplitude_deg, ".0f") if r.config.lift_angle else "—"
+    fine = (
+        f"{_f(s.fine_pct, '.0f')} · {_f(s.fine_sigma_even_us, '.0f')}"
+        f"/{_f(s.fine_sigma_odd_us, '.0f')}"
+    )
+    tpl = (
+        f"{_f(s.template_t_lift_even_ms, '.2f')}/{_f(s.template_t_lift_odd_ms, '.2f')} · "
+        f"{_f(s.template_amplitude_deg, '.0f') if r.config.lift_angle else '—'}"
+        f" ({s.template_p3_method})"
+    )
     return (
         f"| {name} | {s.format}/{s.subtype} | {s.sample_rate} | {s.duration_s:.1f} "
         f"| {r.config.bph:g}/{la} | {_f(r.expected_from_first, '.1f')} | {s.found} | {s.missed} "
         f"| {s.rejected} | {s.p1_pct:.0f}/{s.p2_pct:.0f}/{s.p3_pct:.0f} "
         f"| {_f(s.t_lift_median_ms, '.2f')} | {amp} | {_f(s.residual_sigma_us, '.1f')} "
+        f"| {fine} | {_f(s.fine_beat_offset_ms, '.2f')} | {tpl} "
         f"| {par} | {inv} | {s.realtime_factor:.0f}x | {warn} | **{r.verdict}** |"
     )
 
@@ -222,10 +245,11 @@ def render(results: list[FileResult], unconfigured: list[Path], base: Path) -> s
         f"Directorio: `{base}`",
         "",
         "Esperados = (duración - instante del primer batimiento) × BPH / 3600. "
-        "La amplitud implícita es una comprobación de plausibilidad física, no una medida.",
+        "La amplitud implícita y las columnas de alineación fina y plantillas son "
+        "comprobaciones, no medidas (las métricas son la fase 3).",
         "",
         _HEADER,
-        "|" + "---|" * 18,
+        "|" + "---|" * 21,
     ]
     lines += [_row(r, base) for r in results]
     if unconfigured:
