@@ -46,6 +46,7 @@ DEFAULT_FS = 48000
 REPLAY_DEFAULT_BLOCKSIZE = 1024
 BUFFER_MARGIN_S = 5.0
 MONITOR_BUFFER_S = 60.0
+REPLAY_DRAIN_S = 1.0  # max extra wait for the replay thread to deliver its last blocks
 
 
 class _Source(Protocol):
@@ -274,15 +275,23 @@ def _status_line(t_s: int, stream: SampleStream, source: _Source, peak_db: float
 
 
 def _monitor(stream: SampleStream, source: _Source, secs: float, replay: bool) -> None:
-    """Print one status line per second until ``secs`` elapse (main thread)."""
-    t0 = time.monotonic()
+    """Print one status line per second until ``secs`` elapse (main thread).
+
+    In replay mode the last line waits for the replay thread to deliver every sample:
+    its paced waits overshoot by up to one timer tick (~15.6 ms on Windows), so stopping
+    on the wall clock alone would drop the last blocks.
+    """
+    t0 = time.perf_counter()
     tick = 1
     last_idx = 0
     while True:
-        now = time.monotonic() - t0
+        now = time.perf_counter() - t0
         target = min(float(tick), secs)
         if now < target:
             time.sleep(min(target - now, 0.25))
+            continue
+        if replay and target >= secs and source.is_active and now < secs + REPLAY_DRAIN_S:
+            time.sleep(0.005)
             continue
         total = stream.total_samples
         start = max(last_idx, stream.oldest_available)
