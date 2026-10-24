@@ -1,6 +1,6 @@
 """Advanced Timegrapher (adv_tg) package."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import importlib.util
 import os
