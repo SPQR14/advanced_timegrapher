@@ -8,10 +8,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from scipy.io import wavfile
 
 from adv_tg.tools import capture_check
 from adv_tg.tools.capture_check import EXIT_ERROR, EXIT_OK, main, read_wav_mono
+from adv_tg.utils.audio_files import read_audio, write_audio
 
 FS = 48_000
 
@@ -23,9 +23,8 @@ def _synthetic_wav(path: Path, secs: float = 2.0) -> np.ndarray:
     for k in range(int(secs * 6)):
         i = int(k * FS / 6)
         x[i : i + 200] += 0.5 * np.exp(-np.arange(200) / 30.0)
-    pcm = np.round(x * 32767).astype(np.int16)
-    wavfile.write(str(path), FS, pcm)
-    return pcm.astype(np.float32) / 32768.0
+    write_audio(path, x, FS, subtype="PCM_16")
+    return read_audio(path).samples.astype(np.float32)
 
 
 def test_read_wav_mono_formats(tmp_path: Path) -> None:
@@ -33,10 +32,14 @@ def test_read_wav_mono_formats(tmp_path: Path) -> None:
     fs, x = read_wav_mono(tmp_path / "a.wav")
     assert fs == FS and x.dtype == np.float32
     np.testing.assert_array_equal(x, ref)
-    stereo = np.stack([ref, -ref], axis=1)
-    wavfile.write(str(tmp_path / "s.wav"), FS, stereo)
+    stereo = np.stack([0.5 * ref, ref], axis=1)  # channel 1 has more energy
+    write_audio(tmp_path / "s.wav", stereo, FS)
     _, xs = read_wav_mono(tmp_path / "s.wav")
     np.testing.assert_array_equal(xs, ref)
+    write_audio(tmp_path / "f.flac", ref, FS, subtype="PCM_16")
+    fs, xf = read_wav_mono(tmp_path / "f.flac")
+    assert fs == FS
+    np.testing.assert_allclose(xf, ref, atol=1.0 / 32768.0)
 
 
 def test_file_replay_ok(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -48,8 +51,21 @@ def test_file_replay_ok(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> N
     assert code == EXIT_OK, out
     assert "VEREDICTO: OK" in out
     assert "ingesta=" in out and "dBFS" in out
-    fs, saved = wavfile.read(str(out_wav))
-    assert fs == FS and saved.dtype == np.int16 and saved.size == 2 * FS
+    saved = read_audio(out_wav)
+    assert saved.sample_rate == FS and saved.subtype == "FLOAT" and saved.frames == 2 * FS
+
+
+def test_file_replay_saves_flac_with_out_alias(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wav = tmp_path / "tick.flac"
+    _synthetic_wav(wav, secs=1.0)
+    out = tmp_path / "sub" / "out.FLAC"
+    code = main(["--file", str(wav), "--secs", "1", "--out", str(out), "--wav-format", "int16"])
+    text = capsys.readouterr().out
+    assert code == EXIT_OK, text
+    saved = read_audio(out)
+    assert saved.format == "FLAC" and saved.subtype == "PCM_16" and saved.frames == FS
 
 
 @pytest.mark.parametrize(
@@ -62,6 +78,8 @@ def test_file_replay_ok(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> N
         ["--latency", "medium"],
         ["--file", "no/existe.wav"],
         ["--file", "x.wav", "--device", "1"],
+        ["--wav", "out.mp3"],
+        ["--wav", "out.flac", "--wav-format", "float32"],
     ],
 )
 def test_impossible_parameters_exit_2(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:

@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
     "sounddevice>=0.4.6",
+    "soundfile>=0.14.0",  # WAV/FLAC I/O; wheels bundle libsndfile (LGPL-2.1, dynamic)
     "PyQt6>=6.6",
     "pyqtgraph>=0.13",
     "PyOpenGL",
@@ -29,6 +30,10 @@ dev = [
     "pytest-qt",
     "scipy",
     "pre-commit",
+]
+# Gráficas de análisis (detect_beats --plot): pip install -e ".[plot]"
+plot = [
+    "matplotlib>=3.8",
 ]
 
 [project.scripts]
