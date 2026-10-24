@@ -1,0 +1,5 @@
+# Grabaciones de referencia: binarias, sin diff ni conversión de fin de línea
+*.flac binary
+*.wav  binary
+# Markdown de docs/ con fin de línea LF en todas las plataformas
+*.md text eol=lf

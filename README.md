@@ -4,21 +4,24 @@ Cronocomparador (timegrapher) por software para relojes mecánicos: escucha el t
 micrófono y mostrará marcha (s/d), error de batimiento (ms) y amplitud (°), con una GUI en
 PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 
-## Estado (v0.1.0)
+## Estado (v0.2.0)
 
-- El núcleo de medición (DSP) se está **reconstruyendo desde cero, por capas**. Todavía no existe.
-- La GUI es el esqueleto: todos los paneles, exportaciones e idiomas (EN/ES) están, pero
-  **con un dispositivo de audio real todavía NO mide**: al pulsar INICIAR se avisa
-  "Motor de medición aún no implementado".
+- El núcleo de medición (DSP) se está **reconstruyendo desde cero, por capas**. Ya existen la
+  captura (fase 1, terminada) y el detector de batimientos (fase 2, en validación); las
+  métricas (marcha, error de batimiento, amplitud) son la fase 3 y todavía no existen.
+- La GUI tiene todos los paneles, exportaciones e idiomas (EN/ES). **Con un dispositivo de
+  audio real muestra la señal pero todavía NO mide**: forma de onda cruda, nivel/saturación e
+  ingesta de audio (`CaptureStreamWorker`), sin marcha, error de batimiento ni amplitud.
 - El botón **MOCK** (barra superior) activa un motor simulado que genera datos realistas
   (marcha, error de batimiento, amplitud, forma de onda, deriva de reloj, calidad de señal)
   para probar la GUI completa. Mientras está activo se ve la insignia "MOCK" en la barra de
   estado y `[MOCK]` en el título. Los datos MOCK no son mediciones.
 
-| Capa | Contenido | Estado |
+| Fase | Contenido | Estado |
 |------|-----------|--------|
-| 1 | Captura: flujo de muestras sin bloqueos + herramienta de consola | implementada, pendiente de validar con hardware |
-| 2 | Detector de batimientos incremental (P1/P2/P3) + audio WAV/FLAC | implementada; pendiente de validar con grabaciones reales (`check_samples` en la Mac) |
+| 0 | Esqueleto: GUI, modo MOCK, Debugger, CI | **terminada** (v0.1.0) |
+| 1 | Captura: flujo de muestras sin bloqueos + herramienta de consola; captura en proceso aparte (1d) y audio real en la GUI sin medir (1b) | **terminada**; validada con el CM18 (ingesta 100 %) |
+| 2 | Detector de batimientos incremental (P1/P2/P3) + audio WAV/FLAC | **en validación**: pasa con sintético y con las grabaciones reales; quedan pendientes en el H-50 (ver [`docs/resultados_pruebas_fase2.md`](docs/resultados_pruebas_fase2.md)) |
 | 3 | Métricas: marcha, error de batimiento, amplitud | pendiente |
 | 4 | Reloj: deriva del ADC vs host + NTP, calibración manual opcional | pendiente |
 | 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | pendiente |
@@ -61,7 +64,8 @@ src/adv_tg/
 │   ├── __init__.py
 │   ├── assets/            # flechas SVG de los spinbox/combos
 │   ├── main_window.py     # ventana principal (MainWin)
-│   ├── null_engine.py     # NullStreamWorker: placeholder para hardware
+│   ├── capture_worker.py  # CaptureStreamWorker: audio real en la GUI, sin medir (fase 1b)
+│   ├── null_engine.py     # NullStreamWorker: respaldo si la captura no está disponible
 │   ├── stream_worker_base.py  # BaseStreamWorker: contrato GUI <-> motor
 │   └── worker_factory.py  # create_worker(device_id)
 └── utils/
@@ -184,7 +188,7 @@ absoluto). Un detector por hilo (no es thread-safe).
 **Herramientas**:
 
 ```bash
-# Un archivo: resumen, CSV por batimiento, JSON, PNG (solo si matplotlib está instalado)
+# Un archivo: resumen, CSV por batimiento, JSON, PNG con --plot (requiere el extra: pip install -e ".[plot]")
 python -m adv_tg.tools.detect_beats toma.flac --bph 28800 --lift-angle 51 --csv b.csv --json s.json
 
 # Validación con las grabaciones reales (en la Mac): docs/samples/*.wav|*.flac
@@ -216,8 +220,28 @@ muestras: mediana < 0,3 y p95 < 1 muestra a 25 dB.
   red, colas largas y SNR 20 dB, P1 puede tener hasta ~0,2 ms de incertidumbre.
 - BPH mal configurado (> 6 % de diferencia): no engancha y avisa; la mitad del BPH real sí
   engancharía (contaría solo los tic o los tac).
-- Todo esto está validado con señal sintética; falta la validación con grabaciones reales
-  (`check_samples` en la Mac).
+- En el Hamilton H-50 real (P1 débil) con SNR bajo se observan P3 mal asignados (~7 % de los
+  batimientos, residuo de +5 a +11 ms) y un t_lift bimodal (posible confusión P1/P2). Con una
+  toma limpia la detección se corrige, pero la marcha según P1 y según P3 aún difiere ~2.5 s/d.
+- El detector es invariante a la ganancia: normalizar no cambia nada. Limitar o comprimir los
+  picos (o aplicar AGC) sesga la medida igual que la saturación; no se aplica en la ruta de
+  medida (ver sección 3 del informe de pruebas).
+
+**Validación con grabaciones reales** (`docs/samples/`, macOS, 24/10/2026; detalle en
+[`docs/resultados_pruebas_fase2.md`](docs/resultados_pruebas_fase2.md)):
+
+| Grabación | Encontrados / esperados | P1 / P3 | σ residuo | Veredicto `check_samples` |
+|-----------|-------------------------|---------|-----------|---------------------------|
+| Miyota 9015 (28800 BPH) | 245 / 244.1 | 98 % / 100 % | 631 µs | OK |
+| Hamilton H-50 (21600 BPH), toma original saturada | 181 / 182.3 | 63 % / 100 % | 289 µs | OK |
+| Hamilton H-50, toma nueva (pico −9.4 dBFS) | 180 / 179.5 | 97 % / 100 % | 388 µs | OK |
+| Bulova NM10 (cuarzo) | 4738 / 4799.3 | 81 % / 84 % | 354 µs | INFO (no evalúa) |
+
+- La precisión por batimiento en señal real (σ de cientos de µs) es mucho peor que en
+  sintético (~5 µs).
+- El "Periodo" que imprime `detect_beats` es una mediana de intervalos, **no** un estimador de
+  marcha (en el cuarzo se desvía el equivalente a ~15 s/d); la marcha se calculará por
+  regresión en la fase 3.
 
 ## Instalación
 
@@ -227,6 +251,7 @@ Requiere **Python >= 3.11**.
 python -m venv .venv
 .venv/bin/python -m pip install --upgrade pip          # Windows: .venv\Scripts\python.exe
 .venv/bin/python -m pip install -e ".[dev]"
+.venv/bin/python -m pip install -e ".[plot]"         # opcional: gráficas de detect_beats --plot
 ```
 
 ## Ejecución

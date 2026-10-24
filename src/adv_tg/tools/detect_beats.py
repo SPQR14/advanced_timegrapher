@@ -10,8 +10,8 @@ time, real-time factor, observed vs nominal period and warnings. As a PHYSICAL
 PLAUSIBILITY CHECK (not a metric) it also prints the amplitude implied by the median
 t_lift and the given lift angle (~200-330° on healthy watches).
 
-Options: ``--csv`` one row per beat, ``--json`` the summary, ``--plot`` a PNG (only if
-matplotlib is already installed; it is not a dependency).
+Options: ``--csv`` one row per beat, ``--json`` the summary, ``--plot`` a PNG (needs
+matplotlib, optional extra: ``pip install -e ".[plot]"``).
 
 Exit codes: 0 = processed, 2 = input error.
 """
@@ -462,7 +462,10 @@ def main(argv: list[str] | None = None) -> int:
         if write_plot(args.plot, beats, fs):
             print(f"Gráfica guardada en '{args.plot}'.")
         else:
-            print("AVISO: --plot ignorado: matplotlib no está instalado (dependencia opcional).")
+            print(
+                "AVISO: --plot ignorado: matplotlib no está instalado "
+                '(dependencia opcional: pip install -e ".[plot]").'
+            )
     return EXIT_OK
 
 
