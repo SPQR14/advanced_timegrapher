@@ -180,7 +180,9 @@ class FileReplay:
             t_cb = time.perf_counter_ns()
             try:
                 self.callbacks += 1
-                self._stream.write(self._samples[pos:end], t_cb)
+                # Stamp with the scheduled time (ideal device clock), not the wake-up time,
+                # so OS timer jitter (large on macOS CI) does not show up as gaps.
+                self._stream.write(self._samples[pos:end], deadline)
             except Exception:
                 self.callback_errors += 1
             dt = time.perf_counter_ns() - t_cb
