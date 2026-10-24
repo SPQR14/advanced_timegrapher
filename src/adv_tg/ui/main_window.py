@@ -47,6 +47,14 @@ from adv_tg.core.models import BeatTelemetry, TelemetryResult, WatchConfig
 from adv_tg.i18n.translator import Translator
 from adv_tg.mock.generator import generate_tick_train, save_wav
 from adv_tg.mock.worker import MockStreamWorker
+
+# TODO(capa-5): motor de hardware sin medición (fase 1b)
+from adv_tg.ui.capture_worker import (
+    CaptureStreamWorker,
+    SlotProfiler,
+    level_text,
+    level_to_quality,
+)
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
 from adv_tg.ui.worker_factory import create_worker
 from adv_tg.utils.audio_io import (
@@ -188,7 +196,7 @@ class MainWin(QMainWindow):
         logger.info("Initializing MainWin UI")
         self._gpu_enabled: bool = configure_pyqtgraph_gpu()
         self.translator = translator if translator is not None else Translator("en")
-        # TODO(capa-5): reconectar al motor real (hoy: MockStreamWorker o NullStreamWorker)
+        # TODO(capa-5): reconectar al motor real (hoy: MockStreamWorker o CaptureStreamWorker)
         self.dsp_worker: BaseStreamWorker | None = None
         self._capture_state: str = "INACTIVO"
         self._active_device_id: int | None = None
@@ -217,6 +225,10 @@ class MainWin(QMainWindow):
         self._recorded_audio: np.ndarray | None = None
         self._recorded_sample_rate: int = 48000
         self._save_audio_on_finish: bool = False
+        # TODO(capa-5): la barra de calidad sigue al nivel hasta que llegue telemetría
+        self._telemetry_seen: bool = False
+        self._perf_waveform = SlotProfiler("waveform_ready")
+        self._perf_level = SlotProfiler("level_updated")
 
         # Saved positional telemetry records (starts clean with no pre-populated data)
         self._saved_positions: dict[str, TelemetryResult] = {}
@@ -226,7 +238,7 @@ class MainWin(QMainWindow):
         self._build_ui()
 
         # TODO(capa-5): reconectar al motor real. Engine chosen per device by create_worker()
-        # (synthetic -> MockStreamWorker, hardware -> NullStreamWorker); each engine owns
+        # (synthetic -> MockStreamWorker, hardware -> CaptureStreamWorker); each engine owns
         # its threads, so no QThread/moveToThread is needed here.
         self._apply_device_selection()
 
@@ -1299,6 +1311,10 @@ class MainWin(QMainWindow):
         want_mock = device_id is None
         old = self.dsp_worker
         if old is not None and bool(old.synthetic_mode) == want_mock:
+            # TODO(capa-5): cambiar de dispositivo de hardware durante la captura la detiene
+            if old.isRunning() and device_id != self._active_device_id:
+                logger.info("Device change requested during a session; stopping capture first")
+                self.stop_capture()
             old.set_input_device(device_id)
             self._active_device_id = device_id
             return
@@ -1315,6 +1331,7 @@ class MainWin(QMainWindow):
                 old.waveform_ready,
                 old.drift_updated,
                 old.capture_health,
+                old.level_updated,  # TODO(capa-5): señal de nivel (fase 1b)
                 old.error_occurred,
                 old.session_finished,
             ):
@@ -1327,6 +1344,7 @@ class MainWin(QMainWindow):
         worker.waveform_ready.connect(self._on_waveform_ready)
         worker.drift_updated.connect(self._on_drift_updated)
         worker.capture_health.connect(self._on_capture_health)
+        worker.level_updated.connect(self._on_level_updated)  # TODO(capa-5): nivel (fase 1b)
         worker.error_occurred.connect(self._on_worker_error)
         worker.session_finished.connect(self._on_session_finished)
         # MOCK-only extra (outside BaseStreamWorker): drift sigma / confidence
@@ -1384,8 +1402,14 @@ class MainWin(QMainWindow):
     def _refresh_session_status_label(self) -> None:
         """Render the session state label in the status bar."""
         key = self._STATE_TR_KEYS.get(self._capture_state, "status_idle")
+        color = self._STATE_COLORS.get(self._capture_state, "")
+        # TODO(capa-5): con hardware solo se captura; la etiqueta no dice "MIDIENDO"
+        if self._capture_state in ("ESTABILIZANDO", "MIDIENDO") and isinstance(
+            self.dsp_worker, CaptureStreamWorker
+        ):
+            key, color = "capturing_no_measure", "color: #00e5ff;"
         self.lbl_session_status.setText(self.translator.tr(key))
-        self.lbl_session_status.setStyleSheet(self._STATE_COLORS.get(self._capture_state, ""))
+        self.lbl_session_status.setStyleSheet(color)
 
     def _on_caliber_changed(self, caliber_name: str) -> None:
         """Update BPH and Lift Angle automatically when a caliber preset is selected."""
@@ -1896,6 +1920,11 @@ class MainWin(QMainWindow):
     ) -> Path | None:
         """Record test-duration audio and offer to save it (default FLAC if supported, else Vorbis)."""
         # TODO(capa-5): reconectar al motor real
+        # TODO(capa-5): grabación WAV desde hardware fuera de la fase 1b
+        if isinstance(self.dsp_worker, CaptureStreamWorker):
+            logger.warning("Audio recording from a hardware device is not available yet")
+            self.statusBar().showMessage(self.translator.tr("recording_hw_unavailable"), 6000)
+            return None
         if file_path is None and self.dsp_worker is not None and self.dsp_worker.isRunning():
             self._save_audio_on_finish = True
             logger.info(
@@ -2113,6 +2142,19 @@ class MainWin(QMainWindow):
         self.osc_envelope_curve.setData([], [])
         self.osc_impulse_markers.setData([], [])
         self.audio_waveform_curve.setData([], [])
+        # TODO(capa-5): barra de calidad por nivel hasta que llegue telemetría; con hardware
+        # (sin medición) las cifras quedan en su estado vacío
+        self._telemetry_seen = False
+        self._perf_waveform.reset()
+        self._perf_level.reset()
+        self.prg_snr.setValue(0)
+        self.prg_snr.setStyleSheet("")
+        self.lbl_snr_value.setText("-- dB")
+        if isinstance(self.dsp_worker, CaptureStreamWorker):
+            for card in (self.card_rate, self.card_beat_error, self.card_amplitude):
+                card.set_value("---.-")
+            self.lbl_drift_status.setText("")
+            self.lbl_stat_drift_val.setText("")
 
         duration_s = float(self.spn_duration.value())
         self.paper_tape_plot.setXRange(0.0, max(10.0, duration_s))
@@ -2233,6 +2275,9 @@ class MainWin(QMainWindow):
         secs = elapsed_s % 60.0
         self.lbl_stat_elapsed_val.setText(f"{mins:02d}:{secs:04.1f}")
 
+        if not self._telemetry_seen:  # TODO(capa-5): la telemetría toma la barra de calidad
+            self._telemetry_seen = True
+            self.prg_snr.setStyleSheet("")
         raw_snr_db = float(getattr(telemetry, "snr_db", 0.0))
         if raw_snr_db <= 0.0 and confidence > 0.0:
             raw_snr_db = 38.0 * confidence
@@ -2368,8 +2413,29 @@ class MainWin(QMainWindow):
 
     def _on_waveform_ready(self, time_axis: np.ndarray, waveform: np.ndarray) -> None:
         """Slot updating the real-time acoustic waveform curve from the engine."""
+        t0 = time.perf_counter()  # TODO(capa-5): instrumentación de rendimiento (fase 1b)
         if time_axis is not None and waveform is not None and len(time_axis) > 0:
             self.audio_waveform_curve.setData(time_axis, waveform)
+        self._perf_waveform.record(t0)
+
+    _LEVEL_BAR_COLORS: dict[str, str] = {"ok": "#00e676", "low": "#ffab00", "bad": "#ff1744"}
+
+    def _on_level_updated(self, peak_dbfs: float, rms_dbfs: float, saturated: bool) -> None:
+        """Signal-quality bar by input level/saturation only (no SNR, no detection quality).
+
+        TODO(capa-5): la barra pasará a reflejar la calidad de detección cuando haya telemetría.
+        """
+        t0 = time.perf_counter()
+        if self._capture_state == "INACTIVO" or self._telemetry_seen:
+            return
+        pct, kind = level_to_quality(peak_dbfs, rms_dbfs, saturated)
+        self.prg_snr.setValue(pct)
+        self.prg_snr.setStyleSheet(
+            f"QProgressBar::chunk {{ background-color: {self._LEVEL_BAR_COLORS[kind]};"
+            " border-radius: 3px; }"
+        )
+        self.lbl_snr_value.setText(level_text(peak_dbfs, rms_dbfs, saturated))
+        self._perf_level.record(t0)
 
     def _on_drift_updated(
         self,
