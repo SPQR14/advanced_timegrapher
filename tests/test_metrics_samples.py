@@ -61,10 +61,10 @@ def _band_distance(value: float, band: tuple[float, float]) -> float:
 _cache: dict[str, MeasureResult] = {}
 
 
-def _measure(name: str, quartz: bool = False) -> MeasureResult:
+def _measure(name: str, quartz: bool = False, bph: float = 57600) -> MeasureResult:
     if name not in _cache:
         if quartz:
-            _cache[name] = measure_file(SAMPLES / name, 57600, quartz=True)
+            _cache[name] = measure_file(SAMPLES / name, bph, quartz=True)
         else:
             bph, la, _, _ = FILES[name]
             _cache[name] = measure_file(SAMPLES / name, bph, la)
@@ -137,10 +137,28 @@ def test_not_worse_than_the_phase2_prototype(name: str) -> None:
 
 def test_bulova_quartz_reproduces_the_card_drift() -> None:
     _need("bulova_nm10.flac")
-    m = _measure("bulova_nm10.flac", quartz=True).metrics
+    m = _measure("bulova_nm10.flac", quartz=True, bph=57600).metrics
     assert m.rate_s_per_day == pytest.approx(-0.72, abs=0.3)
     assert math.isnan(m.beat_error_ms) and math.isnan(m.amplitude_deg)
     assert not m.rate_trend_flag
+
+
+# Quartz references: the rate a quartz shows here is the sound-card drift (+8.3 ppm according
+# to tg, i.e. -0.72 s/d) plus the quartz's own error, specified as +-15 s/month (0.49 s/d)
+CARD_DRIFT_S_PER_DAY = -0.72
+QUARTZ_TOL_S_PER_DAY = 15.0 / 30.4
+
+
+@pytest.mark.parametrize(("name", "bph"), [("tmi_vh31.flac", 14400), ("citizen_H874.flac", 3600)])
+def test_quartz_reference_rate(name: str, bph: float) -> None:
+    """|rate - card drift| <= quartz specification + 2 x the reported uncertainty."""
+    if not (SAMPLES / name).is_file():
+        pytest.skip(f"no está {SAMPLES / name}")
+    m = _measure(name, quartz=True, bph=bph).metrics
+    assert math.isfinite(m.rate_s_per_day)
+    bound = QUARTZ_TOL_S_PER_DAY + 2.0 * m.rate_uncertainty_s_per_day
+    assert abs(m.rate_s_per_day - CARD_DRIFT_S_PER_DAY) <= bound, (m.rate_s_per_day, bound)
+    assert math.isnan(m.beat_error_ms) and math.isnan(m.amplitude_deg)
 
 
 @pytest.mark.parametrize("name", ["miyota_9015.flac", "hamilton_h50new.flac"])

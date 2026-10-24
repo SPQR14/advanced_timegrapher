@@ -416,3 +416,142 @@ De las sugerencias de 6.7, estas entraban en el alcance de la fase 3:
   - El nivel 0.35 a 21600 BPH queda justo en el umbral de 20° (16–23° según el refresco) y
     pasa a un test propio con la cota documentada: amplitud media a ±3 %, que se cumple con
     +2.7 %.
+
+## 7. Evaluación de precisión con referencias de cuarzo (TMI VH31 y Citizen H874)
+
+### 7.1 Referencias y criterio
+
+| Grabación | Reloj | Pasos | Especificación | Toma |
+|---|---|---|---|---|
+| `bulova_nm10.flac` | Bulova (cuarzo) | 16/s (57600 "BPH") | — | 300 s, pico −3.5 dBFS |
+| `tmi_vh31.flac` | TMI VH31 | 4/s (14400) | ±15 s/mes | 300 s, **saturada** (930 muestras) |
+| `citizen_H874.flac` | Citizen H874 | 1/s (3600) | ±15 s/mes sin sincronizar | 300 s, **saturada** (591 muestras) |
+
+**Por qué un cuarzo sirve para medir la precisión:**
+
+- Sus pasos son regulares al microsegundo. Todo el jitter que medimos en un cuarzo es **ruido
+  de nuestra medida**.
+- La marcha que muestra aquí es la deriva de la tarjeta de sonido (+8.3 ppm según tg, es decir
+  −0.72 s/d; mismo micrófono y tarjeta para todas las tomas) más el error del propio cuarzo
+  (±15 s/mes = ±0.49 s/d).
+- Por tanto, tres cuartos independientes deben coincidir en −0.72 s/d dentro de ±0.49 s/d.
+
+**Criterio de los tests:** |marcha − (−0.72)| ≤ 0.49 + 2 × la incertidumbre reportada.
+
+### 7.2 Pruebas de la fase 2 sobre las referencias nuevas
+
+| Grabación | Antes | Después de los arreglos de 7.3 |
+|---|---|---|
+| TMI VH31 | Engancha; 1200 de 1200 pasos; σ del residuo de 3.4 ms | Igual (arreglos neutros) |
+| Citizen H874 | **No engancha nunca** ("sin enganche tras 5 s") | Engancha a 8.25 s; 300 de 300 pasos; invariante al troceado |
+
+`check_samples` da INFO en los tres cuartos (son informativos) y OK en los cuatro mecánicos.
+Los tests nuevos de la fase 2 (enganche, conteo e invarianza en cuarzo) pasan.
+
+### 7.3 Defectos de la fase 2 encontrados y corregidos (necesarios para poder probar)
+
+1. **Ventana de enganche fija de 2 s:**
+   - a 1 paso por segundo contiene un solo pliegue tic+tac y nunca reúne las 3 coincidencias
+     que exige el enganche;
+   - **arreglo:** la ventana es ahora la mayor entre `acquisition_s` y 8 periodos de batimiento;
+     por encima de 7200 BPH no cambia nada.
+2. **Invarianza al troceado rota a baja frecuencia:**
+   - al enganchar se examinan hacia atrás los batimientos de toda la ventana de enganche
+     (ahora 8 s), pero la envolvente solo se conservaba ~1.75 s y la señal 1 s;
+   - en modo por bloques esos batimientos se quedaban sin `t_fine` y sin la comprobación de
+     saturación;
+   - **arreglo:** el recorte de los búferes conserva la ventana de enganche más el margen de la
+     plantilla.
+3. **Desfase de la ventana de la plantilla sin acotar:**
+   - si el ancla salta mucho (P3 del Citizen, hasta 60 ms), la ventana podía caer fuera del
+     audio disponible;
+   - **arreglo:** se acota a la ventana de búsqueda del ancla (±10 % del periodo).
+
+Los tres arreglos dejan las cifras de los relojes mecánicos **idénticas** (verificado). Los 7
+archivos son invariantes al troceado (bloques de 4096, de 1024 y de una vez).
+
+### 7.4 Resultados de las métricas en los cuartos
+
+| Cuarzo | Marcha (s/d) | Δ frente a −0.72 | Criterio | σ por paso medida (real ≈ 0) | `t_fine` | Tiempo real |
+|---|---|---|---|---|---|---|
+| Bulova (16/s) | −0.71 ± 0.005 | **+0.01** | ✅ | 243 / 381 µs | 99 % | 99× |
+| Citizen H874 (1/s) | −0.74 ± 0.12 | **−0.02** | ✅ | 945 / 903 µs | 59 % | 161× |
+| TMI VH31 (4/s) | +0.97 ± 0.60 | +1.69 | ⚠️ en el límite (cota 1.69) | 3172 / 3517 µs | 74 % | 129× |
+
+**Dispersión real de la marcha entre ventanas, comparada con la σ que declara cada ventana**
+(en un cuarzo la marcha es constante, así que toda la dispersión es ruido de medida):
+
+| Cuarzo | Ventanas de 10 s | Ventanas de 30 s | Ventanas de 60 s |
+|---|---|---|---|
+| Bulova | 1.10 frente a 0.61 s/d (×1.8) | 0.22 frente a 0.13 (×1.7) | 0.06 frente a 0.05 (×1.4) |
+| Citizen | — (menos de 10 pasos por paridad) | 7.06 frente a 1.79 (×3.9) | 1.02 frente a 0.60 (×1.7) |
+| TMI VH31 | 35.7 frente a 9.3 (×3.8) | 8.4 frente a 2.5 (×3.4) | 4.7 frente a 1.0 (×4.8) |
+
+Además, **el aviso de tendencia no salta en ninguno de los tres cuartos**, lo correcto con
+marcha constante (tendencias: Bulova −0.008 ± 0.006, Citizen +0.11 ± 0.30 y VH31 −1.1 ± 2.1
+s/d por minuto).
+
+### 7.5 Evaluación de la precisión de la fase 3
+
+1. **Exactitud de la marcha en tomas largas: muy buena cuando el detector alinea bien.**
+   - Dos cuartos independientes (16 y 1 paso por segundo) reproducen la deriva de la tarjeta
+     medida por tg con 0.01 y 0.02 s/d de diferencia (≈ 0.2 ppm).
+   - Es la mejor validación de la cadena completa (detector, `t_fine`, regresión ponderada y
+     conversión a s/d).
+   - La incertidumbre reportada (la mayor entre covarianza y bloques) es coherente con esos
+     errores.
+2. **Incertidumbre de las ventanas: subestimada 1.4–4.8 veces.**
+   - Cada ventana declara la σ de covarianza, que supone ruido blanco. El ruido temporal real
+     está correlacionado.
+   - Afecta a la marcha por ventanas, que se mostrará en la GUI, no a la cifra global.
+   - **Corrección necesaria (fase 3):** escalar la σ de cada ventana por el cociente entre la σ
+     por bloques y la de covarianza de la toma, o estimarla por bloques dentro de la ventana.
+3. **Ruido de medida por paso: de 0.24 a 3.5 ms según la señal.**
+   - En un cuarzo el jitter real es ≈ 0, así que eso es lo que añade nuestra cadena.
+   - Por tanto, el jitter de 110–220 µs de la paridad limpia de los mecánicos es **sobre todo
+     ruido de medida**, no del reloj.
+   - El error de batimiento y la amplitud salen bien porque promedian cientos de batimientos y
+     porque el error de batimiento se mide en plantillas. Pero la precisión por batimiento no es
+     la de un cronocomparador comercial (decenas de µs).
+4. **El TMI VH31 expone un defecto de robustez del detector (fase 2):**
+   - su plantilla queda borrosa (~20 ms, sin un inicio definido) y el residuo de `t_fine` deriva
+     ±5 ms;
+   - la cadena de alineación (cada paso se alinea con la media de los anteriores) **se va a la
+     deriva** cuando el impulso no tiene una estructura nítida y estable;
+   - en los mecánicos, el inicio vivo de la plantilla compensa esa deriva del marco (ver 6.8);
+     en el VH31, no;
+   - su marcha queda justo en el límite del criterio. No es una medida fiable.
+5. **El detector asume la estructura de un escape.**
+   - P1, P2 y P3, y las ventanas de búsqueda derivadas del ángulo de levantamiento y del rango
+     de amplitud, no aplican a un motor paso a paso.
+   - En el Citizen, P3 salta hasta 60 ms y la plantilla corta el impulso (ventana posterior de
+     6 ms). La marcha sale bien porque la plantilla se alinea igualmente, pero solo hay
+     `t_fine` en el 59 % de los pasos.
+6. **Saturación (verificado):** las dos tomas nuevas saturan (591 y 930 muestras), pero ningún
+   paso queda marcado `SATURATED`, y es lo correcto.
+   - La saturación son **episodios aislados**, no periódicos: 2 en los 300 s del VH31 y 1 en el
+     Citizen.
+   - Tienen mucha energía por debajo de 1 kHz (83 % y 47 %), compatible con un golpe o un roce,
+     no con el sonido del reloj.
+   - Caen lejos de los pasos detectados (20–220 ms). El pico de los pasos no pasa de −1.1 y
+     −2.7 dBFS.
+
+### 7.6 Conclusión
+
+- **Mecánicos (el objetivo del producto):** la fase 3 cumple. Marcha, error de batimiento y
+  amplitud quedan dentro de la banda de tg y WAM, y los cálculos están validados en sintético
+  con incertidumbre calibrada.
+- **Cuartos:** la marcha de tomas largas tiene una exactitud de ~0.02 s/d cuando la alineación
+  funciona.
+- **Antes de seguir conviene robustecer:**
+  1. **Fase 3, rápido:** incertidumbre de las ventanas inflada por el cociente bloques /
+     covarianza (o estimada por bloques). Hoy subestima 1.4–4.8 veces.
+  2. **Fase 2, necesario antes de la fase 4** (la calibración del reloj de la tarjeta usará
+     cuartos como referencia):
+     - **anclar el marco de la plantilla** al punto físico (recentrar los segmentos en cada
+       refresco), para que la alineación no vaya a la deriva en impulsos sin estructura nítida
+       (VH31);
+     - un **modo cuarzo** en el detector: un solo evento por paso, sin ventanas de
+       levantamiento y con la ventana de la plantilla adaptada a la duración del impulso.
+  3. Opcional: estudiar por qué el ruido por paso es de 0.24 ms incluso en la señal más limpia
+     (Bulova), para acercarse a las decenas de µs de un cronocomparador comercial.

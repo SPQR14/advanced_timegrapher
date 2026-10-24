@@ -18,7 +18,9 @@ name contains       BPH         LA     note
 c07 / h50 / hamilton  21600     50°    weak P1 (ETA C07)
 9015 / miyota       28800       51°    "normal" case
 4r36 / seiko        21600       53°    slow ramp before the tac drop
-nm10 / bulova       57600       —      quartz, informational only
+nm10 / bulova       57600       —      quartz 16/s, informational only
+vh31 / tmi          14400       —      quartz 4/s, informational only
+h874 / citizen      3600        —      quartz 1/s, informational only
 ==================  ==========  =====  ===============
 
 Verdict OK (non-informational files) when: count within +-1 % of the expected beats from
@@ -81,6 +83,11 @@ BUILTIN_TABLE: tuple[tuple[tuple[str, ...], CalibreConfig], ...] = (
     (("9015", "miyota"), CalibreConfig(28800, 51.0, False, "tabla: Miyota 9015")),
     (("4r36", "seiko"), CalibreConfig(21600, 53.0, False, "tabla: Seiko 4R36")),
     (("nm10", "bulova"), CalibreConfig(57600, None, True, "tabla: Bulova cuarzo (informativo)")),
+    (("vh31", "tmi"), CalibreConfig(14400, None, True, "tabla: TMI VH31 cuarzo 4/s (informativo)")),
+    (
+        ("h874", "citizen"),
+        CalibreConfig(3600, None, True, "tabla: Citizen H874 cuarzo 1/s (informativo)"),
+    ),
 )
 
 

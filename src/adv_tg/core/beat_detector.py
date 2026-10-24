@@ -170,7 +170,8 @@ class BeatDetectorConfig:
         weak_snr_db: Below this anchor SNR the beat is flagged WEAK (default 20 dB).
         phase_tolerance: Anchor search half-window as a fraction of P (default 0.1).
         period_search: Acquisition searches periods within +- this fraction (0.06).
-        acquisition_s: Window folded to acquire the phase (default 2 s).
+        acquisition_s: Window folded to acquire the phase (default 2 s; at least 8 beat
+            periods are used, so below 7200 BPH the window is longer).
         acquisition_min_fraction: Fraction of expected beats the cluster must hold (0.6).
         model_beats: Beats in the phase-model regression (default 16).
         outlier_sigma: TIMING_OUTLIER beyond this many robust sigmas of the model (5).
@@ -529,7 +530,10 @@ class BeatDetector:
         self.pre = 0.5 * ms
         self.dropout_min = max(1, int(round(c.dropout_min_ms * ms)))
         self.W_noise = int(round(c.noise_window_s * fs))
-        self.W_acq = int(round(c.acquisition_s * fs))
+        # at least 8 beat periods (4 tic+tac folds): at low beat rates (a 1 Hz quartz,
+        # 3600 BPH) a fixed 2 s window holds a single fold and could never gather the 3
+        # members the lock needs; above 7200 BPH this changes nothing
+        self.W_acq = int(round(max(c.acquisition_s, 8.0 * beat_period_s(c.bph)) * fs))
         self.tpl_pre = int(math.ceil(self.tmax + 2.0 * ms))
         self.tpl_post = int(math.ceil(c.template_post_ms * ms))
         self.tpl_search = max(1, int(round(c.template_search_ms * ms)))
@@ -869,9 +873,16 @@ class BeatDetector:
         return out
 
     def _trim(self) -> None:
-        keep = min(self._next_cell * self.S - self.margin, int(self._cand_end) - int(self.fs))
+        # after a lock the beats of the whole acquisition window are examined retroactively
+        # (and need their envelope for the template and their raw samples for the saturation
+        # flag): keep that window plus the template span, or the result would depend on the
+        # chunking (it did for the 8 s window of a 1/s quartz)
+        back = self.W_acq + self.tpl_pre + self.tpl_search + self.S
+        keep = min(
+            self._next_cell * self.S - self.margin, int(self._cand_end) - max(int(self.fs), back)
+        )
         self._raw.trim(keep)
-        self._env.trim(self._cand_cell * self.S - self.W_noise - 3 * self.S)
+        self._env.trim(self._cand_cell * self.S - max(self.W_noise, back) - 3 * self.S)
         self._cands.trim(self._cand_end - self.W_acq - self.fs)
         while self._zones and self._zones[0][1] < self._env.start:
             self._zones.popleft()
@@ -1066,7 +1077,7 @@ class BeatDetector:
         )
 
     def _warn_no_lock(self, end: float) -> None:
-        if self._ever_locked or end - self._first_index < 5.0 * self.fs:
+        if self._ever_locked or end - self._first_index < max(5.0 * self.fs, 2.0 * self.W_acq):
             return
         if any(w.startswith("sin enganche") for w in self._warnings):
             return
@@ -1427,7 +1438,12 @@ class BeatDetector:
                 return math.nan
             center = tp
         else:
-            center = tp + float(np.median(t.off)) if t.off else tp
+            # the offset is clamped to the anchor search half-window: the tracking loop only
+            # examines a beat once the audio up to tp + tol + (lift + post) has arrived, so a
+            # clamped window is always available whatever the chunking (chunk invariance)
+            off = float(np.median(t.off)) if t.off else 0.0
+            tol = self._tol()
+            center = tp + min(max(off, -tol), tol)
         ci = int(round(center))
         s0, s1 = ci - pre - s, ci + post + s
         if s0 < self._env.start or s1 > self._env.end or self._in_dropout(s0, s1):

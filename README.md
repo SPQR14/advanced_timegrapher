@@ -212,7 +212,8 @@ python -m adv_tg.tools.check_samples --self-test     # sin grabaciones: genera 3
 
 `check_samples` asigna el calibre por el nombre del archivo (`c07`/`h50`/`hamilton` → 21600
 BPH, LA 50°; `9015`/`miyota` → 28800 BPH, LA 51°; `4r36`/`seiko` → 21600 BPH, LA 53°;
-`nm10`/`bulova` → cuarzo, informativo) o
+`nm10`/`bulova`, `vh31`/`tmi` y `h874`/`citizen` → cuartos de 16, 4 y 1 paso por segundo,
+informativos) o
 por un manifiesto JSON (`[{"pattern": "c07", "bph": 21600, "lift_angle": 50}]`), repite la
 detección con otro troceado para comprobar la invarianza y guarda una tabla Markdown en
 `logs/check_samples_<fecha>.md` con veredicto OK/REVISAR por archivo (conteo ±1 %, P3 en
@@ -309,7 +310,11 @@ Validación (detalle en [`docs/fase3_resultados.md`](docs/fase3_resultados.md)):
   ±0.15 ms, ±12°) salvo la marcha del 4R36, cuya grabación tiene otra marcha que la medida en
   vivo.
 - **Rendimiento:** ~110–128× el tiempo real con detector y métricas en relojes mecánicos y
-  ~100× con el cuarzo (16 pasos por segundo).
+  ~100–160× con cuartos.
+- **Cuartos de referencia** (Bulova 16/s, Citizen H874 1/s, TMI VH31 4/s; tomas de 300 s): el
+  Bulova y el Citizen reproducen la deriva de la tarjeta medida por tg (−0.72 s/d) con 0.01 y
+  0.02 s/d de diferencia. El VH31 queda en el límite (+0.97 ± 0.60) porque su plantilla se va a
+  la deriva: pendiente de robustecer antes de la fase 4 (`docs/fase3_resultados.md`, sección 7).
 
 ## Instalación
 
