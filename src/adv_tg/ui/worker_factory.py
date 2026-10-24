@@ -6,8 +6,12 @@ from PyQt6.QtCore import QObject
 
 from adv_tg.core.models import WatchConfig
 from adv_tg.mock.worker import MockStreamWorker
+from adv_tg.ui.capture_worker import CaptureStreamWorker
 from adv_tg.ui.null_engine import NullStreamWorker
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
+from adv_tg.utils.debugger import Debugger
+
+_dbg = Debugger.get(__name__)
 
 
 def create_worker(
@@ -17,14 +21,22 @@ def create_worker(
     seed: int | None = None,
     parent: QObject | None = None,
 ) -> BaseStreamWorker:
-    """Return ``MockStreamWorker`` for the synthetic source (``None``), else ``NullStreamWorker``.
+    """Return the engine for ``device_id``.
 
-    TODO(capa-5): return the real worker for hardware devices.
+    Synthetic source (``None``) -> ``MockStreamWorker``; hardware -> ``CaptureStreamWorker``
+    (raw audio, no measurement yet). ``NullStreamWorker`` is only a fallback if the capture
+    worker cannot be created.
+
+    TODO(capa-5): return the measuring worker for hardware devices.
     """
     worker: BaseStreamWorker
     if device_id is None:
         worker = MockStreamWorker(config, seed=seed, parent=parent)
     else:
-        worker = NullStreamWorker(config, parent=parent)
+        try:
+            worker = CaptureStreamWorker(config, parent=parent)
+        except Exception:
+            _dbg.logger.exception("CaptureStreamWorker no disponible; se usa NullStreamWorker")
+            worker = NullStreamWorker(config, parent=parent)
     worker.set_input_device(device_id)
     return worker

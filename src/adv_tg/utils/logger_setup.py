@@ -33,6 +33,9 @@ class LoggerSetup:
     LOG_MAX_BYTES: int = 5 * 1024 * 1024
     LOG_BACKUP_COUNT: int = 3
     DEBUG_ENV_VAR: str = "ADV_TG_DEBUG"
+    # Name of the log file (without ``.log``). The isolated capture process sets it to
+    # ``adv_tg_capture`` so it never shares a file/handler with the GUI process.
+    LOG_NAME_ENV_VAR: str = "ADV_TG_LOG_NAME"
     _configured: bool = False
 
     @staticmethod
@@ -40,6 +43,15 @@ class LoggerSetup:
         """Console level: DEBUG when ``ADV_TG_DEBUG`` is truthy, otherwise INFO."""
         value = os.environ.get(LoggerSetup.DEBUG_ENV_VAR, "").strip().lower()
         return logging.DEBUG if value in ("1", "true", "yes", "on") else logging.INFO
+
+    @staticmethod
+    def log_file() -> Path:
+        """Log file of this process: ``logs/<ADV_TG_LOG_NAME or adv_tg>.log``."""
+        raw = os.environ.get(LoggerSetup.LOG_NAME_ENV_VAR, "").strip()
+        safe = "".join(c for c in raw if c.isalnum() or c in "-_")
+        if not safe:
+            return LoggerSetup.LOG_FILE
+        return LoggerSetup.LOG_DIR / f"{safe}.log"
 
     @staticmethod
     def setup_logger(name: str = "adv_tg") -> logging.Logger:
@@ -67,10 +79,11 @@ class LoggerSetup:
         # Defines log directory and creates it if it doesn't exist
         LoggerSetup.LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+        log_file = LoggerSetup.log_file()
         root_logger = logging.getLogger()
         has_unified_handler = any(
             isinstance(h, logging.FileHandler)
-            and Path(getattr(h, "baseFilename", "")).resolve() == LoggerSetup.LOG_FILE.resolve()
+            and Path(getattr(h, "baseFilename", "")).resolve() == log_file.resolve()
             for h in root_logger.handlers
         )
 
@@ -84,7 +97,7 @@ class LoggerSetup:
                 datefmt="%d-%m-%Y %H:%M:%S",
                 handlers=[
                     RotatingFileHandler(
-                        LoggerSetup.LOG_FILE,
+                        log_file,
                         maxBytes=LoggerSetup.LOG_MAX_BYTES,
                         backupCount=LoggerSetup.LOG_BACKUP_COUNT,
                         encoding="utf-8",
@@ -107,7 +120,7 @@ class LoggerSetup:
         logger.debug(
             "Logger '%s' initialized and attached to unified log '%s'",
             name,
-            LoggerSetup.LOG_FILE.name,
+            log_file.name,
         )
 
         return logger

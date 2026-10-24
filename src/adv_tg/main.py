@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import faulthandler
+import multiprocessing
 import platform
 import sys
 from collections.abc import Sequence
@@ -64,6 +65,8 @@ def _log_environment() -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Start the Qt application and return its exit code."""
+    # Needed by the isolated capture child ("spawn") in frozen builds (PyInstaller).
+    multiprocessing.freeze_support()
     args = list(sys.argv if argv is None else argv)
     _install_excepthook()
     _enable_faulthandler()

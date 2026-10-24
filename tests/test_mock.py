@@ -25,12 +25,16 @@ def test_mock_emits_telemetry_and_finishes(qtbot) -> None:
     waveforms: list[int] = []
     worker.telemetry_ready.connect(received.append)
     worker.waveform_ready.connect(lambda t, y: waveforms.append(len(y)))
+    levels: list[tuple[float, float, bool]] = []
+    worker.level_updated.connect(lambda p, r, s: levels.append((p, r, s)))
 
     worker.start_stream()
     assert worker.isRunning()
     qtbot.wait(2000)
     assert len(received) >= 6, f"only {len(received)} telemetry updates in 2 s"
     assert len(waveforms) >= 30
+    assert len(levels) >= 15
+    assert all(-30.0 < p < -1.0 and r < p and not s for p, r, s in levels)
     last = received[-1]
     assert isinstance(last, BeatTelemetry)
     assert last.beats and len(last.beats[-1].raw_waveform) > 0
@@ -70,9 +74,12 @@ def test_beat_delta_t_is_realistic() -> None:
 
 
 def test_factory_and_null_engine(qtbot) -> None:
+    from adv_tg.ui.capture_worker import CaptureStreamWorker
+
     assert isinstance(create_worker(None), MockStreamWorker)
-    null = create_worker(3)
-    assert isinstance(null, NullStreamWorker)
+    hw = create_worker(3)
+    assert isinstance(hw, CaptureStreamWorker) and not hw.isRunning()
+    null = NullStreamWorker()  # kept only as a fallback engine
     errors: list[str] = []
     null.error_occurred.connect(errors.append)
     with qtbot.waitSignal(null.session_finished, timeout=1000):
@@ -92,6 +99,7 @@ def test_base_contract_is_strict() -> None:
         "waveform_ready",
         "drift_updated",
         "capture_health",
+        "level_updated",
         "error_occurred",
         "session_finished",
         "set_input_device",

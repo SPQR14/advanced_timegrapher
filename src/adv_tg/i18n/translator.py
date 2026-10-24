@@ -90,6 +90,8 @@ class Translator:
             "mock_badge": "MOCK · SIMULATED DATA",
             "mock_no_hardware": "No hardware input device available: MOCK stays on",
             "no_recording_available": "No recording available: measurement engine not implemented",
+            "capturing_no_measure": "CAPTURING (no measurement)",
+            "recording_hw_unavailable": "Recording from a hardware device is not available yet",
         },
         "es": {
             "app_title": "Advanced Timegrapher — Banco de Pruebas DSP Horológico",
@@ -168,6 +170,8 @@ class Translator:
             "mock_badge": "MOCK · DATOS SIMULADOS",
             "mock_no_hardware": "No hay dispositivos de entrada de hardware: el MOCK sigue activo",
             "no_recording_available": "No hay grabación: el motor de medición aún no está implementado",
+            "capturing_no_measure": "CAPTURANDO (sin medición)",
+            "recording_hw_unavailable": "Grabación desde dispositivo de hardware no disponible aún",
         },
     }
 
