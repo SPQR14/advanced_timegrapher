@@ -141,6 +141,8 @@ def synth_watch(
     tail_modes: int = 0,
     odd_drop_lobe: tuple[float, float, float] | None = None,
     odd_pre_ramp: tuple[float, float] | None = None,
+    odd_jitter_us: float = 0.0,
+    rate_drift_s_per_day_per_min: float = 0.0,
 ) -> tuple[NDArray[np.float64], Truth]:
     """Generate a watch signal and its exact truth.
 
@@ -172,6 +174,11 @@ def synth_watch(
         odd_pre_ramp: ``(duration_ms, level)``: on odd ``k`` a slowly rising, noise-like
             ramp (level relative to P3) ends at the true P3 onset, as the friction before the
             drop of the Seiko 4R36 tac. The true P3 is still the onset of the drop itself.
+        odd_jitter_us: Extra Gaussian jitter (std, added in quadrature to ``jitter_us``) on
+            odd ``k`` only: one parity noisier than the other, as the H-50 / 4R36 tac.
+        rate_drift_s_per_day_per_min: The rate changes linearly with time,
+            ``rate(t) = rate_s_per_day + drift * t / 60`` (t in s from the start); each beat
+            period follows the rate at its own instant (the truth stays exact).
     """
     rng = np.random.default_rng(seed)
     n = int(round(seconds * fs))
@@ -189,10 +196,19 @@ def synth_watch(
 
     ks, p1s, p2s, p3s, removed = [], [], [], [], []
     k = 0
+    base = first  # phase of beat k without beat error / jitter (accumulates the drift)
+    nominal = beat_period_s(bph)
     while True:
-        t0 = first + k * period + 0.5 * be * (-1) ** k
+        t0 = base + 0.5 * be * (-1) ** k
+        if rate_drift_s_per_day_per_min:
+            rate_now = rate_s_per_day + rate_drift_s_per_day_per_min * base / 60.0
+            base += nominal / (1.0 + rate_now / 86400.0)
+        else:
+            base = first + (k + 1) * period
         if jitter_us:
             t0 += rng.normal(0.0, jitter_us * 1e-6)
+        if odd_jitter_us and k % 2 == 1:
+            t0 += rng.normal(0.0, odd_jitter_us * 1e-6)
         if t0 + t_lift + duration > seconds:
             break
         silent = miss_prob > 0 and rng.uniform() < miss_prob

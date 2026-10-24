@@ -59,7 +59,11 @@ Pipeline
    predicted instant is cross-correlated with the template of its parity (``k`` even / odd;
    median of the last ``template_beats`` aligned beats), only over the drop burst. The P3
    onset is measured once on the template (backward crossing of ``template_p3_fraction``
-   of the burst maximum) and carried to the beat: ``Beat.t_fine``. The P1 onset is measured
+   of the burst maximum) and carried to the beat: ``Beat.t_fine``. The onset is the live one
+   of the current template: the template frame drifts slowly on real takes and the live
+   onset follows the physical point (freezing it was tried and broke the real beat errors).
+   The price is that on an ambiguous drop (slow ramp) ``t_fine`` jumps a little when the
+   onset moves, which adds rate noise (synthetic ramp at 21600 BPH: rms 0.14 s/d). The P1 onset is measured
    on the template too (first rise above the template noise). Averaging removes the
    beat-to-beat changes of which lobe of the drop is loudest, so tic and tac are timed at
    the same physical point (no spurious beat error) with much less jitter than the per-beat
@@ -206,7 +210,13 @@ class BeatDetectorConfig:
         template_amp_mismatch_deg: The balance has the same amplitude in tic and tac. When the
             two templates (level onsets) imply amplitudes further apart than this (default
             20°), the level/front combination whose amplitudes agree best is used for the
-            template t_lift. ``t_fine`` always uses the level onset (``onset_ref``).
+            template t_lift. ``t_fine`` always marks ``onset_ref`` (the level onset).
+        template_refresh_beats: Once a template holds ``template_beats`` beats, its median
+            (and onsets) are recomputed every this many beats of its parity instead of every
+            beat (default 2). The median of 24 beats moves little from one beat to the next
+            and it is the dominant cost at high beat rates (quartz, 16 beats/s): 2 is the
+            smallest value that keeps detector + metrics >= 90x real time on the quartz take
+            (84x -> 100x; mechanical ~100x -> ~110x). 1 = every beat.
         template_align_smooth_ms: Moving average applied to the envelope ONLY for the
             alignment (default 1 ms): it fuses the lobes of the drop into one burst, so the
             correlation does not jump between lobes whose relative level changes from beat to
@@ -260,6 +270,7 @@ class BeatDetectorConfig:
     template_front_fraction: float = 0.5
     template_front_lift_fraction: float = 0.4
     template_amp_mismatch_deg: float = 20.0
+    template_refresh_beats: int = 2
 
     def __post_init__(self) -> None:
         fs = float(self.sample_rate)
@@ -316,6 +327,8 @@ class BeatDetectorConfig:
             raise ValueError("model_beats debe ser >= 6")
         if not 0.0 < self.saturation_level <= 1.0:
             raise ValueError("saturation_level fuera de (0, 1]")
+        if self.template_refresh_beats < 1:
+            raise ValueError("template_refresh_beats debe ser >= 1")
         if not 1 <= self.template_min_beats <= self.template_beats:
             raise ValueError("se requiere 1 <= template_min_beats <= template_beats")
         for name in ("template_search_ms", "template_post_ms"):
@@ -463,6 +476,7 @@ class _Tpl:
         # template origin + pre minus the phase-model prediction, last beats (centres the
         # next search on the prediction instead of on the jittery per-beat anchor)
         self.off: deque[float] = deque(maxlen=16)
+        self.pending = 0  # beats added since the last median
 
 
 def _hilbert_fir(half: int) -> NDArray:
@@ -551,6 +565,7 @@ class BeatDetector:
         self._last_ref: float | None = None
         self._tlift2: deque[float] = deque(maxlen=32)
         self._tlift3: deque[float] = deque(maxlen=32)
+        self._tlift_cache: tuple[float | None] | None = None
         self._tl_obs: deque[float] = deque(maxlen=8)
         self._tl_fwd: deque[float] = deque(maxlen=8)
         self._after_gap = False
@@ -667,8 +682,8 @@ class BeatDetector:
         ``onset_p3`` (used for the t_lift) is the level onset of both templates unless their
         implied amplitudes disagree by more than ``template_amp_mismatch_deg``; then each
         parity takes the level or the steep-front onset, whichever combination makes the two
-        amplitudes agree best (ties prefer the level onset). ``onset_ref`` is always the
-        level onset, the point ``t_fine`` marks.
+        amplitudes agree best (ties prefer the level onset). ``onset_ref`` is the point
+        ``t_fine`` marks: the level onset of the current template.
         """
         methods = self._p3_methods()
         out: list[ParityTemplate | None] = []
@@ -1131,6 +1146,12 @@ class BeatDetector:
 
     # ------------------------------------------------------------------ tracking
     def _tlift_ref(self) -> float | None:
+        # cached: it is asked several times per beat and only changes when a t_lift is added
+        if self._tlift_cache is None:
+            self._tlift_cache = (self._tlift_ref_compute(),)
+        return self._tlift_cache[0]
+
+    def _tlift_ref_compute(self) -> float | None:
         if len(self._tlift3) >= 8:
             return float(np.median(self._tlift3))
         if len(self._tlift2) >= 8:
@@ -1358,6 +1379,7 @@ class BeatDetector:
             self._tlift2.append(p3 - p1)
             if not math.isnan(p2):
                 self._tlift3.append(p3 - p1)
+            self._tlift_cache = None
         # beat number
         if self._k_offset is None:
             if self._last_k is None:
@@ -1438,11 +1460,18 @@ class BeatDetector:
         li = int(round(lag))
         t.segs.append(seg[li : li + pre + post].copy())
         t.off.append(origin + pre - tp)
-        t.env = np.median(np.stack(t.segs), axis=0)
-        t.onset_p3, t.onset_p1 = self._template_onsets(t.env)
-        t.onset_front = self._front_onset(t.env)
+        t.pending += 1
+        full = len(t.segs) == c.template_beats
+        if t.env is None or not full or t.pending >= c.template_refresh_beats:
+            t.env = np.median(np.stack(t.segs), axis=0)
+            t.onset_p3, t.onset_p1 = self._template_onsets(t.env)
+            t.onset_front = self._front_onset(t.env)
+            t.pending = 0
         if len(t.segs) < c.template_min_beats or math.isnan(t.onset_p3):
             return math.nan
+        # the live onset, not a frozen one: the template frame drifts slowly on real takes
+        # (a frozen reference ended ~0.4 ms off on the Miyota and broke the beat error);
+        # the live onset follows the physical point
         return origin + t.onset_p3
 
     def _front_onset(self, tm: NDArray) -> float:

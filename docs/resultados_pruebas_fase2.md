@@ -784,10 +784,13 @@ Tres problemas en total. Los dos primeros ya se corrigieron en la sección 6.4.
 | Autocorrelación de la envolvente (sin detector) | −4.0 a −5.4 |
 | Cronocomparador de la habilidad `relojeria-dsp` (independiente) | −4.98 |
 
-- **La marcha sube dentro de la propia toma:** con P1, de −2.1 s/d (10–20 s) a +2.3 s/d
-  (20–30 s); con `t_fine`, de −0.9 a +4.0 s/d. El tramo final se acerca a las referencias.
-- **Interpretación:** el reloj se estaba asentando, recién dado cuerda o recién colocado,
-  durante los 30 s. tg y WAM lo midieron en otro momento.
+- ~~La marcha sube dentro de la propia toma~~ **(corregido en la fase 3):** las ventanas de
+  10 s parecían mostrar una subida (con P1, de −2.1 a +2.3 s/d), pero con un estimador robusto
+  (término cuadrático e incertidumbre por *jackknife* de bloques) la tendencia **no es
+  significativa**: +4.3 ± 3.0 s/d por minuto con P1 y +7.9 ± 10.9 con `t_fine`. Las ventanas de
+  10 s tienen ±2–3 s/d de ruido real (`docs/fase3_resultados.md`, 6.4).
+- **Interpretación:** lo sólido es que esta grabación tiene marcha negativa en toda su
+  duración. Lo más probable es que tg y WAM midieran el reloj en otro momento.
 - **No es la tarjeta:** el mismo equipo da la marcha correcta en el Miyota y el H-50, y el
   Bulova reproduce la deriva de +8.3 ppm.
 - **Para comparar la marcha del 4R36** hace falta una grabación más larga, de ≥ 2 min y tras
