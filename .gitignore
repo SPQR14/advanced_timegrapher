@@ -42,6 +42,14 @@ ui_*.h
 recordings/
 datasets/
 
+# Excepción: documentación y grabaciones de referencia en docs/ sí se versionan
+!docs/
+!docs/**/
+!docs/**/*.md
+!docs/**/*.flac
+# Bloqueos de LibreOffice/OpenOffice al editar los markdown
+.~lock.*#
+
 # Logs
 *.log
 logs/

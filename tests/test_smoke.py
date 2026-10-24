@@ -12,7 +12,9 @@ from adv_tg.utils.watch_db import load_watch_db
 
 
 def test_version() -> None:
-    assert adv_tg.__version__ == "0.1.0"
+    from importlib.metadata import version
+
+    assert adv_tg.__version__ == version("advanced-timegrapher")
 
 
 def test_watch_db_not_empty() -> None:

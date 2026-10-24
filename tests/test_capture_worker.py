@@ -253,7 +253,9 @@ def _readable_wavs() -> list[Path]:
     if not SAMPLES_DIR.is_dir():
         return []
     out = []
-    for p in sorted(SAMPLES_DIR.glob("*.wav")):
+    for p in sorted(SAMPLES_DIR.glob("*")):
+        if p.suffix.lower() not in (".wav", ".flac"):
+            continue
         try:
             read_wav_mono(p)
         except Exception:

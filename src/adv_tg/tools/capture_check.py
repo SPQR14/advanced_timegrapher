@@ -1,7 +1,7 @@
 """Capture-layer check: ``python -m adv_tg.tools.capture_check``.
 
-Captures audio from a PortAudio input device (or replays a WAV file in real time with
-``--file``) into a ``SampleStream`` and verifies that ingestion is complete:
+Captures audio from a PortAudio input device (or replays a WAV/FLAC file in real time
+with ``--file``) into a ``SampleStream`` and verifies that ingestion is complete:
 
 * ingest ratio >= 99 %,
 * largest gap between blocks < 3 nominal blocks,
@@ -20,6 +20,7 @@ import math
 import sys
 import threading
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -30,6 +31,7 @@ from numpy.typing import NDArray
 from adv_tg.audio.capture import AudioCapture, load_sounddevice
 from adv_tg.audio.process_capture import ProcessAudioCapture
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
+from adv_tg.utils.audio_files import SUPPORTED_EXTENSIONS, read_mono, write_audio
 from adv_tg.utils.debugger import Debugger
 
 _dbg = Debugger.get(__name__)
@@ -46,6 +48,7 @@ DEFAULT_FS = 48000
 REPLAY_DEFAULT_BLOCKSIZE = 1024
 BUFFER_MARGIN_S = 5.0
 MONITOR_BUFFER_S = 60.0
+REPLAY_DRAIN_S = 1.0  # max extra wait for the replay thread to deliver its last blocks
 
 
 class _Source(Protocol):
@@ -68,54 +71,45 @@ class _Source(Protocol):
     def close(self) -> None: ...
 
 
-# ---------------------------------------------------------------------- WAV helpers
+# ---------------------------------------------------------------------- audio helpers
+_SUBTYPES = {"int16": "PCM_16", "int24": "PCM_24", "float32": "FLOAT"}
+
+
 def read_wav_mono(path: Path | str) -> tuple[int, NDArray[np.float32]]:
-    """Read a WAV file as mono float32 in [-1, 1] (first channel if multichannel).
+    """Read a WAV or FLAC file as mono float32 in [-1, 1] (channel with most energy).
 
     Args:
-        path: WAV file path.
+        path: Audio file path.
 
     Returns:
         ``(sample_rate, samples)``.
 
     Raises:
-        OSError, ValueError: If the file is missing or is not a readable WAV.
+        AudioFileError: If the file is missing, unsupported or corrupt.
     """
-    from scipy.io import wavfile
-
-    fs, data = wavfile.read(str(path))
-    if data.ndim > 1:
-        data = data[:, 0]
-    if data.dtype == np.int16:
-        x = data.astype(np.float32) / 32768.0
-    elif data.dtype == np.int32:
-        x = (data.astype(np.float64) / 2147483648.0).astype(np.float32)
-    elif data.dtype == np.uint8:
-        x = (data.astype(np.float32) - 128.0) / 128.0
-    elif np.issubdtype(data.dtype, np.floating):
-        x = data.astype(np.float32)
-    else:
-        raise ValueError(f"unsupported WAV sample type {data.dtype}")
-    return int(fs), np.ascontiguousarray(x)
+    fs, x = read_mono(path)
+    return int(fs), np.ascontiguousarray(x, dtype=np.float32)
 
 
-def _save_wav(path: Path, samples: NDArray[np.float32], fs: int, fmt: str) -> None:
-    from scipy.io import wavfile
+read_audio_mono = read_wav_mono
 
-    if fmt == "int16":
-        clipped = int(np.count_nonzero(np.abs(samples) > 1.0))
-        pcm = np.clip(np.round(samples * 32767.0), -32768, 32767).astype(np.int16)
-        wavfile.write(str(path), fs, pcm)
+
+def _save_audio(path: Path, samples: NDArray[np.float32], fs: int, fmt: str | None) -> None:
+    """Save through ``audio_files`` (format from the extension) and explain the subtype."""
+    subtype = _SUBTYPES[fmt] if fmt else None
+    sub = subtype or ("FLOAT" if path.suffix.lower() == ".wav" else "PCM_24")
+    clipped = int(np.count_nonzero(np.abs(samples) > 1.0)) if sub != "FLOAT" else 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)  # reported below in Spanish
+        write_audio(path, samples, fs, subtype=subtype, comment="adv_tg capture_check")
+    if sub == "FLOAT":
         print(
-            f"AVISO: WAV guardado como PCM int16 (cuantizado a 16 bits"
-            f"{f'; {clipped} muestras fuera de [-1, 1] recortadas' if clipped else ''})."
+            "AVISO: guardado como float32 (IEEE, sin pérdida); algunos programas no abren "
+            "WAV flotante. Usa --wav-format int16 si lo necesitas."
         )
     else:
-        wavfile.write(str(path), fs, samples.astype(np.float32))
-        print(
-            "AVISO: WAV guardado como float32 (IEEE, sin pérdida); algunos programas "
-            "no abren este formato. Usa --wav-format int16 si lo necesitas."
-        )
+        note = f"; {clipped} muestras fuera de [-1, 1] recortadas" if clipped else ""
+        print(f"AVISO: guardado como {sub} (cuantizado{note}).")
 
 
 # ---------------------------------------------------------------------- file replay
@@ -179,7 +173,9 @@ class FileReplay:
             t_cb = time.perf_counter_ns()
             try:
                 self.callbacks += 1
-                self._stream.write(self._samples[pos:end], t_cb)
+                # Stamp with the scheduled time (ideal device clock), not the wake-up time,
+                # so OS timer jitter (large on macOS CI) does not show up as gaps.
+                self._stream.write(self._samples[pos:end], deadline)
             except Exception:
                 self.callback_errors += 1
             dt = time.perf_counter_ns() - t_cb
@@ -274,15 +270,23 @@ def _status_line(t_s: int, stream: SampleStream, source: _Source, peak_db: float
 
 
 def _monitor(stream: SampleStream, source: _Source, secs: float, replay: bool) -> None:
-    """Print one status line per second until ``secs`` elapse (main thread)."""
-    t0 = time.monotonic()
+    """Print one status line per second until ``secs`` elapse (main thread).
+
+    In replay mode the last line waits for the replay thread to deliver every sample:
+    its paced waits overshoot by up to one timer tick (~15.6 ms on Windows), so stopping
+    on the wall clock alone would drop the last blocks.
+    """
+    t0 = time.perf_counter()
     tick = 1
     last_idx = 0
     while True:
-        now = time.monotonic() - t0
+        now = time.perf_counter() - t0
         target = min(float(tick), secs)
         if now < target:
             time.sleep(min(target - now, 0.25))
+            continue
+        if replay and target >= secs and source.is_active and now < secs + REPLAY_DRAIN_S:
+            time.sleep(0.005)
             continue
         total = stream.total_samples
         start = max(last_idx, stream.oldest_available)
@@ -349,7 +353,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--latency", choices=("low", "high"), default="high", help="latencia PortAudio")
     p.add_argument("--secs", type=float, default=30.0, help="duración de la prueba en segundos")
-    p.add_argument("--wav", type=Path, default=None, help="guarda lo capturado en este WAV")
+    p.add_argument(
+        "--wav",
+        "--out",
+        dest="wav",
+        type=Path,
+        default=None,
+        help="guarda lo capturado (WAV o FLAC según la extensión)",
+    )
     p.add_argument(
         "--isolated",
         action="store_true",
@@ -362,15 +373,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--wav-format",
-        choices=("int16", "float32"),
-        default="int16",
-        help="formato de muestra del WAV guardado (por defecto int16)",
+        choices=tuple(_SUBTYPES),
+        default=None,
+        help="muestra del archivo guardado (por defecto: WAV float32, FLAC int24)",
     )
     p.add_argument(
         "--file",
         type=Path,
         default=None,
-        help="modo repetición sin hardware: reproduce este WAV en tiempo real",
+        help="modo repetición sin hardware: reproduce este WAV o FLAC en tiempo real",
     )
     return p
 
@@ -416,6 +427,12 @@ def _validate(args: argparse.Namespace) -> str | None:
         return "--file y --isolated son incompatibles"
     if args.fake_source and not args.isolated:
         return "--fake-source requiere --isolated"
+    if args.wav is not None:
+        ext = args.wav.suffix.lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            return f"--wav/--out debe terminar en .wav o .flac (recibido '{args.wav.name}')"
+        if ext == ".flac" and args.wav_format == "float32":
+            return "FLAC no admite float32; usa --wav-format int16 o int24"
     return None
 
 
@@ -468,7 +485,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             stream, source, secs, blocksize = _make_replay(args)
         except Exception as exc:
-            print(f"ERROR: no se pudo leer el WAV '{args.file}': {exc}")
+            print(f"ERROR: no se pudo leer el archivo '{args.file}': {exc}")
             return EXIT_ERROR
     else:
         fs = args.fs or DEFAULT_FS
@@ -529,15 +546,15 @@ def main(argv: list[str] | None = None) -> int:
         lost = stream.oldest_available
         data = stream.read(lost, stream.total_samples, np.float32)
         if lost:
-            print(f"AVISO: el WAV no incluye las primeras {lost} muestras (buffer sobrescrito).")
+            print(
+                f"AVISO: el archivo no incluye las primeras {lost} muestras (buffer sobrescrito)."
+            )
         try:
-            _save_wav(args.wav, data, int(stream.sample_rate), args.wav_format)
+            _save_audio(args.wav, data, int(stream.sample_rate), args.wav_format)
         except Exception as exc:
-            _dbg.file_write(args.wav, ok=False, error=exc)
-            print(f"ERROR: no se pudo guardar el WAV '{args.wav}': {exc}")
+            print(f"ERROR: no se pudo guardar '{args.wav}': {exc}")
             return EXIT_ERROR
-        _dbg.file_write(args.wav, samples=len(data), fmt=args.wav_format)
-        print(f"WAV guardado en '{args.wav}' ({len(data)} muestras).")
+        print(f"Audio guardado en '{args.wav}' ({len(data)} muestras).")
 
     return EXIT_OK if verdict.ok else EXIT_FAIL
 

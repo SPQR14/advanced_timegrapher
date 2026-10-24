@@ -94,7 +94,8 @@ class _FakeStream:
     def _run(self) -> None:
         fs, n = self.samplerate, self.blocksize
         idx = np.arange(n, dtype=np.int64)
-        t0 = time.perf_counter()
+        t0_ns = time.perf_counter_ns()
+        t0 = t0_ns / 1e9
         k = 0
         while not self._stop.is_set():
             wait = t0 + (k + 1) * n / fs - time.perf_counter()
@@ -108,7 +109,11 @@ class _FakeStream:
                 x = (
                     0.05 * np.sin(2 * np.pi * 440.0 * t) + 0.4 * (np.mod(t, 1 / 6) < 0.002)
                 ).astype(np.float32)
-            info = types.SimpleNamespace(currentTime=time.perf_counter())
+            # host_ns: scheduled time of this block (ideal device clock), so OS timer
+            # jitter (large on macOS CI) does not show up as gaps or ingest error.
+            info = types.SimpleNamespace(
+                currentTime=time.perf_counter(), host_ns=t0_ns + (k + 1) * n * 10**9 // int(fs)
+            )
             self._callback(x.reshape(-1, 1), n, info, 0)
             k += 1
 
@@ -156,7 +161,9 @@ class _ChildCapture:
             self.callbacks += 1
             if status:
                 self.status_flags += 1
-            self.queue.append((t0, indata[:, 0].tobytes()))
+            # The fake source supplies its scheduled time; real hardware does not.
+            stamp = getattr(time_info, "host_ns", None) or t0
+            self.queue.append((stamp, indata[:, 0].tobytes()))
             backlog = len(self.queue)
             if backlog > self.backlog_max:
                 self.backlog_max = backlog
