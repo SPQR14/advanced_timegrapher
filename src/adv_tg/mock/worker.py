@@ -4,6 +4,7 @@ Runs its own Python thread and emits, without any real DSP:
 
 * ``telemetry_ready`` 4 times per second (``BeatTelemetry`` with the last beat waveform),
 * ``waveform_ready`` at ~30 FPS (scrolling 0.6 s view of the simulated tic/tac train),
+* ``level_updated`` 10 times per second (simulated plausible level, never saturated),
 * ``drift_updated`` and ``capture_health`` once per second.
 
 MOCK-only extras (not part of ``BaseStreamWorker``): ``set_session_timing()`` and the
@@ -42,6 +43,9 @@ logger = _dbg.logger
 TELEMETRY_PERIOD_S: float = 0.25
 WAVEFORM_PERIOD_S: float = 1.0 / 30.0
 SLOW_PERIOD_S: float = 1.0
+LEVEL_PERIOD_S: float = 0.1
+MOCK_PEAK_DBFS: float = -12.0
+MOCK_RMS_DBFS: float = -32.0
 WAVEFORM_WINDOW_S: float = 0.6
 END_GRACE_S: float = 0.5
 JOIN_TIMEOUT_S: float = 2.0
@@ -153,7 +157,7 @@ class MockStreamWorker(BaseStreamWorker):
         reason = "stopped"
 
         t0 = time.monotonic()
-        next_tel = next_wave = next_slow = t0
+        next_tel = next_wave = next_slow = next_level = t0
         last_tel_elapsed = 0.0
         try:
             while not self._stop_event.is_set():
@@ -213,6 +217,15 @@ class MockStreamWorker(BaseStreamWorker):
                         every_s=5.0,
                     )
 
+                if now >= next_level:
+                    next_level = max(next_level + LEVEL_PERIOD_S, now)
+                    if not self._stop_event.is_set():
+                        self.level_updated.emit(
+                            MOCK_PEAK_DBFS + float(wave_rng.normal(0.0, 0.5)),
+                            MOCK_RMS_DBFS + float(wave_rng.normal(0.0, 0.5)),
+                            False,
+                        )
+
                 if now >= next_slow:
                     next_slow = max(next_slow + SLOW_PERIOD_S, now)
                     drift = model.drift(elapsed, fs)
@@ -224,7 +237,7 @@ class MockStreamWorker(BaseStreamWorker):
                         ingest = 100.0 - abs(float(wave_rng.normal(0.0, 0.03)))
                         self.capture_health.emit(ingest, 0)
 
-                wait_s = min(next_wave, next_tel, next_slow) - time.monotonic()
+                wait_s = min(next_wave, next_tel, next_slow, next_level) - time.monotonic()
                 if wait_s > 0.0:
                     self._stop_event.wait(wait_s)
         except Exception as exc:

@@ -1,16 +1,19 @@
 """Single contract between the GUI (``MainWin``) and any measurement engine.
 
-``BaseStreamWorker`` declares exactly the members ``MainWin`` used on its engine
-(``dsp_worker``) before the core was removed. Today two implementations exist:
+``BaseStreamWorker`` declares exactly the members ``MainWin`` uses on its engine
+(``dsp_worker``). Today these implementations exist:
 
-* ``adv_tg.ui.null_engine.NullStreamWorker``: hardware devices. It does not process
-  audio and reports that the measurement engine is not implemented yet.
+* ``adv_tg.ui.capture_worker.CaptureStreamWorker``: hardware devices. Real audio (raw
+  waveform, level, capture health) but NO measurement yet: it never emits
+  ``telemetry_ready`` nor ``drift_updated``.
+* ``adv_tg.ui.null_engine.NullStreamWorker``: fallback only, used if the capture worker
+  cannot be created. It does not process audio.
 * ``adv_tg.mock.worker.MockStreamWorker``: simulated data so the whole GUI can be tested.
   It has a few MOCK-only extras (test timing, drift sigma/confidence) that are NOT part
   of this contract; ``MainWin`` only uses them when the engine is a ``MockStreamWorker``.
 
-The real worker (layer 5) must implement this contract and replace ``NullStreamWorker``
-in ``adv_tg.ui.worker_factory.create_worker``.
+The measuring worker (layer 5) must implement this contract too; ``create_worker`` in
+``adv_tg.ui.worker_factory`` picks the engine for each device.
 
 Signals (may be emitted from any thread; Qt queues them to the GUI thread):
 
@@ -20,6 +23,9 @@ Signals (may be emitted from any thread; Qt queues them to the GUI thread):
   (~30 FPS), normalized to roughly [-1, 1]. Arrays must not be mutated after emission.
 * ``drift_updated(effective_fs_hz, drift_ppm, rate_bias_spd)``: ADC clock drift estimate.
 * ``capture_health(ingest_pct, overflows)``: share of audio that reached the analysis.
+* ``level_updated(peak_dbfs, rms_dbfs, saturated)``: input level (~10/s) over the samples
+  received since the previous update; ``-inf`` for silence; ``saturated`` when the peak
+  reached -1 dBFS. The GUI uses it for the signal-quality bar while no telemetry arrives.
 * ``error_occurred(message)``: human-readable error.
 * ``session_finished()``: emitted once when a stream ends (stopped or finished by itself).
 
@@ -50,6 +56,7 @@ class BaseStreamWorker(QObject):
     waveform_ready = pyqtSignal(object, object)
     drift_updated = pyqtSignal(float, float, float)
     capture_health = pyqtSignal(float, int)
+    level_updated = pyqtSignal(float, float, bool)
     error_occurred = pyqtSignal(str)
     session_finished = pyqtSignal()
 
