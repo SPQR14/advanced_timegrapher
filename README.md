@@ -4,11 +4,11 @@ Cronocomparador (timegrapher) por software para relojes mecánicos: escucha el t
 micrófono y mostrará marcha (s/d), error de batimiento (ms) y amplitud (°), con una GUI en
 PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 
-## Estado (v0.2.0)
+## Estado (v0.3.0)
 
 - El núcleo de medición (DSP) se está **reconstruyendo desde cero, por capas**. Ya existen la
-  captura (fase 1, terminada) y el detector de batimientos (fase 2, en validación); las
-  métricas (marcha, error de batimiento, amplitud) son la fase 3 y todavía no existen.
+  captura (fase 1), el detector de batimientos (fase 2) y las métricas (fase 3, implementada y
+  pendiente de confirmación). Todavía no están integradas en la GUI (fase 5).
 - La GUI tiene todos los paneles, exportaciones e idiomas (EN/ES). **Con un dispositivo de
   audio real muestra la señal pero todavía NO mide**: forma de onda cruda, nivel/saturación e
   ingesta de audio (`CaptureStreamWorker`), sin marcha, error de batimiento ni amplitud.
@@ -21,8 +21,8 @@ PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 |------|-----------|--------|
 | 0 | Esqueleto: GUI, modo MOCK, Debugger, CI | **terminada** (v0.1.0) |
 | 1 | Captura: flujo de muestras sin bloqueos + herramienta de consola; captura en proceso aparte (1d) y audio real en la GUI sin medir (1b) | **terminada**; validada con el CM18 (ingesta 100 %) |
-| 2 | Detector de batimientos incremental (P1/P2/P3), alineación fina por plantillas de tic y tac (`t_fine`) + audio WAV/FLAC | **en cierre**: validado con sintético y con 5 grabaciones reales; frente a tg queda a ≤ 1.4 s/d y ≤ 0.25 ms (ver [`docs/resultados_pruebas_fase2.md`](docs/resultados_pruebas_fase2.md), sección 6) |
-| 3 | Métricas: marcha, error de batimiento, amplitud | pendiente |
+| 2 | Detector de batimientos incremental (P1/P2/P3), alineación fina por plantillas de tic y tac (`t_fine`) + audio WAV/FLAC | **terminada**: validado con sintético y con 5 grabaciones reales; frente a tg queda a ≤ 1.4 s/d y ≤ 0.25 ms (ver [`docs/resultados_pruebas_fase2.md`](docs/resultados_pruebas_fase2.md), sección 6) |
+| 3 | Métricas: marcha, error de batimiento, amplitud (`core/metrics.py`, `tools/measure.py`) | **implementada**, pendiente de confirmación: sintético dentro de tolerancia y grabaciones reales dentro de la banda de tg/WAM (ver [`docs/fase3_resultados.md`](docs/fase3_resultados.md)) |
 | 4 | Reloj: deriva del ADC vs host + NTP, calibración manual opcional | pendiente |
 | 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | pendiente |
 
@@ -42,7 +42,8 @@ src/adv_tg/
 ├── core/
 │   ├── __init__.py
 │   ├── beat_detector.py   # BeatDetector: capa 2, P1/P2/P3 en índices absolutos
-│   ├── beat_types.py      # Beat, BeatFlags y definiciones físicas (t_lift, amplitud)
+│   ├── beat_types.py      # Beat, BeatFlags, ParityTemplate y definiciones físicas
+│   ├── metrics.py         # capa 3: marcha, error de batimiento, amplitud, tendencia
 │   ├── models.py          # WatchConfig, BeatEvent, BeatTelemetry, TelemetryResult
 │   └── sample_stream.py   # SampleStream: buffer circular SPSC con índice absoluto
 ├── i18n/
@@ -59,6 +60,7 @@ src/adv_tg/
 │   ├── capture_check.py   # CLI de verificación de la captura (fase 1)
 │   ├── check_samples.py   # CLI: valida el detector con grabaciones reales (fase 2)
 │   ├── detect_beats.py    # CLI: detecta batimientos en un WAV/FLAC (fase 2)
+│   ├── measure.py         # CLI: marcha, error de batimiento y amplitud de un WAV/FLAC (fase 3)
 │   └── gil_probe.py       # banco de pruebas GIL / hilos / GUI (fases 1c-1d)
 ├── ui/
 │   ├── __init__.py
@@ -210,7 +212,8 @@ python -m adv_tg.tools.check_samples --self-test     # sin grabaciones: genera 3
 
 `check_samples` asigna el calibre por el nombre del archivo (`c07`/`h50`/`hamilton` → 21600
 BPH, LA 50°; `9015`/`miyota` → 28800 BPH, LA 51°; `4r36`/`seiko` → 21600 BPH, LA 53°;
-`nm10`/`bulova` → cuarzo, informativo) o
+`nm10`/`bulova`, `vh31`/`tmi` y `h874`/`citizen` → cuartos de 16, 4 y 1 paso por segundo,
+informativos) o
 por un manifiesto JSON (`[{"pattern": "c07", "bph": 21600, "lift_angle": 50}]`), repite la
 detección con otro troceado para comprobar la invarianza y guarda una tabla Markdown en
 `logs/check_samples_<fecha>.md` con veredicto OK/REVISAR por archivo (conteo ±1 %, P3 en
@@ -268,6 +271,53 @@ muestras: mediana < 0,3 y p95 < 1 muestra a 25 dB.
 - El "Periodo" que imprime `detect_beats` es una mediana de intervalos, **no** un estimador de
   marcha (en el cuarzo se desvía el equivalente a ~15 s/d); la marcha se calculará por
   regresión en la fase 3.
+
+## Fase 3: métricas
+
+`core/metrics.py` calcula, a partir de los batimientos y las plantillas del detector (nunca del
+audio):
+
+- **Marcha (s/d):**
+  - regresión robusta `t = a + P·k + c·(−1)^k` sobre `t_fine`, ponderando cada paridad con
+    1/σ² y recortando a 5σ (MAD) por paridad;
+  - incertidumbre por covarianza y por *jackknife* de bloques (más realista en grabaciones
+    reales);
+  - marcha por ventanas (10 s; solapadas con `window_step_s`) y tendencia en s/d por minuto,
+    con aviso si supera 3σ;
+  - parámetro `adc_drift_ppm` para la fase 4 (con 0 se avisa de "sin calibrar").
+- **Error de batimiento (ms):** en los inicios de P1 de las plantillas, 2·|c| de la misma
+  regresión.
+- **Amplitud (°):** con el t_lift de las plantillas (inicio de P1 → inicio de P3); tic, tac y
+  media, ±1° de LA declarado, orientativa si el LA es el de por defecto.
+- **Exclusiones:** batimientos `SATURATED` y los que no tienen `t_fine` (los `TIMING_OUTLIER`
+  se conservan: esa marca juzga el P3 de cada batimiento, no `t_fine`); recorte robusto por
+  paridad; mínimo de 10 por paridad.
+- **Incertidumbre reportada:** la mayor entre la de covarianza y la de *jackknife* por bloques
+  (el ruido temporal real no es blanco; en las grabaciones es 2–4 veces mayor).
+- **Modos:** por lotes (`compute_metrics`) e incremental (`MetricsTracker`, ventana
+  deslizante), con resultados idénticos.
+
+```bash
+python -m adv_tg.tools.measure toma.flac --bph 28800 --lift-angle 51 --json m.json --csv v.csv --plot m.png
+python -m adv_tg.tools.measure cuarzo.flac --bph 57600 --quartz          # cuarzo: solo marcha, un evento por paso
+```
+
+Validación (detalle en [`docs/fase3_resultados.md`](docs/fase3_resultados.md)):
+
+- **Sintético:** marcha ±0.2 s/d, error de batimiento ±0.03 ms y amplitud ±2 % en limpio
+  (18000–36000 BPH); márgenes de 3 a 10 veces también con realismo, dos lóbulos y rampa.
+- **Grabaciones reales:** dentro de la banda de tg 0.8.0 y Watch Accuracy Meter (±1.5 s/d,
+  ±0.15 ms, ±12°) salvo la marcha del 4R36, cuya grabación tiene otra marcha que la medida en
+  vivo.
+- **Rendimiento:** ~110–128× el tiempo real con detector y métricas en relojes mecánicos y
+  ~100–160× con cuartos.
+- **Cuartos de referencia** (Bulova 16/s, TMI VH31 4/s y Citizen H874 1/s; tomas de 300 s, con
+  `--quartz`): los tres reproducen la deriva de la tarjeta medida por tg (−0.72 s/d) dentro de
+  su especificación (0.00, +0.17 y +0.22 s/d de diferencia). El Bulova muestra la compensación
+  por inhibición de 10 s del cuarzo: la marcha de un cuarzo debe medirse sobre muchos ciclos
+  (`docs/fase3_resultados.md`, secciones 7 y 8).
+- **Incertidumbre de la marcha por ventanas:** la σ de covarianza por un factor de ruido
+  correlacionado (`window_sigma_factor`, ≥ 1).
 
 ## Instalación
 

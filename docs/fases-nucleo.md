@@ -1,6 +1,6 @@
 # Advanced Timegrapher: fases de reconstrucción del núcleo
 
-Documento de referencia. Estado al 24/10/2026: **v0.2.0**. Fases 0 y 1 (con 1b y 1d) terminadas; fase 2 (detector) en validación con las grabaciones reales (ver `docs/resultados_pruebas_fase2.md`). Las métricas (fase 3) aún no existen.
+Documento de referencia. Estado al 24/10/2026: **v0.3.0**. Fases 0, 1 (con 1b y 1d) y 2 (detector, ver `docs/resultados_pruebas_fase2.md`) terminadas; fase 3 (métricas) implementada y pendiente de confirmación (ver `docs/fase3_resultados.md`).
 
 ## Decisión de base
 
@@ -33,8 +33,8 @@ Implementación limpia en el repo `advanced_timegrapher` (paquete `adv_tg`), sin
 | **0. Esqueleto** | Renombrado a `adv_tg`, entorno, Debugger, modo MOCK, CI. **Completada (v0.1.0).** | Agente + usuario | GUI arranca, MOCK mueve todos los widgets. |
 | **1. Captura** | `core/sample_stream.py` (buffer circular sin bloqueos con índice absoluto y registro de bloques), `audio/capture.py` (envoltorio de sounddevice), `tools/capture_check.py` (CLI) y tests. **Completada.** | Agente; el usuario corre `capture_check` con el CM18 | En 30 s: ingesta ≥ 99 %, hueco máximo < 3 bloques, callback < 2 ms. Resuelve la duda del 12.7 %. |
 | **1b. Primera integración real** | `CaptureStreamWorker` que implementa `BaseStreamWorker`: conecta el CM18 con `SampleStream` y alimenta solo la etiqueta de audio recibido, nivel/saturación de la barra de calidad y la onda cruda. No mide. **Completada** (con la captura en proceso aparte, 1d). | Agente | Audio real a ≥ 99 % en la GUI, plots a ~30 FPS. |
-| **2. Detector de batimientos** | Detección incremental con una sola definición de P1/P3 y ventana de búsqueda acotada físicamente. Generador sintético en `tests/` con verdad conocida. **En validación.** | Agente; el usuario aporta grabaciones | Error < 1 muestra en sintético. En grabaciones reales el conteo coincide con duración × BPH / 3600 y no hay falsos. |
-| **3. Métricas** | Marcha, error de batimiento y amplitud sobre la lista de batimientos, ventana larga, rechazo de atípicos, confianza real. | Agente | Sintético dentro de tolerancia y cifras estables en ventana de 30 s. |
+| **2. Detector de batimientos** | Detección incremental con una sola definición de P1/P3 y ventana de búsqueda acotada físicamente. Generador sintético en `tests/` con verdad conocida. **Completada.** | Agente; el usuario aporta grabaciones | Error < 1 muestra en sintético. En grabaciones reales el conteo coincide con duración × BPH / 3600 y no hay falsos. |
+| **3. Métricas** | Marcha, error de batimiento y amplitud sobre la lista de batimientos, ventana larga, rechazo de atípicos, confianza real. | Agente | Sintético dentro de tolerancia y cifras estables en ventana de 30 s. **Implementada** (`docs/fase3_resultados.md`); pendiente de confirmación. |
 | **4. Reloj** | Contador de muestras frente al reloj monotónico del host más NTP; niveles de confianza; ppm ± σ; calibración manual opcional. | Agente | Un ppm inyectado en sintético se recupera. El Bulova da ≈ +8 ppm con el CM18. |
 | **5. Integración completa** | Worker real que une las capas 1 a 4. MOCK se queda como herramienta de pruebas. Barra de calidad (nivel/saturación, SNR antes de AGC, fiabilidad de detección), autoescala del papel, ocultar cifras con confianza baja. | Agente | ≥ 3 actualizaciones/s, plots a ~30 FPS, etiquetas de deriva y calidad funcionando. |
 | **6. Validación** | Comparación contra tg con las tres grabaciones; optimización; ganchos para ML. | Usuario + Claude | Diferencias documentadas y dentro de tolerancia. |
