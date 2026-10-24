@@ -1,6 +1,6 @@
 """Replay the real recordings in ``docs/samples/`` through a SampleStream (skipped if absent).
 
-Only WAV files are used (``scipy.io.wavfile``); other formats are skipped.
+WAV and FLAC files are read through ``adv_tg.utils.audio_files``.
 """
 
 from __future__ import annotations
@@ -22,7 +22,9 @@ def _readable_wavs() -> list[Path]:
     if not SAMPLES_DIR.is_dir():
         return []
     found = []
-    for p in sorted(SAMPLES_DIR.glob("*.wav")):
+    for p in sorted(SAMPLES_DIR.glob("*")):
+        if p.suffix.lower() not in (".wav", ".flac"):
+            continue
         try:
             read_wav_mono(p)
         except Exception:

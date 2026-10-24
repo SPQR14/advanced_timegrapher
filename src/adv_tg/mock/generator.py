@@ -16,7 +16,8 @@ from pathlib import Path
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.io import wavfile
+
+from adv_tg.utils.audio_files import write_audio
 
 SECONDS_PER_DAY: float = 86400.0
 PPM_TO_SPD: float = SECONDS_PER_DAY * 1e-6
@@ -134,10 +135,8 @@ def save_wav(file_path: Path | str, samples: NDArray[np.float64], fs: int) -> Pa
     out_path = Path(file_path)
     if out_path.suffix.lower() != ".wav":
         out_path = out_path.with_suffix(".wav")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    pcm = np.clip(np.asarray(samples, dtype=np.float64) * 32767.0, -32768.0, 32767.0)
-    wavfile.write(str(out_path), int(fs), pcm.astype(np.int16))
-    return out_path
+    x = np.clip(np.asarray(samples, dtype=np.float64), -1.0, 1.0)
+    return write_audio(out_path, x, int(fs), subtype="PCM_16")
 
 
 @dataclass(slots=True)

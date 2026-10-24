@@ -18,7 +18,7 @@ PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 | Capa | Contenido | Estado |
 |------|-----------|--------|
 | 1 | Captura: flujo de muestras sin bloqueos + herramienta de consola | implementada, pendiente de validar con hardware |
-| 2 | Detector de batimientos incremental | pendiente |
+| 2 | Detector de batimientos incremental (P1/P2/P3) + audio WAV/FLAC | implementada; pendiente de validar con grabaciones reales (`check_samples` en la Mac) |
 | 3 | Métricas: marcha, error de batimiento, amplitud | pendiente |
 | 4 | Reloj: deriva del ADC vs host + NTP, calibración manual opcional | pendiente |
 | 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | pendiente |
@@ -38,6 +38,8 @@ src/adv_tg/
 │   └── process_capture.py # ProcessAudioCapture: misma interfaz, captura en proceso aparte
 ├── core/
 │   ├── __init__.py
+│   ├── beat_detector.py   # BeatDetector: capa 2, P1/P2/P3 en índices absolutos
+│   ├── beat_types.py      # Beat, BeatFlags y definiciones físicas (t_lift, amplitud)
 │   ├── models.py          # WatchConfig, BeatEvent, BeatTelemetry, TelemetryResult
 │   └── sample_stream.py   # SampleStream: buffer circular SPSC con índice absoluto
 ├── i18n/
@@ -52,6 +54,8 @@ src/adv_tg/
 │   ├── __init__.py
 │   ├── README.md          # notas de las herramientas (gil_probe, hallazgos)
 │   ├── capture_check.py   # CLI de verificación de la captura (fase 1)
+│   ├── check_samples.py   # CLI: valida el detector con grabaciones reales (fase 2)
+│   ├── detect_beats.py    # CLI: detecta batimientos en un WAV/FLAC (fase 2)
 │   └── gil_probe.py       # banco de pruebas GIL / hilos / GUI (fases 1c-1d)
 ├── ui/
 │   ├── __init__.py
@@ -62,7 +66,8 @@ src/adv_tg/
 │   └── worker_factory.py  # create_worker(device_id)
 └── utils/
     ├── __init__.py
-    ├── audio_io.py        # enumeración de dispositivos, guardado FLAC/Ogg
+    ├── audio_files.py     # lectura/escritura WAV y FLAC (único módulo que usa soundfile)
+    ├── audio_io.py        # enumeración de dispositivos, guardado FLAC/Ogg de la GUI
     ├── db/watch_db.csv    # calibres (BPH, ángulo de levantamiento)
     ├── debugger.py        # clase Debugger (trazas)
     ├── logger_setup.py    # configuración de logging
@@ -87,8 +92,9 @@ python -m adv_tg.tools.capture_check --device N --secs 30   # prueba de 30 s con
 ```
 
 Opciones: `--fs` (48000), `--blocksize` (0 = lo elige PortAudio), `--latency low|high` (high),
-`--wav RUTA` (guarda lo capturado al final; `--wav-format int16|float32`) y `--file RUTA.wav`
-(modo repetición sin micrófono: inyecta un WAV en tiempo real).
+`--wav RUTA` o `--out RUTA` (guarda lo capturado al final en `.wav` o `.flac`;
+`--wav-format int16|int24|float32`, por defecto WAV float32 y FLAC int24) y `--file RUTA`
+(modo repetición sin micrófono: inyecta un WAV o FLAC en tiempo real).
 
 Imprime una línea por segundo (muestras, ingesta, hueco máximo entre bloques, coste máximo del
 callback, pico en dBFS y aviso de posible saturación si el pico ≥ -1 dBFS) y un veredicto:
@@ -126,6 +132,92 @@ congela, el hijo acumula y el padre se pone al día después, sin perder muestra
 - Verificación: `python -m adv_tg.tools.capture_check --isolated --device N --secs 30` y
   `python -m adv_tg.tools.gil_probe --all --isolated --device N --secs 20` (con la ventana de
   la GUI visible al frente).
+
+## Audio: WAV y FLAC
+
+Toda lectura y escritura de archivos de audio pasa por `adv_tg.utils.audio_files`
+(`read_audio`, `iter_audio_blocks`, `write_audio`, `AudioWriter`), basado en `soundfile`.
+
+| Formato | Subtipo por defecto | Motivo |
+|---------|--------------------|--------|
+| `.wav`  | `FLOAT` (32 bits flotante) | conserva la señal capturada sin pérdida |
+| `.flac` | `PCM_24` | FLAC no admite flotante; 24 bits ≈ −144 dBFS de cuantización |
+
+- El formato lo decide la extensión (sin distinguir mayúsculas). Otros subtipos: `PCM_16`,
+  `PCM_24` (WAV y FLAC) y `FLOAT` (solo WAV).
+- Si la señal supera [-1, 1] y el subtipo es PCM, se recorta de forma explícita y se emite un
+  aviso (nunca en silencio).
+- La escritura es atómica: se escribe un temporal en el mismo directorio y se renombra; un
+  fallo o una interrupción no deja archivos corruptos.
+- Lectura: `float64` en [-1, 1]; `select_channel` elige por defecto el canal de **mayor
+  energía** (el promedio de canales puede cancelarse). Comentario/metadatos en WAV y FLAC.
+- Grabar desde la consola: `python -m adv_tg.tools.capture_check --device N --secs 60 --out toma.flac`.
+- Licencias: `soundfile` es BSD-3; la `libsndfile` que incluyen sus ruedas es LGPL-2.1 y se
+  carga dinámicamente, compatible con la GPLv3 de este proyecto. Las ruedas para Windows,
+  macOS (arm64 y x86_64) y Linux ya traen la biblioteca: no hace falta instalar nada más.
+
+## Fase 2: detector de batimientos
+
+`core/beat_detector.py` — `BeatDetector` convierte audio en batimientos (`core/beat_types.py`:
+`Beat`, `BeatFlags`). Solo detecta: marcha, error de batimiento y amplitud son la fase 3.
+
+**Definiciones** (únicas para todo el sistema, en `beat_types.py`):
+
+- Frecuencia del volante `f = BPH/7200` Hz; periodo de batimiento `P = 3600/BPH` s.
+- **P1** = desbloqueo (inicio del primer sub-evento), **P2** = impulso (~0,45·t_lift después),
+  **P3** = caída (inicio del último sub-evento); `t_lift = P3 − P1`.
+- `A = LA / (2·sin(π·f·t_lift))`. Aquí solo acota dónde buscar P1 y P3 (rango de amplitud
+  configurable, por defecto 90–400°).
+- Cada instante es el **inicio** del sub-evento (cruce de umbral interpolado sobre la
+  envolvente) y se expresa como **índice absoluto de muestra** (float64, sub-muestra) en el
+  reloj del ADC, el mismo del `SampleStream`. Nunca segundos de reloj de pared.
+- El instante de referencia del modelo de fase es **P3** (el sonido más fuerte y estable) y,
+  si falta, P1. P1/P3 sin evidencia quedan en `NaN` con su flag; nunca se rellenan con el
+  modelo.
+
+**Uso como biblioteca**: `process(chunk, start_index)` devuelve solo batimientos nuevos y
+definitivos; `advance(sample_stream)` lee lo llegado al `SampleStream` y trata un
+desbordamiento como hueco (`AFTER_GAP`, sin reiniciar `k`); `flush()` al final del archivo.
+El resultado es idéntico sin importar el troceado (rejilla fija de 0,25 s anclada al índice
+absoluto). Un detector por hilo (no es thread-safe).
+
+**Herramientas**:
+
+```bash
+# Un archivo: resumen, CSV por batimiento, JSON, PNG (solo si matplotlib está instalado)
+python -m adv_tg.tools.detect_beats toma.flac --bph 28800 --lift-angle 51 --csv b.csv --json s.json
+
+# Validación con las grabaciones reales (en la Mac): docs/samples/*.wav|*.flac
+python -m adv_tg.tools.check_samples
+python -m adv_tg.tools.check_samples --dir otra/carpeta --manifest calibres.json
+python -m adv_tg.tools.check_samples --self-test     # sin grabaciones: genera 3 sintéticos
+```
+
+`check_samples` asigna el calibre por el nombre del archivo (`c07`/`h50`/`hamilton` → 21600
+BPH, LA 50°; `9015`/`miyota` → 28800 BPH, LA 51°; `nm10`/`bulova` → cuarzo, informativo) o
+por un manifiesto JSON (`[{"pattern": "c07", "bph": 21600, "lift_angle": 50}]`), repite la
+detección con otro troceado para comprobar la invarianza y guarda una tabla Markdown en
+`logs/check_samples_<fecha>.md` con veredicto OK/REVISAR por archivo (conteo ±1 %, P3 en
+≥ 95 % de los batimientos, tic/tac sin saltos de paridad, t_lift físico, invarianza).
+
+**Rendimiento y exactitud** (sintético, 48 kHz): ~90–140× tiempo real en un núcleo; a
+SNR ≥ 20 dB, 0 falsos y 0 perdidos; error de P3 tras restar el sesgo constante de ~2,1
+muestras: mediana < 0,3 y p95 < 1 muestra a 25 dB.
+
+**Límites conocidos**:
+
+- SNR (pico de P3 sobre el ruido en banda) < ~17 dB: se pierden batimientos (≈20 % a 15 dB;
+  quedan como huecos en `k`); a 10 dB no engancha y `stats` avisa. Nunca inventa batimientos.
+- P1 débil (p. ej. ETA C07): P1 sale `NaN` con `P1_MISSING` y t_lift no se puede evaluar; P3
+  y la cadencia no se ven afectados.
+- Con P1 débil **y** amplitud baja (< ~230° a 21600 BPH) P2 puede caer en la ventana física
+  de P1; se decide P1/P2 por la amplitud implícita más plausible (`typical_amplitude_deg`).
+- Sub-eventos con SNR propio < 12 dB dan `NaN` en vez de un instante impreciso; con ruido de
+  red, colas largas y SNR 20 dB, P1 puede tener hasta ~0,2 ms de incertidumbre.
+- BPH mal configurado (> 6 % de diferencia): no engancha y avisa; la mitad del BPH real sí
+  engancharía (contaría solo los tic o los tac).
+- Todo esto está validado con señal sintética; falta la validación con grabaciones reales
+  (`check_samples` en la Mac).
 
 ## Instalación
 
