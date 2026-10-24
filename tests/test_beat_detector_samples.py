@@ -74,6 +74,21 @@ def test_real_mechanical_recording(path: Path | None) -> None:
 @pytest.mark.parametrize("path", QUARTZ or [None], ids=lambda p: p.name if p else "none")
 def test_real_quartz_recording_is_informational(path: Path | None) -> None:
     if path is None:
-        pytest.skip(f"no hay grabaciones de nm10 en {SAMPLES_DIR}")
+        pytest.skip(f"no hay grabaciones de cuarzo en {SAMPLES_DIR}")
     result = check_file(path, resolve_config(path))
     assert result.verdict in ("INFO", "ERROR")  # never fails the suite
+
+
+@pytest.mark.parametrize("path", QUARTZ or [None], ids=lambda p: p.name if p else "none")
+def test_real_quartz_locks_and_counts(path: Path | None) -> None:
+    """Quartz steps (16/s, 4/s and 1/s): the detector locks and counts every step. The 1/s
+    Citizen H874 never locked with the fixed 2 s acquisition window (it holds a single
+    tic+tac fold); the window now spans at least 8 beat periods."""
+    if path is None:
+        pytest.skip(f"no hay grabaciones de cuarzo en {SAMPLES_DIR}")
+    cfg = resolve_config(path)
+    result = check_file(path, cfg)
+    s = result.summary
+    assert s is not None and s.lock_time_s is not None
+    assert abs(s.found - result.expected_from_first) <= max(0.015 * result.expected_from_first, 2)
+    assert result.invariant

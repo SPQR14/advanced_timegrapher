@@ -151,7 +151,9 @@ def test_child_logs_to_its_own_file() -> None:
     cap.start()
     cap.stop()
     wait_until(lambda: log.exists() and log.stat().st_size > size0, 5, "child log lines")
-    tail = Path(log).read_text(encoding="utf-8", errors="replace")[size0:]
+    # size0 is in bytes: slice the bytes, not the decoded text (multibyte characters in an
+    # existing log would shift a character slice past the new lines)
+    tail = Path(log).read_bytes()[size0:].decode("utf-8", "replace")
     assert "capture_child" in tail
     assert os.environ.get(LoggerSetup.LOG_NAME_ENV_VAR) is None  # parent env restored
 
