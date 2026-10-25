@@ -9,6 +9,20 @@ pytest.importorskip("PyQt6")
 from adv_tg.ui.main_window import MainWin  # noqa: E402
 
 
+def test_app_icon_renders(qtbot) -> None:
+    """The SVG icon must load through Qt's SVG engine and produce non-empty pixels."""
+    from adv_tg.ui.main_window import APP_ICON_PATH, app_icon
+
+    assert APP_ICON_PATH.is_file()
+    icon = app_icon()
+    assert not icon.isNull()
+    img = icon.pixmap(64, 64).toImage()
+    assert img.width() == 64
+    # Transparent corner, opaque centre.
+    assert img.pixelColor(0, 0).alpha() == 0
+    assert img.pixelColor(32, 32).alpha() == 255
+
+
 def test_main_window_with_mock(qtbot) -> None:
     window = MainWin()
     qtbot.addWidget(window)

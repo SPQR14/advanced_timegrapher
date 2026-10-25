@@ -13,6 +13,7 @@ from PyQt6.QtCore import QRectF, QSize, Qt, QTimer
 from PyQt6.QtGui import (
     QColor,
     QFont,
+    QIcon,
     QImage,
     QPageLayout,
     QPageSize,
@@ -109,6 +110,16 @@ def configure_pyqtgraph_gpu(enable_opengl: bool = False) -> bool:
 configure_pyqtgraph_gpu()
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+APP_ICON_PATH = ASSETS_DIR / "adv-tg.svg"
+
+
+def app_icon() -> QIcon:
+    """Application icon (vectorised from ``assets/adv-tg.jpg``); null icon if missing."""
+    if not APP_ICON_PATH.is_file():
+        logger.warning("Icono de la aplicación no encontrado: %s", APP_ICON_PATH)
+        return QIcon()
+    return QIcon(str(APP_ICON_PATH))
+
 
 CALIBER_PRESETS: dict[str, tuple[int, float]] = load_watch_db()
 

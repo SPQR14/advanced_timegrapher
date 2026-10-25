@@ -26,6 +26,23 @@ independiente puede dar +4 o +12 ppm y estar bien.
 
 Propuesta de criterio: `|ppm_medido − 8.3| ≤ error_Bulova + 2σ`.
 
+### Calibración propia del Bulova (sin hardware)
+
+El error del Bulova no hace falta suponerlo a partir de su especificación: se puede medir.
+
+1. Comprobar la especificación del calibre NM10: los 16 pasos/s son típicos de los Precisionist
+   (±10 s/año ≈ 0.3 ppm), no de un cuarzo estándar (±15 s/mes ≈ ±5.7 ppm). Sin confirmar.
+2. Día 0: foto del Bulova junto a una pantalla con hora sincronizada por NTP (p. ej. time.is en
+   un móvil o PC sincronizado). Anotar la diferencia `d0` (s); la aguja avanza en pasos de 1/16 s.
+3. Día 20–30: repetir la foto en condiciones parecidas (temperatura, posición) y anotar `d1`.
+4. `ppm_Bulova = (d1 − d0) / (t1 − t0) · 1e6`, con `t1 − t0` en segundos. Con ±0.1 s de lectura en
+   30 días: σ ≈ 0.14 s / 2.6e6 s ≈ ±0.05 ppm.
+5. Con la convención de `adc_drift_ppm` (> 0 = ADC rápido), un ADC rápido alarga los periodos en
+   muestras y el reloj parece atrasar: `marcha_aparente ≈ ppm_Bulova − adc_drift_ppm`. Si tg da
+   +8.3 ppm, `adc_drift_esperado = ppm_Bulova − 8.3` y el criterio pasa a
+   `|adc_drift_medido − (ppm_Bulova − 8.3)| ≤ σ_Bulova + 2σ`.
+6. Registrar fechas, lecturas y temperatura en `docs/` como referencia de la validación.
+
 ## 2. Métodos, por calidad creciente
 
 ### 2.1 Contador de muestras frente al reloj del host (base)
