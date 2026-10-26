@@ -6,6 +6,7 @@ import csv
 import math
 import os
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -57,7 +58,7 @@ from adv_tg.ui.capture_worker import (
     level_text,
     level_to_quality,
 )
-from adv_tg.ui.dialogs import AboutDialog, CalibrationDialog, LiveDrift
+from adv_tg.ui.dialogs import AboutDialog, CalibrationDialog, LiveDrift, ReportDialog
 from adv_tg.ui.measure_worker import MeasureStreamWorker
 from adv_tg.ui.measure_worker import device_name as measure_device_name
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
@@ -261,6 +262,9 @@ class MainWin(QMainWindow):
     QUALITY_SNR_FLOOR_DB: float = 12.0
     QUALITY_SNR_FULL_DB: float = 25.0
     SATURATION_HOLD_S: float = 2.0
+    # Exact digital silence this long means the OS is not giving us the microphone (macOS and
+    # Windows deliver zeros when the permission is denied): tell the user where to allow it.
+    SILENCE_HINT_S: float = 3.0
     EMPTY_VALUE: str = "---.-"
 
     def __init__(self, translator: Translator | None = None) -> None:
@@ -298,6 +302,8 @@ class MainWin(QMainWindow):
         self._last_warning: str = ""
         self._tape_autoscale: bool = True
         self._osc_span_ms: float | None = None
+        self._silence_since: float | None = None
+        self._silence_warned: bool = False
         self._osc_rng = np.random.default_rng(2026)
 
         # Audio recording state (same duration as test)
@@ -861,6 +867,13 @@ class MainWin(QMainWindow):
         self.btn_about.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_about.clicked.connect(lambda: self.open_about_dialog())
         top_layout.addWidget(self.btn_about, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        # "Report" (zip with logs, system, settings and the last recording -> GitHub Issues)
+        self.btn_report = QPushButton()
+        self.btn_report.setObjectName("MockButton")
+        self.btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_report.clicked.connect(lambda: self.open_report_dialog())
+        top_layout.addWidget(self.btn_report, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         # "Buy me a coffee" button in the top-right corner (opens BUY_ME_A_COFFEE_URL)
         self.btn_buy_coffee = QPushButton("☕ Buy me a coffee")
@@ -1931,6 +1944,40 @@ class MainWin(QMainWindow):
             dlg.exec()
         return dlg
 
+    def report_settings(self) -> dict[str, object]:
+        """Settings of the window for the report (no personal data besides the device name)."""
+        cfg = self.current_watch_config()
+        return {
+            "engine": type(self.dsp_worker).__name__,
+            "device": self.cmb_device.currentText(),
+            "caliber": self.cmb_caliber.currentText(),
+            "bph": cfg.bph,
+            "quartz": cfg.quartz,
+            "lift_angle": cfg.lift_angle,
+            "sample_rate": cfg.sample_rate,
+            "position": self.cmb_position.currentText(),
+            "stabilization_s": self.stabilization_s(),
+            "duration_s": self.duration_s(),
+            "state": self._capture_state,
+            "rate_card": self.card_rate.value_label.text(),
+            "beat_error_card": self.card_beat_error.value_label.text(),
+            "amplitude_card": self.card_amplitude.value_label.text(),
+            "quality": self.lbl_snr_value.text(),
+            "clock": self.lbl_stat_drift_val.text(),
+            "clock_source": self._last_clock_source,
+            "capture": self.lbl_capture_health.text(),
+            "language": self.translator.locale,
+        }
+
+    def open_report_dialog(self, exec_dialog: bool = True) -> ReportDialog:
+        """Bug / result report: a zip to attach to a GitHub issue."""
+        worker = self.dsp_worker
+        recording = worker.recording_path if isinstance(worker, MeasureStreamWorker) else None
+        dlg = ReportDialog(self.translator, self.report_settings(), recording, parent=self)
+        if exec_dialog:
+            dlg.exec()
+        return dlg
+
     def open_about_dialog(self, exec_dialog: bool = True) -> AboutDialog:
         """Version, licence, links and the configuration and log folders."""
         dlg = AboutDialog(self.translator, parent=self)
@@ -2287,6 +2334,8 @@ class MainWin(QMainWindow):
         self.btn_export_test_results.setText(tr("btn_export_test_results"))
         self.btn_buy_coffee.setText(tr("btn_buy_coffee"))
         self.btn_about.setText(tr("btn_about"))
+        self.btn_report.setText(tr("btn_report"))
+        self.btn_report.setToolTip(tr("btn_report_tooltip"))
         self.btn_calibrate.setText(tr("btn_calibrate"))
         self.btn_calibrate.setToolTip(tr("btn_calibrate_tooltip"))
         self.btn_buy_coffee.setToolTip(tr("coffee_tooltip").format(url=BUY_ME_A_COFFEE_URL))
@@ -2410,6 +2459,8 @@ class MainWin(QMainWindow):
         self._tape_autoscale = True
         self._last_warning = ""
         self._last_saturated_monotonic = -math.inf
+        self._silence_since = None
+        self._silence_warned = False
         self._perf_waveform.reset()
         self._perf_level.reset()
         self.prg_snr.setValue(0)
@@ -2823,6 +2874,7 @@ class MainWin(QMainWindow):
             return
         if saturated:
             self._last_saturated_monotonic = time.monotonic()
+        self._check_digital_silence(peak_dbfs)
         if self._telemetry_seen:
             return
         pct, kind = level_to_quality(peak_dbfs, rms_dbfs, saturated)
@@ -2856,6 +2908,25 @@ class MainWin(QMainWindow):
             rate_bias_spd,
             every_s=5.0,
         )
+
+    def _check_digital_silence(self, peak_dbfs: float) -> None:
+        """Warn once per session when a hardware input delivers nothing but exact zeros."""
+        if self.dsp_worker is None or self.dsp_worker.synthetic_mode or self._silence_warned:
+            return
+        if math.isfinite(peak_dbfs):
+            self._silence_since = None
+            return
+        now = time.monotonic()
+        if self._silence_since is None:
+            self._silence_since = now
+        elif now - self._silence_since >= self.SILENCE_HINT_S:
+            self._silence_warned = True
+            key = {"darwin": "no_signal_macos", "win32": "no_signal_windows"}.get(
+                sys.platform, "no_signal_other"
+            )
+            message = self.translator.tr(key)
+            logger.warning("Digital silence from the input device: %s", message)
+            self.statusBar().showMessage(message, 20000)
 
     def _on_clock_info(self, sigma_ppm: float, level: int, source: str) -> None:
         """Uncertainty, confidence level and origin of the drift applied to the rate."""

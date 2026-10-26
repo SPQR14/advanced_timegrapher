@@ -480,9 +480,15 @@ ruff format --check .
 
 ## Depuración
 
-- Log: `logs/adv_tg.log` en la raíz del repo (rotativo, 5 MB × 3 copias; incluye el nombre del
-  hilo). Los fallos nativos (segfaults) van a `logs/faulthandler.log`. El proceso hijo de
-  captura escribe en `logs/adv_tg_capture.log`.
+- Carpeta de logs (`LoggerSetup.LOG_DIR`, `utils/logger_setup.default_log_dir`): desde la beta 1
+  ya no es `logs/` del repositorio sino la del usuario: `~/Library/Logs/adv_tg` (macOS),
+  `%LOCALAPPDATA%\adv_tg\logs` (Windows) o `~/.local/state/adv_tg/logs` (Linux).
+  `ADV_TG_LOG_DIR=logs adv-tg` la devuelve al repositorio mientras se desarrolla; los tests usan
+  una carpeta temporal. "Acerca de" muestra la ruta.
+- Archivos: `adv_tg.log` (rotativo, 5 MB × 3 copias; incluye el nombre del hilo),
+  `faulthandler.log` (fallos nativos), `adv_tg_capture.log` (proceso de captura) y
+  `adv_tg_analysis.log` (proceso de análisis). En el texto de las fases, `logs/…` se refiere a
+  esa carpeta.
 - Por defecto la consola muestra INFO y el archivo DEBUG. Con `ADV_TG_DEBUG=1` la consola
   también muestra DEBUG.
 - `adv_tg.utils.debugger.Debugger` (`Debugger.get(__name__)`): `phase()` (inicio/fin con

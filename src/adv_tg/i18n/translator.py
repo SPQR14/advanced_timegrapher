@@ -47,6 +47,36 @@ class Translator:
             "btn_save_csv": "Export Results to CSV",
             "btn_export_test_results": "Export Test Results",
             "btn_buy_coffee": "☕ Buy me a coffee",
+            "no_signal_macos": (
+                "No sound from the microphone. Allow it in System Settings → Privacy & Security → "
+                "Microphone, then restart the app. Also check the input device and its volume."
+            ),
+            "no_signal_windows": (
+                "No sound from the microphone. Allow it in Settings → Privacy & security → "
+                "Microphone (desktop apps), and check the input device and its volume."
+            ),
+            "no_signal_other": "No sound from the microphone: check the input device, its volume and that it is not muted.",
+            "btn_report": "Report",
+            "btn_report_tooltip": "Create a zip with logs and settings to attach to a GitHub issue",
+            "report_title": "Report a result or a problem",
+            "report_intro": (
+                "This creates a .zip file with the information we need. Then open "
+                "<a href='{url}'>GitHub Issues</a>, choose <b>Measurement result</b> or "
+                "<b>Bug report</b>, fill in the form and drag the .zip into it."
+            ),
+            "report_description": "What happened? (optional, also goes into the zip)",
+            "report_placeholder": "Watch, calibre, what you did, what you expected…",
+            "report_include_recording": "Include the last session recording (FLAC)",
+            "report_no_recording": "No recording available: run a session with a microphone first",
+            "report_privacy": (
+                "The zip contains the log files of {logs} (they include file paths with your "
+                "user name and your audio device names), your settings and clock calibrations. "
+                "You can open it and check it before sharing."
+            ),
+            "report_create": "Create report…",
+            "report_done": "Report saved:\n{path}\n\nNow open GitHub and attach this file.",
+            "report_open_github": "Open GitHub",
+            "report_show_file": "Show file",
             "btn_about": "About",
             "about_title": "About Advanced Timegrapher",
             "about_body": (
@@ -163,6 +193,36 @@ class Translator:
             "btn_save_csv": "Exportar resultados a CSV",
             "btn_export_test_results": "Exportar resultados de la prueba",
             "btn_buy_coffee": "☕ Buy me a coffee",
+            "no_signal_macos": (
+                "No llega sonido del micrófono. Permítelo en Ajustes del Sistema → Privacidad y "
+                "seguridad → Micrófono y reinicia la aplicación. Revisa también el dispositivo y su volumen."
+            ),
+            "no_signal_windows": (
+                "No llega sonido del micrófono. Permítelo en Configuración → Privacidad y seguridad → "
+                "Micrófono (aplicaciones de escritorio) y revisa el dispositivo y su volumen."
+            ),
+            "no_signal_other": "No llega sonido del micrófono: revisa el dispositivo, su volumen y que no esté silenciado.",
+            "btn_report": "Reportar",
+            "btn_report_tooltip": "Crea un zip con registros y ajustes para adjuntar en GitHub",
+            "report_title": "Reportar un resultado o un problema",
+            "report_intro": (
+                "Esto crea un archivo .zip con la información que necesitamos. Después abre "
+                "<a href='{url}'>GitHub Issues</a>, elige <b>Measurement result</b> (resultado) o "
+                "<b>Bug report</b> (fallo), rellena el formulario y arrastra el .zip dentro."
+            ),
+            "report_description": "¿Qué pasó? (opcional, también va dentro del zip)",
+            "report_placeholder": "Reloj, calibre, qué hiciste, qué esperabas…",
+            "report_include_recording": "Incluir la grabación de la última sesión (FLAC)",
+            "report_no_recording": "No hay grabación: haz primero una sesión con micrófono",
+            "report_privacy": (
+                "El zip contiene los registros de {logs} (incluyen rutas de archivos con tu "
+                "nombre de usuario y los nombres de tus dispositivos de audio), tus ajustes y "
+                "las calibraciones del reloj. Puedes abrirlo y revisarlo antes de compartirlo."
+            ),
+            "report_create": "Crear reporte…",
+            "report_done": "Reporte guardado:\n{path}\n\nAhora abre GitHub y adjunta este archivo.",
+            "report_open_github": "Abrir GitHub",
+            "report_show_file": "Mostrar archivo",
             "btn_about": "Acerca de",
             "about_title": "Acerca de Advanced Timegrapher",
             "about_body": (

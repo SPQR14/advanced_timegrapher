@@ -161,3 +161,51 @@ def test_calibration_button_and_about(window) -> None:
     about = window.open_about_dialog(exec_dialog=False)
     assert __version__ in about.version_label.text()
     about.close()
+
+
+def test_report_dialog_from_window(window, tmp_path) -> None:
+    import zipfile
+
+    window.btn_mock.setChecked(False)
+    rec = tmp_path / "s.flac"
+    rec.write_bytes(b"x" * 100)
+    window.dsp_worker._recording = rec  # as if a session had finished
+    dlg = window.open_report_dialog(exec_dialog=False)
+    assert dlg.chk_recording.isEnabled() and dlg.chk_recording.isChecked()
+    dlg.txt_description.setPlainText("prueba")
+    out = dlg.create(tmp_path / "rep.zip", interactive=False)
+    assert out is not None and dlg.created == out
+    with zipfile.ZipFile(out) as z:
+        assert "recording.flac" in z.namelist()
+        text = z.read("report.txt").decode()
+    assert "prueba" in text and "engine: MeasureStreamWorker" in text and "duration_s: 60.0" in text
+    assert window.dsp_worker.recording_path == rec  # the worker still owns it
+    window.btn_mock.setChecked(True)
+    dlg = window.open_report_dialog(exec_dialog=False)
+    assert not dlg.chk_recording.isEnabled()
+
+
+def test_digital_silence_hint(window, monkeypatch) -> None:
+    import time as _time
+
+    window.btn_mock.setChecked(False)
+    window._set_capture_state("MIDIENDO")
+    clock = [100.0]
+    monkeypatch.setattr(mw.time, "monotonic", lambda: clock[0])
+    window._on_level_updated(-math.inf, -math.inf, False)
+    clock[0] += 2.0
+    window._on_level_updated(-math.inf, -math.inf, False)
+    assert not window._silence_warned
+    clock[0] += 1.5
+    window._on_level_updated(-math.inf, -math.inf, False)
+    assert window._silence_warned
+    key = {"darwin": "no_signal_macos", "win32": "no_signal_windows"}.get(
+        mw.sys.platform, "no_signal_other"
+    )
+    assert window.statusBar().currentMessage() == window.translator.tr(key)
+    # Any real sound resets the timer; a MOCK session never warns.
+    window._silence_warned = False
+    window._on_level_updated(-40.0, -60.0, False)
+    assert window._silence_since is None
+    window._set_capture_state("INACTIVO")
+    assert _time is not None

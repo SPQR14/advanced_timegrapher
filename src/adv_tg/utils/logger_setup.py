@@ -2,8 +2,32 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+LOG_DIR_ENV_VAR = "ADV_TG_LOG_DIR"
+
+
+def default_log_dir() -> Path:
+    """Folder of the log files (never inside the installed package, which may be read-only).
+
+    ``$ADV_TG_LOG_DIR`` if set (e.g. ``ADV_TG_LOG_DIR=logs`` keeps them in the repository while
+    developing); otherwise ``~/Library/Logs/adv_tg`` on macOS, ``%LOCALAPPDATA%\\adv_tg\\logs``
+    on Windows and ``$XDG_STATE_HOME/adv_tg/logs`` (default ``~/.local/state/adv_tg/logs``)
+    elsewhere. Child processes inherit the environment, so they log to the same folder.
+    """
+    env = os.environ.get(LOG_DIR_ENV_VAR, "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Logs" / "adv_tg"
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA")
+        return (Path(base) if base else home / "AppData" / "Local") / "adv_tg" / "logs"
+    base = os.environ.get("XDG_STATE_HOME")
+    return (Path(base) if base else home / ".local" / "state") / "adv_tg" / "logs"
 
 
 class LoggerSetup:
@@ -16,9 +40,8 @@ class LoggerSetup:
     StreamHandler that outputs log messages to the console (INFO, or DEBUG
     when the environment variable ``ADV_TG_DEBUG=1`` is set).
 
-    The log file is created in a dedicated ``logs`` directory located in
-    the same directory as this module. If the directory does not exist,
-    it will be created automatically.
+    The log file is created in the user's log folder (``default_log_dir``); it is created
+    automatically if it does not exist.
 
     Attributes:
         None
@@ -27,8 +50,7 @@ class LoggerSetup:
         setup_logger(name): Configures the root logger with the specified name.
     """
 
-    BASE_DIR: Path = Path(__file__).resolve().parents[3]
-    LOG_DIR: Path = BASE_DIR / "logs"
+    LOG_DIR: Path = default_log_dir()
     LOG_FILE: Path = LOG_DIR / "adv_tg.log"
     LOG_MAX_BYTES: int = 5 * 1024 * 1024
     LOG_BACKUP_COUNT: int = 3

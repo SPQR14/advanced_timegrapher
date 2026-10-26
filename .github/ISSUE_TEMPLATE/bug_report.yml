@@ -1,0 +1,62 @@
+name: Bug report / Reporte de fallo
+description: Something does not work, crashes or gives nonsense figures. / Algo no funciona, se cierra o da cifras sin sentido.
+title: "[Bug] <short description / descripción breve>"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use the **Report** button of the app to create the .zip with the logs and drag it into the last field.
+        If the app does not open, attach the files of the log folder instead (see the README, "Troubleshooting").
+        Usa el botón **Reportar** de la aplicación para crear el .zip con los registros y arrástralo al último campo.
+        Si la aplicación no abre, adjunta los archivos de la carpeta de registros (ver el README, "Solución de problemas").
+  - type: input
+    id: version
+    attributes:
+      label: App version / Versión de la aplicación
+      placeholder: "0.6.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system / Sistema operativo
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows 11
+        - Windows 10
+        - Linux
+        - Other / Otro
+    validations:
+      required: true
+  - type: input
+    id: microphone
+    attributes:
+      label: Microphone / Micrófono
+      placeholder: "CM18 USB contact mic"
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened? / ¿Qué pasó?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / Pasos para reproducirlo
+      placeholder: |
+        1. Select ... / Elegir ...
+        2. Press START / Pulsar INICIAR
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect? / ¿Qué esperabas?
+  - type: textarea
+    id: attachment
+    attributes:
+      label: Report zip / Zip del reporte
+      description: Drag here the .zip created with the Report button / Arrastra aquí el .zip creado con Reportar

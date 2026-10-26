@@ -490,6 +490,13 @@ class MeasureStreamWorker(CaptureStreamWorker):
             path.unlink(missing_ok=True)
 
     @property
+    def recording_path(self) -> Path | None:
+        """The last finished session's recording (still owned by the worker), or None."""
+        with self._rec_lock:
+            path = self._recording
+        return path if path is not None and path.exists() else None
+
+    @property
     def has_recording(self) -> bool:
         """True when the last finished session left a recording to save."""
         with self._rec_lock:

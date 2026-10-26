@@ -1,9 +1,12 @@
-"""Dialogs of the main window: manual ADC clock calibration and "About".
+"""Dialogs of the main window: manual ADC clock calibration, "About" and the report bundle.
 
 ``CalibrationDialog`` edits the calibrations stored per device (``adv_tg.utils.adc_calibration``,
 the same file as ``python -m adv_tg.tools.adc_calibration``): it shows the one that applies
 now and the history, saves a manual value (level 3) or the live estimate of the last session,
 and deletes the device's calibrations. A new calibration applies from the next session.
+
+``ReportDialog`` builds the ``.zip`` of ``adv_tg.utils.report`` (logs, system, settings,
+calibrations and optionally the last recording) and opens the GitHub issue chooser.
 """
 
 from __future__ import annotations
@@ -11,18 +14,23 @@ from __future__ import annotations
 import platform
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
-from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, Qt
+from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, Qt, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -42,8 +50,9 @@ from adv_tg.utils.adc_calibration import (
 )
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
+from adv_tg.utils.report import ISSUES_URL, build_report, default_report_name
 
-__all__ = ["REPO_URL", "AboutDialog", "CalibrationDialog", "LiveDrift"]
+__all__ = ["REPO_URL", "AboutDialog", "CalibrationDialog", "LiveDrift", "ReportDialog"]
 
 _dbg = Debugger.get(__name__)
 logger = _dbg.logger
@@ -287,3 +296,101 @@ class AboutDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+
+class ReportDialog(QDialog):
+    """Create the report ``.zip`` and open GitHub Issues (see module docstring).
+
+    Args:
+        translator: UI texts.
+        settings: Current settings of the window, written into ``report.txt``.
+        recording: Last session recording that may be included, or None.
+        parent: Qt parent.
+    """
+
+    def __init__(
+        self,
+        translator: Translator,
+        settings: dict[str, object],
+        recording: Path | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._tr = translator.tr
+        tr = self._tr
+        self.settings = settings
+        self.recording = recording
+        self.created: Path | None = None
+        self.setWindowTitle(tr("report_title"))
+        self.setMinimumWidth(560)
+        layout = QVBoxLayout(self)
+        intro = QLabel(tr("report_intro").format(url=ISSUES_URL))
+        intro.setWordWrap(True)
+        intro.setTextFormat(Qt.TextFormat.RichText)
+        intro.setOpenExternalLinks(True)
+        layout.addWidget(intro)
+        layout.addWidget(QLabel(tr("report_description")))
+        self.txt_description = QPlainTextEdit()
+        self.txt_description.setPlaceholderText(tr("report_placeholder"))
+        layout.addWidget(self.txt_description)
+        self.chk_recording = QCheckBox(tr("report_include_recording"))
+        self.chk_recording.setEnabled(recording is not None)
+        self.chk_recording.setChecked(recording is not None)
+        if recording is None:
+            self.chk_recording.setToolTip(tr("report_no_recording"))
+        layout.addWidget(self.chk_recording)
+        privacy = QLabel(tr("report_privacy").format(logs=LoggerSetup.LOG_DIR))
+        privacy.setWordWrap(True)
+        privacy.setObjectName("HelpText")
+        layout.addWidget(privacy)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        self.btn_create = buttons.addButton(
+            tr("report_create"), QDialogButtonBox.ButtonRole.AcceptRole
+        )
+        self.btn_create.clicked.connect(lambda: self.create())
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def create(self, path: Path | str | None = None, interactive: bool = True) -> Path | None:
+        """Ask where to save (unless ``path``), write the ``.zip`` and offer to open GitHub."""
+        tr = self._tr
+        if path is None:
+            start = Path.home() / "Desktop"
+            start = start if start.is_dir() else Path.home()
+            chosen, _ = QFileDialog.getSaveFileName(
+                self, tr("report_title"), str(start / default_report_name()), "ZIP (*.zip)"
+            )
+            if not chosen:
+                return None
+            path = chosen
+        recording = self.recording if self.chk_recording.isChecked() else None
+        try:
+            out, notes = build_report(
+                path,
+                description=self.txt_description.toPlainText(),
+                settings=self.settings,
+                recording=recording,
+            )
+        except OSError as exc:
+            logger.error("No se pudo crear el reporte: %s", exc)
+            if interactive:
+                QMessageBox.warning(self, tr("report_title"), str(exc))
+            return None
+        self.created = out
+        if interactive:
+            box = QMessageBox(self)
+            box.setWindowTitle(tr("report_title"))
+            text = tr("report_done").format(path=out)
+            if notes:
+                text += "\n\n" + "\n".join(f"• {n}" for n in notes)
+            box.setText(text)
+            open_btn = box.addButton(tr("report_open_github"), QMessageBox.ButtonRole.AcceptRole)
+            show_btn = box.addButton(tr("report_show_file"), QMessageBox.ButtonRole.ActionRole)
+            box.addButton(QMessageBox.StandardButton.Close)
+            box.exec()
+            if box.clickedButton() is open_btn:
+                QDesktopServices.openUrl(QUrl(ISSUES_URL))
+            elif box.clickedButton() is show_btn:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out.parent)))
+            self.accept()
+        return out
