@@ -44,7 +44,7 @@ where = ["src"]
 include = ["adv_tg*"]
 
 [tool.setuptools.package-data]
-"adv_tg.ui" = ["assets/*.svg"]
+"adv_tg.ui" = ["assets/*"]
 "adv_tg.utils" = ["db/*.csv"]
 
 [tool.pytest.ini_options]

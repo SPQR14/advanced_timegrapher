@@ -109,7 +109,28 @@ def configure_pyqtgraph_gpu(enable_opengl: bool = False) -> bool:
 
 configure_pyqtgraph_gpu()
 
-ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+
+def _resolve_assets_dir() -> Path:
+    """Resolve directory of application assets (SVG arrows, icons).
+
+    Supports standard source/package execution and PyInstaller frozen bundles
+    (which extract data files to ``sys._MEIPASS`` or macOS ``Contents/Resources``).
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        meipass = Path(sys._MEIPASS)
+        for cand in (
+            meipass / "adv_tg" / "ui" / "assets",
+            meipass / "ui" / "assets",
+            meipass / "assets",
+            meipass / "Resources" / "adv_tg" / "ui" / "assets",
+            meipass.parent / "Resources" / "adv_tg" / "ui" / "assets",
+        ):
+            if cand.is_dir():
+                return cand
+    return Path(__file__).resolve().parent / "assets"
+
+
+ASSETS_DIR = _resolve_assets_dir()
 APP_ICON_PATH = ASSETS_DIR / "adv-tg.svg"
 #: Page opened by the "Buy me a coffee" button.
 BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/sqpr14"

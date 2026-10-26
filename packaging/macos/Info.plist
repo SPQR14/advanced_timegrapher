@@ -14,6 +14,8 @@
     <string>Advanced Timegrapher</string>
     <key>CFBundleIdentifier</key>
     <string>io.github.spqr14.advanced-timegrapher</string>
+    <key>CFBundleIconFile</key>
+    <string>adv-tg.icns</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Advanced Timegrapher listens to your watch through the microphone to measure rate, beat error and amplitude. / Advanced Timegrapher escucha tu reloj por el micrófono para medir marcha, error de batimiento y amplitud.</string>
     <key>NSHighResolutionCapable</key>

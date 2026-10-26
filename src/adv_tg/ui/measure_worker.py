@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -86,7 +87,23 @@ def analysis_in_separate_process() -> bool:
 def replay_file() -> Path | None:
     """File to replay instead of the microphone (``ADV_TG_REPLAY_FILE``), or None."""
     value = os.environ.get(REPLAY_ENV_VAR, "").strip()
-    return Path(value).expanduser() if value else None
+    if not value:
+        return None
+    p = Path(value).expanduser()
+    if p.is_file():
+        return p
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        meipass = Path(sys._MEIPASS)
+        filename = p.name
+        for cand in (
+            meipass / value,
+            meipass / "docs" / "samples" / filename,
+            meipass.parent / "Resources" / value,
+            meipass.parent / "Resources" / "docs" / "samples" / filename,
+        ):
+            if cand.is_file():
+                return cand
+    return p
 
 
 def device_name(device_id: int | None) -> str | None:

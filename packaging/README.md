@@ -1,53 +1,77 @@
-# Empaquetado (beta)
+# Empaquetado y Distribución Multiplataforma (Beta)
 
-Punto de partida para construir los binarios de la beta (macOS `.app`/`.dmg`, Windows `.zip`,
-Linux AppImage o `.tar.gz`) y publicarlos en GitHub Releases. **El `.spec` no se ha probado
-todavía.** Decisiones del proyecto: los tres sistemas; publicación en GitHub Releases desde
-GitHub Actions al crear una etiqueta (`v0.6.0-beta.1`); sin firma de código en la beta.
+Este directorio contiene las especificaciones y utilidades para construir los binarios de la beta (macOS `.app`/`.zip`, Windows `.zip`, Linux `.tar.gz`) y distribuirlos a través de GitHub Releases y GitHub Actions al crear una etiqueta (`v0.6.0-beta.1` o similar).
 
 | Archivo | Para qué |
 |---|---|
-| `launcher.py` | Script de entrada: llama a `multiprocessing.freeze_support()` antes de importar nada |
-| `adv-tg.spec` | Spec de PyInstaller (carpeta única; `.app` en macOS con el `Info.plist`) |
-| `macos/Info.plist` | Claves del `Info.plist`, incluida **`NSMicrophoneUsageDescription`** |
+| `launcher.py` | Script de entrada: invoca `multiprocessing.freeze_support()` antes de cualquier importación pesada |
+| `adv-tg.spec` | Especificación de PyInstaller validada (carpeta única; `.app` en macOS con inyección de `Info.plist` e icono) |
+| `macos/Info.plist` | Configuración del bundle de macOS, incluyendo **`NSMicrophoneUsageDescription`** e icono |
+| `macos/adv-tg.icns` | Icono multi-resolución de macOS (16x16 hasta 1024x1024) |
+| `windows/adv-tg.ico` | Icono estándar para ejecutables de Windows |
 
-## Lo que hay que respetar
+---
 
-1. **Micrófono en macOS.** Sin `NSMicrophoneUsageDescription` en el `Info.plist` del `.app`,
-   macOS deniega el micrófono sin avisar y la aplicación solo recibe silencio digital. La
-   aplicación detecta ese silencio y explica dónde dar el permiso, pero la clave es obligatoria.
-   PyInstaller firma el `.app` ad hoc; debería bastar para que macOS muestre el diálogo de
-   permiso (sin verificar: comprobarlo en un Mac que no haya dado nunca el permiso).
-2. **Procesos hijo ("spawn").** La captura (`adv_tg.audio.capture_process`) y el análisis
-   (`adv_tg.audio.analysis_process`) corren en procesos aparte. Con el binario congelado, cada
-   hijo vuelve a ejecutar el script de entrada: por eso `freeze_support()` va primero en
-   `launcher.py` (y también en `adv_tg.main.main`). Comprobar en el binario que el log
-   `adv_tg_capture.log` y `adv_tg_analysis.log` aparecen al medir.
-3. **Archivos de datos.** `adv_tg/ui/assets/*` (iconos SVG) y `adv_tg/utils/db/watch_db.csv`
-   (calibres) van dentro del paquete (`collect_data_files`).
-4. **Carpetas escribibles.** El paquete puede ser de solo lectura: los registros van a
-   `LoggerSetup.LOG_DIR` (`~/Library/Logs/adv_tg`, `%LOCALAPPDATA%\adv_tg\logs`,
-   `~/.local/state/adv_tg/logs`) y los ajustes y calibraciones a `config_dir()`
-   (`~/Library/Application Support/adv_tg`, `%APPDATA%\adv_tg`, `~/.config/adv_tg`). Nada se
-   escribe junto al ejecutable.
-5. **Bibliotecas nativas.**
-   - `sounddevice` trae PortAudio en sus ruedas de macOS y Windows; **en Linux no**: el
-     AppImage debe incluir `libportaudio.so.2` o el README debe pedir `libportaudio2`.
-   - `soundfile` trae libsndfile en sus ruedas (también en Linux).
-   - PyQt6 + pyqtgraph: los hooks de `pyinstaller-hooks-contrib` cubren Qt; comprobar el
-     plugin de plataforma (`cocoa`, `windows`, `xcb`) y el de iconos SVG (`qsvg`).
-   - Windows: `adv_tg/__init__.py` aísla las DLL de Qt del paquete frente a otras instalaciones
-     (MiKTeX, Anaconda); funciona con PyInstaller.
-6. **Iconos.** Solo hay `adv-tg.svg` y `adv-tg.jpg` en `src/adv_tg/ui/assets/`: hay que generar
-   `adv-tg.icns` (macOS) y `adv-tg.ico` (Windows) y pasarlos a `EXE(icon=...)`/`BUNDLE(icon=...)`.
-7. **Sin firma.** Las instrucciones para abrir la aplicación están en el `README.md` de la raíz
-   (inglés y español).
+## Reglas de Empaquetado y Arquitectura
 
-## Prueba mínima de cada binario
+### 1. Permisos de Micrófono en macOS
+- **Obligatoriedad:** Sin `NSMicrophoneUsageDescription` en el `Info.plist` del bundle `.app`, macOS bloquea el micrófono silenciosamente devolviendo únicamente silencio digital (muestras en cero).
+- **Inyección:** `adv-tg.spec` lee e inyecta `packaging/macos/Info.plist` en la estructura `BUNDLE`, sincronizando además `CFBundleShortVersionString`, `CFBundleVersion` y `CFBundleIconFile="adv-tg.icns"`.
+- **Firma:** En la beta se firma ad-hoc (manejado por PyInstaller), lo cual permite que macOS muestre el prompt de solicitud de permisos al usuario.
 
-1. Abre y muestra la ventana; **Acerca de** enseña la versión correcta.
-2. Con un micrófono: **INICIAR** → la barra de calidad muestra nivel y, con un reloj, aparecen
-   cifras; en macOS se pide el permiso del micrófono la primera vez.
-3. Sin micrófono: `ADV_TG_REPLAY_FILE=<toma.flac>` reproduce una grabación (por ejemplo
-   `docs/samples/miyota_9015.flac`, 28800 A/h, 51°).
-4. **Reportar** crea el `.zip` con los registros.
+### 2. Procesos Hijo Multiprocessing (`freeze_support`)
+- La captura de audio (`adv_tg.audio.capture_process`) y el análisis DSP (`adv_tg.audio.analysis_process`) se ejecutan en procesos separados utilizando el método `spawn`.
+- En binarios congelados por PyInstaller, cada proceso hijo relanza el ejecutable base. Para evitar bucles infinitos de apertura de ventanas, **`multiprocessing.freeze_support()`** se ejecuta al principio de `packaging/launcher.py` y en `adv_tg.main.main`.
+- Los módulos dinámicos requeridos por los procesos hijo están declarados en `hiddenimports` en `adv-tg.spec`.
+
+### 3. Rutas de Lectura de Archivos de Datos (`sys._MEIPASS`)
+- Los assets de UI (`adv_tg/ui/assets/*`) y la base de datos de calibres (`adv_tg/utils/db/watch_db.csv`) se empaquetan en el binario.
+- Los módulos de la aplicación (`src/adv_tg/ui/main_window.py` y `src/adv_tg/utils/watch_db.py`) resuelven sus rutas verificando `getattr(sys, "frozen", False)` y consultando `sys._MEIPASS` (y en macOS, el directorio `Contents/Resources` del `.app`). En modo desarrollo o pip, utilizan `__file__`.
+
+### 4. Rutas de Escritura y Registros (Logs)
+El paquete puede estar instalado en directorios de solo lectura (como `/Applications` o `C:\Program Files`). Por ello, nada se escribe junto al ejecutable:
+- **macOS:** `~/Library/Logs/adv_tg`
+- **Windows:** `%LOCALAPPDATA%\adv_tg\logs` (ej. `C:\Users\<Usuario>\AppData\Local\adv_tg\logs`)
+- **Linux:** `~/.local/state/adv_tg/logs` (respetando `$XDG_STATE_HOME`)
+- **Configuración y calibración:** Gestionado por `adv_tg.utils.adc_calibration.config_dir` (`~/Library/Application Support/adv_tg`, `%APPDATA%\adv_tg`, `~/.config/adv_tg`).
+
+### 5. Dependencias Nativas y PortAudio en Linux
+- **macOS y Windows:** Las ruedas oficiales de `sounddevice` ya incluyen las librerías dinámicas de PortAudio precompiladas.
+- **Linux:** `sounddevice` en Linux depende de la librería del sistema `libportaudio.so.2`.
+  - **Empaquetado:** `adv-tg.spec` inspecciona automáticamente `ldconfig` y los directorios de librerías del sistema del host de compilación; si encuentra `libportaudio.so.2`, la empaqueta dentro del paquete distribuible.
+  - **Requisito de sistema:** Si un sistema no cuenta con la librería empaquetada o prefiere usar la del sistema, se requiere instalar `libportaudio2` (Debian/Ubuntu: `sudo apt install libportaudio2`, Fedora: `sudo dnf install portaudio`, Arch: `sudo pacman -S portaudio`).
+
+### 6. Iconos Multiplataforma
+- `adv-tg.icns`: Creado a partir del vector `adv-tg.svg` y vinculado tanto a `BUNDLE(icon=...)` como a `EXE(icon=...)` en macOS.
+- `adv-tg.ico`: Generado con tamaños estándar (16, 24, 32, 48, 64, 128, 256) y vinculado a `EXE(icon=...)` para Windows.
+
+---
+
+## Verificación y Smoke Test
+
+Para asegurar que un binario construido funciona correctamente sin colgarse en el bucle de eventos de la GUI (`app.exec()`), el ejecutable soporta los siguientes argumentos de línea de comandos:
+
+- `./adv-tg --version`: Imprime la versión empaquetada y termina con código 0.
+- `./adv-tg --smoke-test` (o con la variable `ADV_TG_SMOKE_TEST=1`): Inicializa el framework Qt, comprueba la carga de traducciones, valida la base de datos de calibres, inicializa la ventana principal y los motores de audio/DSP, y sale de inmediato con código de retorno `0`.
+- En entornos CI/Headless, puede ejecutarse con `QT_QPA_PLATFORM=offscreen` (o `xvfb-run` en Linux).
+
+---
+
+## Construcción Local
+
+Para compilar el binario localmente:
+
+```bash
+# 1. Asegúrate de tener las dependencias instaladas
+pip install pyinstaller
+pip install -e .
+
+# 2. Compilar con PyInstaller
+pyinstaller packaging/adv-tg.spec --noconfirm
+
+# 3. Verificar el artefacto resultante
+# En Linux / Windows:
+./dist/adv-tg/adv-tg --smoke-test
+# En macOS:
+"./dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --smoke-test
+```
