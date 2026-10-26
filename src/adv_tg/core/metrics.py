@@ -59,6 +59,8 @@ Model and conventions
   ``q_n = min(1, n_min / (3 * min_beats_per_parity))`` (n_min = valid beats of the poorer
   parity), ``q_sigma = 1 / (1 + sigma_max / 500 µs)``, ``q_excl = 1 - excluded_fraction`` and
   ``q_amp = 1 / (1 + |A_tic - A_tac| / 20°)`` (1 when the amplitude is not available).
+  ``timing_confidence`` is the same product without ``q_amp``: the confidence of the rate and
+  the beat error, which a tic/tac amplitude mismatch does not affect.
 
 Batch and incremental: ``compute_metrics`` works on a list of beats; ``MetricsTracker`` keeps
 the beats of the last ``span_s`` seconds (by ``t_fine``) and computes the same function on
@@ -98,6 +100,7 @@ __all__ = [
     "rate_from_period",
     "rate_trend",
     "select_beats",
+    "timing_confidence",
     "window_rates",
 ]
 
@@ -565,7 +568,8 @@ def _window_sigma_factor(m: Metrics) -> float:
     return f
 
 
-def _confidence(m: Metrics, config: MetricsConfig) -> float:
+def timing_confidence(m: Metrics, config: MetricsConfig) -> float:
+    """Confidence of the rate and beat error: ``q_n * q_sigma * q_excl`` (module docstring)."""
     if not math.isfinite(m.rate_s_per_day):
         return 0.0
     n_min = min(m.n_used_even, m.n_used_odd)
@@ -573,10 +577,15 @@ def _confidence(m: Metrics, config: MetricsConfig) -> float:
     s_max = max(m.sigma_even_us, m.sigma_odd_us)
     q_sigma = 1.0 / (1.0 + s_max / 500.0) if math.isfinite(s_max) else 0.0
     q_excl = max(0.0, 1.0 - m.excluded_fraction)
+    return float(min(1.0, max(0.0, q_n * q_sigma * q_excl)))
+
+
+def _confidence(m: Metrics, config: MetricsConfig) -> float:
+    q_time = timing_confidence(m, config)
     q_amp = 1.0
     if math.isfinite(m.amplitude_tic_deg) and math.isfinite(m.amplitude_tac_deg):
         q_amp = 1.0 / (1.0 + abs(m.amplitude_tic_deg - m.amplitude_tac_deg) / 20.0)
-    return float(min(1.0, max(0.0, q_n * q_sigma * q_excl * q_amp)))
+    return float(min(1.0, max(0.0, q_time * q_amp)))
 
 
 # ====================================================================== batch

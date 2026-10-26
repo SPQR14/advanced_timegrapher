@@ -14,8 +14,11 @@ GUI repaint holds this process's GIL for long stretches and an in-process callba
 blocks. ``CAPTURE_IN_SEPARATE_PROCESS = False`` or ``ADV_TG_CAPTURE_INPROC=1`` forces the
 in-process ``AudioCapture`` (debugging).
 
-It never emits ``telemetry_ready`` nor ``drift_updated``: there is no beat detector, no
-metrics and no drift estimator yet.
+It never emits ``telemetry_ready`` nor ``drift_updated``: the measurement lives in the
+subclass ``adv_tg.ui.measure_worker.MeasureStreamWorker``, which plugs into the reader thread
+through ``_make_hook`` (an object with ``on_open(capture)``, ``tick(now)`` and ``close()``,
+all called in the reader thread). A source that sets ``exhausted`` (file replay) ends the
+session without an error.
 
 Opening happens in the worker thread, so ``start_stream()`` never blocks the GUI. The device
 is opened with ``PRIMARY_BLOCKSIZE``/``PRIMARY_LATENCY``; if that fails it retries once with
@@ -204,8 +207,10 @@ class _CaptureReader(QObject):
         fs: float,
         stream: SampleStream,
         capture_factory: CaptureFactory,
+        hook: Any = None,
     ) -> None:
         super().__init__()
+        self._hook = hook
         self._owner = owner
         self._session = session
         self._device = device
@@ -314,12 +319,14 @@ class _CaptureReader(QObject):
             self._capture = self._open()
         except _OpenError as exc:
             logger.error("Captura sin abrir: %s", exc.args[0])
+            self._close_hook()
             self._owner._finish(self._session, exc.args[0])
             self._stopped = True
             QThread.currentThread().quit()
             return
         except Exception as exc:  # unexpected bug: report, never crash the thread
             logger.exception("Error inesperado al abrir la captura")
+            self._close_hook()
             self._owner._finish(self._session, f"Error inesperado al abrir la captura: {exc}")
             self._stopped = True
             QThread.currentThread().quit()
@@ -327,6 +334,11 @@ class _CaptureReader(QObject):
         if self._stopped:  # stop requested while opening
             self._teardown("detenida durante la apertura")
             return
+        if self._hook is not None:
+            try:
+                self._hook.on_open(self._capture)
+            except Exception:
+                logger.exception("Error al preparar el análisis de la sesión")
         self._t_start = time.perf_counter()
         self._next_level = self._t_start + LEVEL_PERIOD_S
         self._next_health = self._t_start + HEALTH_PERIOD_S
@@ -352,9 +364,19 @@ class _CaptureReader(QObject):
         self._stopped = True
         self._teardown("detenida")
 
+    def _close_hook(self) -> None:
+        hook, self._hook = self._hook, None
+        if hook is None:
+            return
+        try:
+            hook.close()
+        except Exception:
+            logger.exception("Error al cerrar el análisis de la sesión")
+
     def _teardown(self, reason: str) -> None:
         if self._timer is not None:
             self._timer.stop()
+        self._close_hook()
         capture = self._capture
         self._capture = None
         self._safe_close(capture)
@@ -411,11 +433,15 @@ class _CaptureReader(QObject):
         try:
             if not capture.is_active:
                 self._stopped = True
-                message = getattr(capture, "last_error", None) or (
-                    "El dispositivo de audio dejó de enviar datos."
-                )
+                if getattr(capture, "exhausted", False):
+                    message = None  # a replayed file reached its end: a normal finish
+                else:
+                    message = getattr(capture, "last_error", None) or (
+                        "El dispositivo de audio dejó de enviar datos."
+                    )
+                self._close_hook()  # last figures before session_finished
                 self._owner._finish(self._session, message)
-                self._teardown("el dispositivo se detuvo")
+                self._teardown("fin del archivo" if message is None else "el dispositivo se detuvo")
                 return
             self._emit_waveform()
             now = time.perf_counter()
@@ -426,6 +452,8 @@ class _CaptureReader(QObject):
                 self._next_health = max(self._next_health + HEALTH_PERIOD_S, now)
                 st = self._stream.stats()
                 self._owner.capture_health.emit(100.0 * st.ingest_ratio, int(capture.status_flags))
+            if self._hook is not None:
+                self._hook.tick(now)
         except Exception:
             _dbg.throttled(
                 "capture_tick_error",
@@ -540,6 +568,10 @@ class CaptureStreamWorker(BaseStreamWorker):
         reader = self._reader
         return None if reader is None else reader.open_params
 
+    def _make_hook(self, fs: float, stream: SampleStream) -> Any:
+        """Per-session reader hook (see module docstring); None = capture only."""
+        return None
+
     def _finish(self, session: int, error: str | None) -> None:
         """End ``session`` once: optional ``error_occurred`` then ``session_finished``."""
         with self._lock:
@@ -601,7 +633,13 @@ class CaptureStreamWorker(BaseStreamWorker):
         thread = QThread()
         thread.setObjectName(f"CaptureReader-{session}")
         reader = _CaptureReader(
-            self, session, self._device_id, fs, self.stream, self._capture_factory
+            self,
+            session,
+            self._device_id,
+            fs,
+            self.stream,
+            self._capture_factory,
+            self._make_hook(fs, self.stream),
         )
         reader.moveToThread(thread)
         thread.finished.connect(reader.deleteLater)

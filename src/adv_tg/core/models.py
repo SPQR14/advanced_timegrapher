@@ -65,6 +65,10 @@ class BeatEvent:
         timestamp_p3: Timestamp of P3 (drop/locking impact) in seconds.
         peak_energy: Peak acoustic energy within the beat window.
         raw_waveform: Extracted filtered waveform segment for this beat.
+        waveform_start_s: Time of ``raw_waveform[0]`` on the same clock as the timestamps.
+            When given (real engine), the GUI places the P1/P2/P3 markers at
+            ``timestamp - waveform_start_s`` and a NaN timestamp hides its marker; when None
+            (MOCK), P3 is the largest peak and P1/P2 are placed by their offsets to it.
     """
 
     timestamp_p1: float
@@ -72,6 +76,7 @@ class BeatEvent:
     timestamp_p3: float
     peak_energy: float
     raw_waveform: np.ndarray
+    waveform_start_s: float | None = None
 
 
 @dataclass(slots=True)
@@ -107,6 +112,20 @@ class BeatTelemetry:
         micro_envelope: High-resolution sub-millisecond envelope for P1/P2/P3 inspection.
         filtered_signal: High-pass filtered acoustic waveform.
         effective_fs: Effective sampling frequency in Hz used during analysis.
+
+    Fields filled by the real engine (layer 5); NaN / defaults when unknown (e.g. MOCK):
+
+        rate_uncertainty_spd: Uncertainty of ``rate_spd`` (s/d), clock included.
+        beat_error_uncertainty_ms: Uncertainty of ``beat_error_ms``.
+        amplitude_indicative: The lift angle is a default: the amplitude is indicative.
+        detection_ratio: Detected / predicted beats over the measurement window (0-1).
+        usable_ratio: Beats that feed the figures / predicted beats (0-1).
+        locked: The detector follows the beats.
+        saturated_beats: Beats in the window that reached full scale.
+        span_s: Seconds of beats behind the figures.
+        warnings: Human-readable warnings (Spanish).
+        timing_confidence: Confidence of the rate and beat error (``confidence`` without the
+            tic/tac amplitude factor); NaN = use ``confidence``.
     """
 
     rate_spd: float
@@ -124,3 +143,13 @@ class BeatTelemetry:
         default_factory=lambda: np.empty(0, dtype=np.float64)
     )
     effective_fs: float = 48000.0
+    rate_uncertainty_spd: float = float("nan")
+    beat_error_uncertainty_ms: float = float("nan")
+    amplitude_indicative: bool = False
+    detection_ratio: float = float("nan")
+    usable_ratio: float = float("nan")
+    locked: bool = True
+    saturated_beats: int = 0
+    span_s: float = float("nan")
+    warnings: list[str] = field(default_factory=list)
+    timing_confidence: float = float("nan")
