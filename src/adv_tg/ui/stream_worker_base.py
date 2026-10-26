@@ -3,8 +3,10 @@
 ``BaseStreamWorker`` declares exactly the members ``MainWin`` uses on its engine
 (``dsp_worker``). Today these implementations exist:
 
-* ``adv_tg.ui.capture_worker.CaptureStreamWorker``: hardware devices. Real audio (raw
-  waveform, level, capture health) but NO measurement yet: it never emits
+* ``adv_tg.ui.measure_worker.MeasureStreamWorker``: hardware devices (layer 5). Real audio
+  plus the measurement of layers 2-4 (beats, figures, ADC clock) and the session recording.
+* ``adv_tg.ui.capture_worker.CaptureStreamWorker``: its base class. Real audio (raw
+  waveform, level, capture health) without measurement: it never emits
   ``telemetry_ready`` nor ``drift_updated``.
 * ``adv_tg.ui.null_engine.NullStreamWorker``: fallback only, used if the capture worker
   cannot be created. It does not process audio.
@@ -12,8 +14,7 @@
   It has a few MOCK-only extras (test timing, drift sigma/confidence) that are NOT part
   of this contract; ``MainWin`` only uses them when the engine is a ``MockStreamWorker``.
 
-The measuring worker (layer 5) must implement this contract too; ``create_worker`` in
-``adv_tg.ui.worker_factory`` picks the engine for each device.
+``create_worker`` in ``adv_tg.ui.worker_factory`` picks the engine for each device.
 
 Signals (may be emitted from any thread; Qt queues them to the GUI thread):
 
@@ -22,6 +23,9 @@ Signals (may be emitted from any thread; Qt queues them to the GUI thread):
 * ``waveform_ready(time_ms, waveform)``: two 1-D ``np.ndarray`` for the live signal plot
   (~30 FPS), normalized to roughly [-1, 1]. Arrays must not be mutated after emission.
 * ``drift_updated(effective_fs_hz, drift_ppm, rate_bias_spd)``: ADC clock drift estimate.
+* ``clock_info(sigma_ppm, level, source)``: uncertainty, confidence level (0-3, see
+  ``adv_tg.core.adc_clock.ClockLevel``) and origin of the drift applied to the rate; emitted
+  right after ``drift_updated`` by engines that know them.
 * ``capture_health(ingest_pct, overflows)``: share of audio that reached the analysis.
 * ``level_updated(peak_dbfs, rms_dbfs, saturated)``: input level (~10/s) over the samples
   received since the previous update; ``-inf`` for silence; ``saturated`` when the peak
@@ -55,6 +59,7 @@ class BaseStreamWorker(QObject):
     telemetry_ready = pyqtSignal(object)
     waveform_ready = pyqtSignal(object, object)
     drift_updated = pyqtSignal(float, float, float)
+    clock_info = pyqtSignal(float, int, str)
     capture_health = pyqtSignal(float, int)
     level_updated = pyqtSignal(float, float, bool)
     error_occurred = pyqtSignal(str)

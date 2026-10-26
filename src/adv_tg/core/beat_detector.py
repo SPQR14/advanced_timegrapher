@@ -715,6 +715,11 @@ class BeatDetector:
         return out
 
     @property
+    def locked(self) -> bool:
+        """True while the phase model is locked (beats are being tracked)."""
+        return self._locked
+
+    @property
     def stats(self) -> DetectorStats:
         """Counters snapshot (see ``DetectorStats``)."""
         n = max(1, self._emitted)

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -45,18 +47,17 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from adv_tg.core.models import BeatTelemetry, TelemetryResult, WatchConfig
+from adv_tg.core.models import BeatEvent, BeatTelemetry, TelemetryResult, WatchConfig
 from adv_tg.i18n.translator import Translator
 from adv_tg.mock.generator import generate_tick_train, save_wav
 from adv_tg.mock.worker import MockStreamWorker
-
-# TODO(capa-5): motor de hardware sin medición (fase 1b)
 from adv_tg.ui.capture_worker import (
     CaptureStreamWorker,
     SlotProfiler,
     level_text,
     level_to_quality,
 )
+from adv_tg.ui.measure_worker import MeasureStreamWorker
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
 from adv_tg.ui.worker_factory import create_worker
 from adv_tg.utils.audio_io import (
@@ -179,13 +180,8 @@ class HudCard(QFrame):
         mono_font = QFont("JetBrains Mono", 39, QFont.Weight.Bold)
         mono_font.setStyleHint(QFont.StyleHint.Monospace)
         self.value_label.setFont(mono_font)
-        self.value_label.setStyleSheet(
-            f"color: {self._accent_color}; "
-            f'font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace; '
-            f"font-size: 39pt; "
-            f"font-weight: 800; "
-            f"padding-bottom: 2px;"
-        )
+        self.dimmed = False
+        self._apply_value_style()
 
         layout.addLayout(header_layout)
         layout.addWidget(self.value_label)
@@ -194,9 +190,24 @@ class HudCard(QFrame):
         """Update localized title text."""
         self.title_label.setText(title.upper())
 
-    def set_value(self, text: str) -> None:
-        """Update numeric readout string."""
+    DIM_COLOR: str = "#5c6b80"
+
+    def _apply_value_style(self) -> None:
+        color = self.DIM_COLOR if self.dimmed else self._accent_color
+        self.value_label.setStyleSheet(
+            f"color: {color}; "
+            f'font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace; '
+            f"font-size: 39pt; "
+            f"font-weight: 800; "
+            f"padding-bottom: 2px;"
+        )
+
+    def set_value(self, text: str, dimmed: bool = False) -> None:
+        """Update numeric readout string; ``dimmed`` greys it out (low confidence)."""
         self.value_label.setText(text)
+        if dimmed != self.dimmed:
+            self.dimmed = dimmed
+            self._apply_value_style()
 
 
 class MainWin(QMainWindow):
@@ -204,13 +215,28 @@ class MainWin(QMainWindow):
 
     COSC_MIN_SPD: float = -4.0
     COSC_MAX_SPD: float = +6.0
+    # Real engine: figures whose timing confidence is below CONFIDENCE_HIDE are not shown;
+    # below CONFIDENCE_DIM they are greyed out (the amplitude also when the overall
+    # confidence, which includes the tic/tac mismatch, is below it). Real takes range 0.23
+    # (H-50, noisy tac) to 0.64 (Miyota), see docs/fase3_resultados.md; the confidence is a
+    # ranking, not a probability.
+    CONFIDENCE_HIDE: float = 0.15
+    CONFIDENCE_DIM: float = 0.30
+    # Quality bar of the real engine: anchor SNR mapped linearly from 12 dB (detection limit)
+    # to 25 dB, times the share of beats that feed the figures. Calibrated on the real takes
+    # (SNR 23-32 dB, 75-93 % usable -> 75-85 %, "ok"); a beat at the detector's "weak" SNR
+    # (20 dB) gives at most 62 % ("low").
+    QUALITY_SNR_FLOOR_DB: float = 12.0
+    QUALITY_SNR_FULL_DB: float = 25.0
+    SATURATION_HOLD_S: float = 2.0
+    EMPTY_VALUE: str = "---.-"
 
     def __init__(self, translator: Translator | None = None) -> None:
         super().__init__()
         logger.info("Initializing MainWin UI")
         self._gpu_enabled: bool = configure_pyqtgraph_gpu()
         self.translator = translator if translator is not None else Translator("en")
-        # TODO(capa-5): reconectar al motor real (hoy: MockStreamWorker o CaptureStreamWorker)
+        # Engine per device (create_worker): MockStreamWorker or MeasureStreamWorker
         self.dsp_worker: BaseStreamWorker | None = None
         self._capture_state: str = "INACTIVO"
         self._active_device_id: int | None = None
@@ -233,13 +259,19 @@ class MainWin(QMainWindow):
         # MOCK-only drift detail (None while the engine does not provide it)
         self._last_drift_sigma_ppm: float | None = None
         self._last_drift_confidence: float | None = None
+        # Real engine clock detail (clock_info): level 0-3, None while unknown
+        self._last_clock_level: int | None = None
+        self._last_clock_source: str = ""
+        self._last_saturated_monotonic: float = -math.inf
+        self._last_warning: str = ""
+        self._tape_autoscale: bool = True
         self._osc_rng = np.random.default_rng(2026)
 
         # Audio recording state (same duration as test)
         self._recorded_audio: np.ndarray | None = None
         self._recorded_sample_rate: int = 48000
         self._save_audio_on_finish: bool = False
-        # TODO(capa-5): la barra de calidad sigue al nivel hasta que llegue telemetría
+        # The quality bar follows the input level until the engine reports detection quality
         self._telemetry_seen: bool = False
         self._perf_waveform = SlotProfiler("waveform_ready")
         self._perf_level = SlotProfiler("level_updated")
@@ -251,9 +283,8 @@ class MainWin(QMainWindow):
         self._apply_industrial_theme()
         self._build_ui()
 
-        # TODO(capa-5): reconectar al motor real. Engine chosen per device by create_worker()
-        # (synthetic -> MockStreamWorker, hardware -> CaptureStreamWorker); each engine owns
-        # its threads, so no QThread/moveToThread is needed here.
+        # Engine chosen per device by create_worker() (synthetic -> MockStreamWorker,
+        # hardware -> MeasureStreamWorker); each engine owns its threads.
         self._apply_device_selection()
 
         # Wire UI controls to update the engine configuration in real time
@@ -1006,6 +1037,9 @@ class MainWin(QMainWindow):
         self.paper_tape_plot.showGrid(x=True, y=True, alpha=0.25)
         self.paper_tape_plot.setXRange(0.0, 30.0)
         self.paper_tape_plot.setYRange(-10.0, 12.0)
+        self.paper_tape_plot.getViewBox().sigRangeChangedManually.connect(
+            self._on_paper_tape_manual_range
+        )
 
         # Zero-deviation horizontal reference line
         self.tape_zero_line = pg.InfiniteLine(
@@ -1318,14 +1352,11 @@ class MainWin(QMainWindow):
         self._apply_device_selection()
 
     def _install_worker(self, device_id: int | None) -> None:
-        """Create (via ``create_worker``) and wire the engine for ``device_id`` if it changes type.
-
-        TODO(capa-5): reconectar al motor real (create_worker devolverá el worker real).
-        """
+        """Create (via ``create_worker``) and wire the engine for ``device_id`` if it changes type."""
         want_mock = device_id is None
         old = self.dsp_worker
         if old is not None and bool(old.synthetic_mode) == want_mock:
-            # TODO(capa-5): cambiar de dispositivo de hardware durante la captura la detiene
+            # Changing the hardware device during a session stops it
             if old.isRunning() and device_id != self._active_device_id:
                 logger.info("Device change requested during a session; stopping capture first")
                 self.stop_capture()
@@ -1344,8 +1375,9 @@ class MainWin(QMainWindow):
                 old.telemetry_ready,
                 old.waveform_ready,
                 old.drift_updated,
+                old.clock_info,
                 old.capture_health,
-                old.level_updated,  # TODO(capa-5): señal de nivel (fase 1b)
+                old.level_updated,
                 old.error_occurred,
                 old.session_finished,
             ):
@@ -1357,13 +1389,15 @@ class MainWin(QMainWindow):
         worker.telemetry_ready.connect(self._on_telemetry_ready)
         worker.waveform_ready.connect(self._on_waveform_ready)
         worker.drift_updated.connect(self._on_drift_updated)
+        worker.clock_info.connect(self._on_clock_info)
         worker.capture_health.connect(self._on_capture_health)
-        worker.level_updated.connect(self._on_level_updated)  # TODO(capa-5): nivel (fase 1b)
+        worker.level_updated.connect(self._on_level_updated)
         worker.error_occurred.connect(self._on_worker_error)
         worker.session_finished.connect(self._on_session_finished)
         # MOCK-only extra (outside BaseStreamWorker): drift sigma / confidence
         self._last_drift_sigma_ppm = None
         self._last_drift_confidence = None
+        self._last_clock_level = None
         if isinstance(worker, MockStreamWorker):
             worker.drift_detail.connect(self._on_mock_drift_detail)
         self.dsp_worker = worker
@@ -1417,9 +1451,9 @@ class MainWin(QMainWindow):
         """Render the session state label in the status bar."""
         key = self._STATE_TR_KEYS.get(self._capture_state, "status_idle")
         color = self._STATE_COLORS.get(self._capture_state, "")
-        # TODO(capa-5): con hardware solo se captura; la etiqueta no dice "MIDIENDO"
-        if self._capture_state in ("ESTABILIZANDO", "MIDIENDO") and isinstance(
-            self.dsp_worker, CaptureStreamWorker
+        # An engine that only captures (no measurement) never says "MIDIENDO"
+        if self._capture_state in ("ESTABILIZANDO", "MIDIENDO") and (
+            type(self.dsp_worker) is CaptureStreamWorker
         ):
             key, color = "capturing_no_measure", "color: #00e5ff;"
         self.lbl_session_status.setText(self.translator.tr(key))
@@ -1467,8 +1501,44 @@ class MainWin(QMainWindow):
         self.btn_global_stats.setText(f"{arrow} {self.translator.tr('btn_global_stats')}")
         logger.debug("Global statistics panel visibility set to %s", checked)
 
+    def _paper_tape_target_range(self) -> tuple[float, float] | None:
+        """Y range that centres the trace (None when there is no data)."""
+        all_y = self._tape_rate_even + self._tape_rate_odd
+        if not all_y:
+            return None
+        y_min = float(min(all_y))
+        y_max = float(max(all_y))
+        y_center = 0.5 * (y_min + y_max)
+        half_span = max(3.5, 0.75 * (y_max - y_min) + 2.0)
+        return y_center - half_span, y_center + half_span
+
+    def _on_paper_tape_manual_range(self, *_args: object) -> None:
+        """The user panned or zoomed the paper tape: stop autoscaling until re-centred."""
+        if self._tape_autoscale:
+            self._tape_autoscale = False
+            logger.debug("Paper tape autoscale paused by user interaction")
+
+    def _autoscale_paper_tape(self) -> None:
+        """Follow the trace: re-centre when a point leaves the view or the view is far too wide.
+
+        Paused while the user pans/zooms; "Center Trace" and a new session resume it.
+        """
+        if not self._tape_autoscale:
+            return
+        target = self._paper_tape_target_range()
+        if target is None:
+            return
+        (lo, hi) = self.paper_tape_plot.getViewBox().viewRange()[1]
+        all_y = self._tape_rate_even + self._tape_rate_odd
+        margin = 0.05 * (hi - lo)
+        outside = min(all_y) < lo + margin or max(all_y) > hi - margin
+        too_wide = (hi - lo) > 3.0 * (target[1] - target[0])
+        if outside or too_wide:
+            self.paper_tape_plot.setYRange(*target, padding=0.0)
+
     def center_paper_tape_trace(self) -> None:
         """Auto-adjust the Paper Tape Y-axis range to center on current trace values."""
+        self._tape_autoscale = True
         all_y = self._tape_rate_even + self._tape_rate_odd
         if not all_y:
             self.paper_tape_plot.setYRange(-10.0, 12.0)
@@ -1912,7 +1982,7 @@ class MainWin(QMainWindow):
         ):
             return self._recorded_audio, self._recorded_sample_rate
 
-        # TODO(capa-5): reconectar al motor real (hoy solo el MOCK produce audio)
+        # MOCK only: hardware sessions are recorded by MeasureStreamWorker
         pos = self.cmb_position.currentText()
         base_rate, base_be, base_amp = POSITION_VARIATION.get(pos, (+4.5, 0.35, 280.0))
         logger.info(
@@ -1944,13 +2014,11 @@ class MainWin(QMainWindow):
     def record_audio(
         self, file_path: Path | str | None = None, prefer_flac: bool = True
     ) -> Path | None:
-        """Record test-duration audio and offer to save it (default FLAC if supported, else Vorbis)."""
-        # TODO(capa-5): reconectar al motor real
-        # TODO(capa-5): grabación WAV desde hardware fuera de la fase 1b
-        if isinstance(self.dsp_worker, CaptureStreamWorker):
-            logger.warning("Audio recording from a hardware device is not available yet")
-            self.statusBar().showMessage(self.translator.tr("recording_hw_unavailable"), 6000)
-            return None
+        """Save the session audio: during a session it is saved when the session ends.
+
+        Hardware (``MeasureStreamWorker``): the engine records every session to a temporary
+        FLAC with its tags; MOCK: a synthetic tick train of the test length.
+        """
         if file_path is None and self.dsp_worker is not None and self.dsp_worker.isRunning():
             self._save_audio_on_finish = True
             logger.info(
@@ -1964,9 +2032,10 @@ class MainWin(QMainWindow):
         self, file_path: Path | str | None = None, prefer_flac: bool = True
     ) -> Path | None:
         """Save the test-length audio recording to disk (FLAC by default if possible, else Ogg Vorbis)."""
-        # TODO(capa-5): reconectar al motor real (grabación de hardware vía _on_recording_ready)
         if self.is_mock_active():
             return self._save_mock_recording(file_path)
+        if isinstance(self.dsp_worker, MeasureStreamWorker):
+            return self._save_session_recording(file_path)
         if self._recorded_audio is None:
             logger.warning("No recording available: the measurement engine is not implemented yet")
             self.statusBar().showMessage(self.translator.tr("no_recording_available"), 6000)
@@ -2005,6 +2074,48 @@ class MainWin(QMainWindow):
         )
         _dbg.file_write(saved_path, samples=len(audio_data), fs=sample_rate)
         return saved_path
+
+    def _save_session_recording(self, file_path: Path | str | None = None) -> Path | None:
+        """Move the hardware session's temporary FLAC (with its tags) to the chosen path."""
+        worker = self.dsp_worker
+        assert isinstance(worker, MeasureStreamWorker)
+        if not worker.has_recording:
+            key = "recording_replay" if worker.replay_path is not None else "no_recording_available"
+            logger.warning("No session recording to save (%s)", key)
+            self.statusBar().showMessage(self.translator.tr(key), 6000)
+            return None
+        test_name = self.txt_test_name.text().strip() or "watch_test"
+        if file_path is None:
+            chosen, _ = QFileDialog.getSaveFileName(
+                self,
+                self.translator.tr("dialog_save_audio"),
+                f"{test_name}.flac",
+                "FLAC Audio (*.flac)",
+            )
+            if not chosen:
+                logger.info("Audio recording save dialog cancelled by user")
+                return None
+            file_path = chosen
+        target = Path(file_path)
+        if target.suffix.lower() != ".flac":
+            target = target.with_suffix(".flac")
+        source = worker.take_recording()
+        if source is None:
+            self.statusBar().showMessage(self.translator.tr("no_recording_available"), 6000)
+            return None
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(target))
+        except Exception as exc:
+            _dbg.file_write(target, ok=False, error=exc)
+            source.unlink(missing_ok=True)
+            self.statusBar().showMessage(str(exc), 8000)
+            return None
+        _dbg.file_write(target, session=True)
+        self.statusBar().showMessage(
+            self.translator.tr("recording_saved").format(path=target.name), 6000
+        )
+        return target
 
     def _save_mock_recording(self, file_path: Path | str | None = None) -> Path | None:
         """Save the simulated MOCK tick train as a 16-bit WAV file."""
@@ -2143,7 +2254,6 @@ class MainWin(QMainWindow):
 
     def start_capture(self) -> None:
         """Start the real-time engine session and reset plots."""
-        # TODO(capa-5): reconectar al motor real
         if self.dsp_worker is None or self.dsp_worker.isRunning():
             return
 
@@ -2169,9 +2279,11 @@ class MainWin(QMainWindow):
         self.osc_envelope_curve.setData([], [])
         self.osc_impulse_markers.setData([], [])
         self.audio_waveform_curve.setData([], [])
-        # TODO(capa-5): barra de calidad por nivel hasta que llegue telemetría; con hardware
-        # (sin medición) las cifras quedan en su estado vacío
+        # The quality bar follows the input level until the engine reports detection quality
         self._telemetry_seen = False
+        self._tape_autoscale = True
+        self._last_warning = ""
+        self._last_saturated_monotonic = -math.inf
         self._perf_waveform.reset()
         self._perf_level.reset()
         self.prg_snr.setValue(0)
@@ -2179,9 +2291,10 @@ class MainWin(QMainWindow):
         self.lbl_snr_value.setText("-- dB")
         if isinstance(self.dsp_worker, CaptureStreamWorker):
             for card in (self.card_rate, self.card_beat_error, self.card_amplitude):
-                card.set_value("---.-")
+                card.set_value(self.EMPTY_VALUE)
             self.lbl_drift_status.setText("")
             self.lbl_stat_drift_val.setText("")
+            self._clear_oscilloscope_markers()
 
         duration_s = float(self.spn_duration.value())
         self.paper_tape_plot.setXRange(0.0, max(10.0, duration_s))
@@ -2226,7 +2339,6 @@ class MainWin(QMainWindow):
 
     def stop_capture(self) -> None:
         """Stop the running background engine."""
-        # TODO(capa-5): reconectar al motor real
         if self._session_timer.isActive():
             _dbg.process_end("session_timer")
         self._session_timer.stop()
@@ -2268,6 +2380,90 @@ class MainWin(QMainWindow):
         ):
             widget.setEnabled(enabled)
 
+    def _figure_text(
+        self, value: float, fmt: str, confidence: float, real: bool
+    ) -> tuple[str, bool]:
+        """Card text and dim flag: real-engine figures that are missing or of low confidence
+        are not shown; the MOCK always shows its (simulated) figures."""
+        if not math.isfinite(value) or (real and confidence < self.CONFIDENCE_HIDE):
+            return self.EMPTY_VALUE, False
+        return format(value, fmt), real and confidence < self.CONFIDENCE_DIM
+
+    def _real_quality(self, telemetry: BeatTelemetry) -> tuple[int, str, str] | None:
+        """``(percent, kind, text)`` of the quality bar from detection quality (real engine).
+
+        None while the detector is not locked (the bar keeps showing the input level).
+        """
+        snr = float(telemetry.snr_db)
+        usable = float(telemetry.usable_ratio)
+        if not (telemetry.locked and math.isfinite(snr)):
+            return None
+        q_snr = float(
+            np.clip(
+                (snr - self.QUALITY_SNR_FLOOR_DB)
+                / (self.QUALITY_SNR_FULL_DB - self.QUALITY_SNR_FLOOR_DB),
+                0.0,
+                1.0,
+            )
+        )
+        share = usable if math.isfinite(usable) else 0.0
+        pct = int(round(100.0 * q_snr * share))
+        saturated = (
+            telemetry.saturated_beats > 0
+            or time.monotonic() - self._last_saturated_monotonic < self.SATURATION_HOLD_S
+        )
+        kind = "bad" if saturated or pct < 35 else ("low" if pct < 65 else "ok")
+        text = f"SNR {snr:.0f} dB | {100.0 * share:.0f} %"
+        return pct, kind, f"{text} ⚠" if saturated else text
+
+    def _set_quality_bar(self, pct: int, kind: str | None, text: str) -> None:
+        self.prg_snr.setValue(pct)
+        if kind is None:
+            self.prg_snr.setStyleSheet("")
+        else:
+            self.prg_snr.setStyleSheet(
+                f"QProgressBar::chunk {{ background-color: {self._LEVEL_BAR_COLORS[kind]};"
+                " border-radius: 3px; }"
+            )
+        self.lbl_snr_value.setText(text)
+
+    def _clear_oscilloscope_markers(self) -> None:
+        for line in (self.line_p1, self.line_p2, self.line_p3):
+            line.setVisible(False)
+        self.osc_impulse_markers.setData([])
+
+    def _show_real_beat(self, beat: BeatEvent, fs: float) -> None:
+        """Oscilloscope for the real engine: band-passed beat, markers at the real P1/P2/P3."""
+        wave = np.asarray(beat.raw_waveform, dtype=np.float64)
+        if wave.size == 0 or beat.waveform_start_s is None:
+            return
+        peak_abs = float(np.max(np.abs(wave))) or 1.0
+        norm_wave = wave / peak_abs
+        t_ms = (np.arange(wave.size, dtype=np.float64) / fs) * 1000.0
+        self.osc_wave_curve.setData(t_ms, norm_wave)
+        env_win = max(int(round(0.00015 * fs)), 3)
+        env_kernel = np.ones(env_win, dtype=np.float64) / float(env_win)
+        self.osc_envelope_curve.setData(t_ms, np.convolve(np.abs(norm_wave), env_kernel, "same"))
+        spots = []
+        colors = ("#00e676", "#ffab00", "#ff1744")
+        stamps = (beat.timestamp_p1, beat.timestamp_p2, beat.timestamp_p3)
+        for line, ts, color in zip((self.line_p1, self.line_p2, self.line_p3), stamps, colors):
+            if not math.isfinite(ts):
+                line.setVisible(False)
+                continue
+            t = (ts - beat.waveform_start_s) * 1000.0
+            idx = int(np.clip(round(t / 1000.0 * fs), 0, wave.size - 1))
+            line.setPos(t)
+            line.setVisible(True)
+            spots.append(
+                {
+                    "pos": (t, float(norm_wave[idx])),
+                    "brush": pg.mkBrush(color),
+                    "pen": pg.mkPen("#ffffff", width=1),
+                }
+            )
+        self.osc_impulse_markers.setData(spots)
+
     def _on_telemetry_ready(self, telemetry: BeatTelemetry | TelemetryResult) -> None:
         """Slot receiving real-time BeatTelemetry from the engine."""
         if self._capture_state == "INACTIVO":
@@ -2278,44 +2474,67 @@ class MainWin(QMainWindow):
         beat_error_ms = float(telemetry.beat_error_ms)
         amplitude_deg = float(telemetry.amplitude_deg)
         confidence = float(telemetry.confidence)
+        real = isinstance(telemetry, BeatTelemetry) and not self.dsp_worker.synthetic_mode
+        # Rate and beat error are judged by the timing confidence (a tic/tac amplitude
+        # mismatch does not affect them); the amplitude by the overall confidence.
+        timing_conf = float(getattr(telemetry, "timing_confidence", math.nan))
+        if not math.isfinite(timing_conf):
+            timing_conf = confidence
+        # A point is usable when the rate is available and (real engine) confident enough
+        usable = math.isfinite(rate_spd) and (not real or timing_conf >= self.CONFIDENCE_HIDE)
 
-        self._last_telemetry = TelemetryResult(
-            rate_spd=rate_spd,
-            beat_error_ms=beat_error_ms,
-            amplitude_deg=amplitude_deg,
-            confidence=confidence,
-        )
+        if usable:
+            self._last_telemetry = TelemetryResult(
+                rate_spd=rate_spd,
+                beat_error_ms=beat_error_ms,
+                amplitude_deg=amplitude_deg,
+                confidence=confidence,
+            )
 
         stab_s = float(self.spn_stab.value())
         duration_s = float(self.spn_duration.value())
 
         if self._capture_start_monotonic is not None:
             elapsed_s = max(0.0, time.monotonic() - self._capture_start_monotonic)
-            should_record_tape = elapsed_s >= stab_s
+            should_record_tape = elapsed_s >= stab_s and usable
             t_meas = max(0.0, min(duration_s, elapsed_s - stab_s))
         else:
             elapsed_s = len(self._rate_history) * 0.25
-            should_record_tape = True
+            should_record_tape = usable
             t_meas = elapsed_s
 
         mins = int(elapsed_s) // 60
         secs = elapsed_s % 60.0
         self.lbl_stat_elapsed_val.setText(f"{mins:02d}:{secs:04.1f}")
 
-        if not self._telemetry_seen:  # TODO(capa-5): la telemetría toma la barra de calidad
-            self._telemetry_seen = True
-            self.prg_snr.setStyleSheet("")
         raw_snr_db = float(getattr(telemetry, "snr_db", 0.0))
-        if raw_snr_db <= 0.0 and confidence > 0.0:
-            raw_snr_db = 38.0 * confidence
-        quality_pct = int(round(np.clip((raw_snr_db / 45.0) * 100.0 * confidence, 0.0, 100.0)))
-        self.prg_snr.setValue(quality_pct)
-        self.lbl_snr_value.setText(f"{raw_snr_db:.1f} dB ({quality_pct}%)")
+        if real:
+            assert isinstance(telemetry, BeatTelemetry)
+            quality = self._real_quality(telemetry)
+            self._telemetry_seen = quality is not None
+            if quality is not None:
+                self._set_quality_bar(*quality)
+            if telemetry.warnings and telemetry.warnings[0] != self._last_warning:
+                self._last_warning = telemetry.warnings[0]
+                self.statusBar().showMessage(self._last_warning, 6000)
+        else:
+            if not self._telemetry_seen:
+                self._telemetry_seen = True
+                self.prg_snr.setStyleSheet("")
+            if raw_snr_db <= 0.0 and confidence > 0.0:
+                raw_snr_db = 38.0 * confidence
+            quality_pct = int(round(np.clip((raw_snr_db / 45.0) * 100.0 * confidence, 0.0, 100.0)))
+            self._set_quality_bar(quality_pct, None, f"{raw_snr_db:.1f} dB ({quality_pct}%)")
 
-        sign_str = "+" if rate_spd >= 0 else ""
-        self.card_rate.set_value(f"{sign_str}{rate_spd:.1f}")
-        self.card_beat_error.set_value(f"{beat_error_ms:.2f}")
-        self.card_amplitude.set_value(f"{amplitude_deg:.0f}°")
+        text, dim = self._figure_text(rate_spd, "+.1f", timing_conf, real)
+        self.card_rate.set_value(text, dim)
+        text, dim = self._figure_text(beat_error_ms, ".2f", timing_conf, real)
+        self.card_beat_error.set_value(text, dim)
+        # Amplitude: hidden like the rate; a tic/tac mismatch (low overall confidence) only
+        # greys it out, so it does not blink on calibres whose live templates disagree.
+        text, dim = self._figure_text(amplitude_deg, ".0f", timing_conf, real)
+        dim = dim or (real and confidence < self.CONFIDENCE_DIM)
+        self.card_amplitude.set_value(text if text == self.EMPTY_VALUE else f"{text}°", dim)
 
         # Engine copy of the active config (avoids building a WatchConfig 4x/s)
         cfg_now = self._active_watch_config or self.current_watch_config()
@@ -2359,7 +2578,7 @@ class MainWin(QMainWindow):
             self.lbl_stat_delta_val.setText(f"{r_delta:.2f} s/d")
             self.lbl_stat_mean_val.setText(f"{r_mean:+.2f} s/d")
 
-            half_be_offset = 0.5 * beat_error_ms
+            half_be_offset = 0.5 * beat_error_ms if math.isfinite(beat_error_ms) else 0.0
             self._tape_times_even.append(t_meas)
             self._tape_rate_even.append(rate_spd - half_be_offset)
             self._tape_times_odd.append(t_meas)
@@ -2367,6 +2586,7 @@ class MainWin(QMainWindow):
 
             self.tape_curve_even.setData(self._tape_times_even, self._tape_rate_even)
             self.tape_curve_odd.setData(self._tape_times_odd, self._tape_rate_odd)
+            self._autoscale_paper_tape()
 
         if isinstance(telemetry, BeatTelemetry):
             fs = float(
@@ -2374,63 +2594,13 @@ class MainWin(QMainWindow):
                 if getattr(telemetry, "effective_fs", 0.0) > 0.0
                 else cfg_now.sample_rate
             )
-
-            # Bottom-Left Oscilloscope: beat-triggered bipolar waveform + envelope + P1/P2/P3
-            if telemetry.beats:
-                latest_beat = telemetry.beats[-1]
-                wave = latest_beat.raw_waveform.copy()
-                if len(wave) > 0:
-                    if self.dsp_worker.synthetic_mode:
-                        t_local = np.arange(len(wave), dtype=np.float64) / fs
-                        phase_shift = float(self._osc_rng.uniform(0.0, 2.0 * np.pi))
-                        mod = 1.0 + 0.14 * np.sin(2.0 * np.pi * 1100.0 * t_local + phase_shift)
-                        jitter_noise = self._osc_rng.normal(
-                            0.0, 0.03 * (float(np.max(np.abs(wave))) or 1.0), size=len(wave)
-                        )
-                        wave = (wave * mod) + jitter_noise
-
-                    peak_abs = float(np.max(np.abs(wave))) or 1.0
-                    norm_wave = wave / peak_abs
-                    t_ms = (np.arange(len(wave), dtype=np.float64) / fs) * 1000.0
-
-                    dt_p2 = (latest_beat.timestamp_p2 - latest_beat.timestamp_p1) * 1000.0
-                    dt_p3 = (latest_beat.timestamp_p3 - latest_beat.timestamp_p1) * 1000.0
-
-                    p3_idx = int(np.argmax(np.abs(norm_wave)))
-                    t_p3_ms = float(t_ms[p3_idx])
-                    t_p1_ms = max(0.2, t_p3_ms - dt_p3)
-                    t_p2_ms = float(np.clip(t_p1_ms + dt_p2, t_p1_ms, t_p3_ms))
-
-                    self.osc_wave_curve.setData(t_ms, norm_wave)
-                    env_win = max(int(round(0.00015 * fs)), 3)
-                    env_kernel = np.ones(env_win, dtype=np.float64) / float(env_win)
-                    norm_env = np.convolve(np.abs(norm_wave), env_kernel, mode="same")
-                    self.osc_envelope_curve.setData(t_ms, norm_env)
-                    self.line_p1.setPos(t_p1_ms)
-                    self.line_p2.setPos(t_p2_ms)
-                    self.line_p3.setPos(t_p3_ms)
-
-                    p1_idx = int(np.clip(round((t_p1_ms / 1000.0) * fs), 0, len(norm_wave) - 1))
-                    p2_idx = int(np.clip(round((t_p2_ms / 1000.0) * fs), 0, len(norm_wave) - 1))
-
-                    spots = [
-                        {
-                            "pos": (t_p1_ms, float(norm_wave[p1_idx])),
-                            "brush": pg.mkBrush("#00e676"),
-                            "pen": pg.mkPen("#ffffff", width=1),
-                        },
-                        {
-                            "pos": (t_p2_ms, float(norm_wave[p2_idx])),
-                            "brush": pg.mkBrush("#ffab00"),
-                            "pen": pg.mkPen("#ffffff", width=1),
-                        },
-                        {
-                            "pos": (t_p3_ms, float(norm_wave[p3_idx])),
-                            "brush": pg.mkBrush("#ff1744"),
-                            "pen": pg.mkPen("#ffffff", width=1),
-                        },
-                    ]
-                    self.osc_impulse_markers.setData(spots)
+            if real:
+                if telemetry.beats:
+                    self._show_real_beat(telemetry.beats[-1], float(cfg_now.sample_rate))
+                elif not telemetry.locked:
+                    self._clear_oscilloscope_markers()
+            elif telemetry.beats:
+                self._show_mock_beat(telemetry.beats[-1], fs)
 
             # The bottom-right live audio waveform is fed only by ``waveform_ready`` (decoupled
             # ~30 FPS display tick), so it never waits for the DSP analysis to finish.
@@ -2438,9 +2608,68 @@ class MainWin(QMainWindow):
         if self._capture_start_monotonic is not None and elapsed_s >= stab_s + duration_s:
             self.stop_capture()
 
+    def _show_mock_beat(self, latest_beat: BeatEvent, fs: float) -> None:
+        """MOCK oscilloscope: P3 = largest peak, P1/P2 placed by their offsets to it."""
+        # Bottom-Left Oscilloscope: beat-triggered bipolar waveform + envelope + P1/P2/P3
+        wave = latest_beat.raw_waveform.copy()
+        if len(wave) > 0:
+            if self.dsp_worker.synthetic_mode:
+                t_local = np.arange(len(wave), dtype=np.float64) / fs
+                phase_shift = float(self._osc_rng.uniform(0.0, 2.0 * np.pi))
+                mod = 1.0 + 0.14 * np.sin(2.0 * np.pi * 1100.0 * t_local + phase_shift)
+                jitter_noise = self._osc_rng.normal(
+                    0.0, 0.03 * (float(np.max(np.abs(wave))) or 1.0), size=len(wave)
+                )
+                wave = (wave * mod) + jitter_noise
+
+            peak_abs = float(np.max(np.abs(wave))) or 1.0
+            norm_wave = wave / peak_abs
+            t_ms = (np.arange(len(wave), dtype=np.float64) / fs) * 1000.0
+
+            dt_p2 = (latest_beat.timestamp_p2 - latest_beat.timestamp_p1) * 1000.0
+            dt_p3 = (latest_beat.timestamp_p3 - latest_beat.timestamp_p1) * 1000.0
+
+            p3_idx = int(np.argmax(np.abs(norm_wave)))
+            t_p3_ms = float(t_ms[p3_idx])
+            t_p1_ms = max(0.2, t_p3_ms - dt_p3)
+            t_p2_ms = float(np.clip(t_p1_ms + dt_p2, t_p1_ms, t_p3_ms))
+
+            self.osc_wave_curve.setData(t_ms, norm_wave)
+            env_win = max(int(round(0.00015 * fs)), 3)
+            env_kernel = np.ones(env_win, dtype=np.float64) / float(env_win)
+            norm_env = np.convolve(np.abs(norm_wave), env_kernel, mode="same")
+            self.osc_envelope_curve.setData(t_ms, norm_env)
+            self.line_p1.setPos(t_p1_ms)
+            self.line_p2.setPos(t_p2_ms)
+            self.line_p3.setPos(t_p3_ms)
+
+            p1_idx = int(np.clip(round((t_p1_ms / 1000.0) * fs), 0, len(norm_wave) - 1))
+            p2_idx = int(np.clip(round((t_p2_ms / 1000.0) * fs), 0, len(norm_wave) - 1))
+
+            spots = [
+                {
+                    "pos": (t_p1_ms, float(norm_wave[p1_idx])),
+                    "brush": pg.mkBrush("#00e676"),
+                    "pen": pg.mkPen("#ffffff", width=1),
+                },
+                {
+                    "pos": (t_p2_ms, float(norm_wave[p2_idx])),
+                    "brush": pg.mkBrush("#ffab00"),
+                    "pen": pg.mkPen("#ffffff", width=1),
+                },
+                {
+                    "pos": (t_p3_ms, float(norm_wave[p3_idx])),
+                    "brush": pg.mkBrush("#ff1744"),
+                    "pen": pg.mkPen("#ffffff", width=1),
+                },
+            ]
+            self.osc_impulse_markers.setData(spots)
+        for line in (self.line_p1, self.line_p2, self.line_p3):
+            line.setVisible(True)
+
     def _on_waveform_ready(self, time_axis: np.ndarray, waveform: np.ndarray) -> None:
         """Slot updating the real-time acoustic waveform curve from the engine."""
-        t0 = time.perf_counter()  # TODO(capa-5): instrumentación de rendimiento (fase 1b)
+        t0 = time.perf_counter()  # slot performance (SlotProfiler)
         if time_axis is not None and waveform is not None and len(time_axis) > 0:
             self.audio_waveform_curve.setData(time_axis, waveform)
         self._perf_waveform.record(t0)
@@ -2448,20 +2677,20 @@ class MainWin(QMainWindow):
     _LEVEL_BAR_COLORS: dict[str, str] = {"ok": "#00e676", "low": "#ffab00", "bad": "#ff1744"}
 
     def _on_level_updated(self, peak_dbfs: float, rms_dbfs: float, saturated: bool) -> None:
-        """Signal-quality bar by input level/saturation only (no SNR, no detection quality).
+        """Signal-quality bar by input level/saturation while there is no detection quality.
 
-        TODO(capa-5): la barra pasará a reflejar la calidad de detección cuando haya telemetría.
+        Once the engine reports detection quality (``_telemetry_seen``) the bar shows it, but
+        a saturation is still remembered for ``SATURATION_HOLD_S`` and turns the bar red.
         """
         t0 = time.perf_counter()
-        if self._capture_state == "INACTIVO" or self._telemetry_seen:
+        if self._capture_state == "INACTIVO":
+            return
+        if saturated:
+            self._last_saturated_monotonic = time.monotonic()
+        if self._telemetry_seen:
             return
         pct, kind = level_to_quality(peak_dbfs, rms_dbfs, saturated)
-        self.prg_snr.setValue(pct)
-        self.prg_snr.setStyleSheet(
-            f"QProgressBar::chunk {{ background-color: {self._LEVEL_BAR_COLORS[kind]};"
-            " border-radius: 3px; }"
-        )
-        self.lbl_snr_value.setText(level_text(peak_dbfs, rms_dbfs, saturated))
+        self._set_quality_bar(pct, kind, level_text(peak_dbfs, rms_dbfs, saturated))
         self._perf_level.record(t0)
 
     def _on_drift_updated(
@@ -2492,6 +2721,15 @@ class MainWin(QMainWindow):
             every_s=5.0,
         )
 
+    def _on_clock_info(self, sigma_ppm: float, level: int, source: str) -> None:
+        """Uncertainty, confidence level and origin of the drift applied to the rate."""
+        self._last_drift_sigma_ppm = float(sigma_ppm) if math.isfinite(sigma_ppm) else None
+        self._last_clock_level = int(level)
+        self._last_clock_source = str(source)
+        self.lbl_stat_drift_val.setToolTip(self._last_clock_source)
+        self.lbl_drift_status.setToolTip(self._last_clock_source)
+        self._refresh_drift_stat_label()
+
     def _on_mock_drift_detail(self, sigma_ppm: float, confidence: float) -> None:
         """MOCK-only slot: simulated drift uncertainty (± sigma) and confidence."""
         self._last_drift_sigma_ppm = float(sigma_ppm)
@@ -2501,7 +2739,15 @@ class MainWin(QMainWindow):
     def _refresh_drift_stat_label(self) -> None:
         """Drift value in the statistics panel (with ± sigma and confidence when known)."""
         ppm = self._last_drift_ppm
-        if self._last_drift_sigma_ppm is None or self._last_drift_confidence is None:
+        if self._last_clock_level is not None:
+            tr = self.translator.tr
+            if self._last_clock_level == 0 or self._last_drift_sigma_ppm is None:
+                text = tr("drift_uncalibrated_format").format(ppm=ppm)
+            else:
+                text = tr("drift_level_format").format(
+                    ppm=ppm, sigma=self._last_drift_sigma_ppm, level=self._last_clock_level
+                )
+        elif self._last_drift_sigma_ppm is None or self._last_drift_confidence is None:
             text = f"{ppm:+.2f} ppm ({self._last_effective_fs:.1f} Hz)"
         else:
             text = (
@@ -2533,7 +2779,6 @@ class MainWin(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         """Ensure background worker thread is cleanly stopped before window closes."""
-        # TODO(capa-5): reconectar al motor real (cada motor gestiona sus propios hilos)
         with _dbg.phase("cierre_ventana", capture_state=self._capture_state):
             self.stop_capture()
             if hasattr(self, "dsp_worker") and self.dsp_worker is not None:
