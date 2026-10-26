@@ -41,6 +41,9 @@ Conventions
   error. ``detect_pps_edges`` finds the rising edges of an electrical PPS on a line input with
   sub-sample interpolation; an acoustic PPS (piezo buzzer) goes through ``BeatDetector`` as a
   3600 BPH quartz and its beat instants feed ``drift_from_ticks`` directly.
+* Recordings. ``drift_to_tags`` / ``drift_from_tags`` turn an ``AdcDrift`` into the
+  ``ADV_TG_ADC_DRIFT_*`` tags stored in a recording (offline files carry no host stamps, so the
+  calibration valid when they were captured travels with them).
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ from __future__ import annotations
 import ctypes
 import math
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import IntEnum
 
@@ -55,6 +59,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 __all__ = [
+    "DRIFT_TAG_PREFIX",
     "PPM_TO_S_PER_DAY",
     "UNCALIBRATED_SIGMA_PPM",
     "AdcDrift",
@@ -62,7 +67,9 @@ __all__ = [
     "ClockLevel",
     "HostClock",
     "detect_pps_edges",
+    "drift_from_tags",
     "drift_from_ticks",
+    "drift_to_tags",
     "estimate_drift",
     "fit_envelope",
     "host_clock",
@@ -74,6 +81,9 @@ __all__ = [
 PPM_TO_S_PER_DAY = 0.0864
 #: Declared uncertainty when nothing is calibrated (typical USB audio crystal).
 UNCALIBRATED_SIGMA_PPM = 30.0
+
+#: Prefix of the recording tags written by ``drift_to_tags``.
+DRIFT_TAG_PREFIX = "ADV_TG_ADC_DRIFT_"
 
 _MAD_TO_SIGMA = 1.4826
 _RESIDUAL_FLOOR_S = 20e-6  # robust sigma floor of the envelope minima (20 µs)
@@ -157,6 +167,73 @@ class AdcDrift:
         if not math.isfinite(ppm) or not (math.isfinite(sigma_ppm) and sigma_ppm >= 0):
             raise ValueError("ppm y sigma_ppm deben ser finitos (sigma >= 0)")
         return cls(float(ppm), 0.0, float(sigma_ppm), ClockLevel.EXTERNAL, "manual", note=note)
+
+
+# --------------------------------------------------------------------------- recording tags
+def drift_to_tags(drift: AdcDrift, *, calibrated_at: str | None = None) -> dict[str, str]:
+    """Tags that store ``drift`` in a recording (``ADV_TG_ADC_DRIFT_*``).
+
+    Args:
+        drift: The calibration valid when the recording was made (level 0 is stored too, so
+            a reader knows the file was explicitly NOT calibrated).
+        calibrated_at: When the calibration was measured (ISO 8601), if known.
+
+    Returns:
+        ``{key: value}`` with ``PPM``, ``SIGMA_PPM``, ``SYSTEMATIC_PPM``, ``LEVEL``, ``METHOD``
+        and, when available, ``SPAN_S``, ``CALIBRATED_AT`` and ``NOTE``.
+    """
+    p = DRIFT_TAG_PREFIX
+    tags = {
+        f"{p}PPM": format(drift.ppm, ".9g"),
+        f"{p}SIGMA_PPM": format(drift.sigma_ppm, ".6g"),
+        f"{p}SYSTEMATIC_PPM": format(drift.systematic_ppm, ".6g"),
+        f"{p}LEVEL": str(int(drift.level)),
+        f"{p}METHOD": drift.method,
+    }
+    if drift.span_s > 0:
+        tags[f"{p}SPAN_S"] = format(drift.span_s, ".6g")
+    if calibrated_at:
+        tags[f"{p}CALIBRATED_AT"] = calibrated_at
+    if drift.note:
+        tags[f"{p}NOTE"] = " ".join(drift.note.split())  # one line
+    return tags
+
+
+def drift_from_tags(tags: Mapping[str, str]) -> AdcDrift | None:
+    """Inverse of ``drift_to_tags`` (keys case-insensitive).
+
+    Returns:
+        The stored ``AdcDrift``, or ``None`` if the tags carry no ``ADV_TG_ADC_DRIFT_PPM``.
+
+    Raises:
+        ValueError: If the drift tags are present but malformed.
+    """
+    up = {str(k).upper(): v for k, v in tags.items()}
+    p = DRIFT_TAG_PREFIX
+    if f"{p}PPM" not in up:
+        return None
+    try:
+        ppm = float(up[f"{p}PPM"])
+        sigma = float(up.get(f"{p}SIGMA_PPM", "0"))
+        systematic = float(up.get(f"{p}SYSTEMATIC_PPM", "0"))
+        level = ClockLevel(int(up.get(f"{p}LEVEL", "0")))
+        span = float(up.get(f"{p}SPAN_S", "0"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"etiquetas de calibración del reloj no válidas: {exc}") from exc
+    if (
+        not all(math.isfinite(v) for v in (ppm, sigma, systematic, span))
+        or min(sigma, systematic) < 0
+    ):
+        raise ValueError("etiquetas de calibración del reloj no válidas (valores no finitos)")
+    return AdcDrift(
+        ppm,
+        sigma,
+        systematic,
+        level,
+        up.get(f"{p}METHOD", "none"),
+        span_s=span,
+        note=up.get(f"{p}NOTE", ""),
+    )
 
 
 # --------------------------------------------------------------------------- host clocks

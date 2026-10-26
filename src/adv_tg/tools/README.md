@@ -7,6 +7,18 @@ bloques, callback < 2 ms). `--isolated` usa la captura en proceso aparte (`Proce
 y añade `dropped_frames`, `backlog_max` y `parent_lag_ms` al resumen; `--fake-source` (con
 `--isolated`) usa una fuente falsa en el proceso hijo, sin micrófono. Ver el README principal.
 
+## `adc_calibration`
+
+Calibraciones del reloj de la tarjeta (ppm ± σ) guardadas por dispositivo y tasa de muestreo en
+`adc_calibration.json` de la carpeta de configuración del usuario (macOS:
+`~/Library/Application Support/adv_tg`; se cambia con `ADV_TG_CONFIG_DIR`). Subcomandos `list`,
+`set` (manual, nivel 3), `forget`, `show FILE` y `tag FILE --device D` (estampa la calibración
+en una grabación antigua). `--device` acepta el nombre PortAudio o su índice.
+
+Se aplica la calibración de menor incertidumbre después de sumar el envejecimiento del cristal
+(1 ppm/año en cuadratura): una medida con PPS de la semana pasada gana a una estimación NTP de
+hoy, pero no una de hace un año.
+
 ## `gil_probe`
 
 Banco de pruebas que mide, escenario por escenario (cada uno en un subproceso limpio), cuánto

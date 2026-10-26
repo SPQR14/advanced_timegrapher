@@ -9,9 +9,10 @@ from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import QRectF, QSize, Qt, QTimer
+from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
     QColor,
+    QDesktopServices,
     QFont,
     QIcon,
     QImage,
@@ -111,6 +112,8 @@ configure_pyqtgraph_gpu()
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 APP_ICON_PATH = ASSETS_DIR / "adv-tg.svg"
+#: Page opened by the "Buy me a coffee" button.
+BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/sqpr14"
 
 
 def app_icon() -> QIcon:
@@ -774,7 +777,7 @@ class MainWin(QMainWindow):
         self.btn_mock.setCursor(Qt.CursorShape.PointingHandCursor)
         top_layout.addWidget(self.btn_mock, alignment=Qt.AlignmentFlag.AlignVCenter)
 
-        # Placeholder "Buy me a coffee" button in the top-right corner
+        # "Buy me a coffee" button in the top-right corner (opens BUY_ME_A_COFFEE_URL)
         self.btn_buy_coffee = QPushButton("☕ Buy me a coffee")
         self.btn_buy_coffee.setObjectName("CoffeeButton")
         self.btn_buy_coffee.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1723,9 +1726,21 @@ class MainWin(QMainWindow):
             _dbg.file_write(out_path, ok=False, error=exc)
             raise
 
-    def _on_buy_coffee_clicked(self) -> None:
-        """Placeholder handler for the 'Buy me a coffee' button."""
-        logger.info("'Buy me a coffee' placeholder button clicked")
+    def _on_buy_coffee_clicked(self) -> bool:
+        """Open the 'Buy me a coffee' page in the default browser.
+
+        Returns:
+            True if the system accepted the URL; otherwise the URL is shown in the status bar
+            so the user can copy it.
+        """
+        ok = QDesktopServices.openUrl(QUrl(BUY_ME_A_COFFEE_URL))
+        if ok:
+            logger.info("Opened '%s' in the default browser", BUY_ME_A_COFFEE_URL)
+        else:
+            logger.warning("Could not open '%s' in a browser", BUY_ME_A_COFFEE_URL)
+            msg = self.translator.tr("coffee_open_failed").format(url=BUY_ME_A_COFFEE_URL)
+            self.statusBar().showMessage(msg, 10000)
+        return bool(ok)
 
     def _render_traces_image(self) -> QImage:
         """Render the three acoustic/telemetry trace graphs and metadata banner into a QImage."""
@@ -2066,6 +2081,7 @@ class MainWin(QMainWindow):
         self.btn_save_csv.setText(tr("btn_save_csv"))
         self.btn_export_test_results.setText(tr("btn_export_test_results"))
         self.btn_buy_coffee.setText(tr("btn_buy_coffee"))
+        self.btn_buy_coffee.setToolTip(tr("coffee_tooltip").format(url=BUY_ME_A_COFFEE_URL))
         arrow = "▼" if self.btn_global_stats.isChecked() else "▶"
         self.btn_global_stats.setText(f"{arrow} {tr('btn_global_stats')}")
         self.tbl_global_stats.setHorizontalHeaderLabels(

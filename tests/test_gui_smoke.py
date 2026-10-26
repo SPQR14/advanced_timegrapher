@@ -64,3 +64,26 @@ def test_late_telemetry_after_stop_is_ignored(qtbot) -> None:
     assert len(window._tape_times_even) == n_tape
     assert len(window._rate_history) == n_hist
     window.close()
+
+
+def test_buy_coffee_button_opens_url(qtbot, monkeypatch) -> None:
+    from PyQt6.QtCore import Qt
+
+    from adv_tg.ui import main_window as mw
+
+    opened: list[str] = []
+    result = {"ok": True}
+
+    def fake_open(url) -> bool:
+        opened.append(url.toString())
+        return result["ok"]
+
+    monkeypatch.setattr(mw.QDesktopServices, "openUrl", fake_open)
+    window = MainWin()
+    qtbot.addWidget(window)
+    qtbot.mouseClick(window.btn_buy_coffee, Qt.MouseButton.LeftButton)
+    assert opened == ["https://buymeacoffee.com/sqpr14"]
+    assert "buymeacoffee.com/sqpr14" in window.btn_buy_coffee.toolTip()
+    result["ok"] = False
+    assert window._on_buy_coffee_clicked() is False
+    assert "buymeacoffee.com/sqpr14" in window.statusBar().currentMessage()

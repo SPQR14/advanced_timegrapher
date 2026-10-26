@@ -17,6 +17,12 @@ explicitly and a ``UserWarning`` is issued (never silently).
 Comments: libsndfile drops non-ASCII characters from metadata, so they are stored escaped
 (``\\uXXXX``) and unescaped again by ``read_audio``.
 
+Tags (``KEY=value`` pairs, e.g. the ADC clock calibration of a recording): in FLAC they are
+real Vorbis comments, read and rewritten here without new dependencies (``metaflac --list``
+shows them); WAV has no free-form tags, so they are stored as extra ``KEY=value`` lines of the
+comment and ``read_audio`` strips them from ``AudioData.comment``. Keys are upper case
+(``[A-Z][A-Z0-9_]*``); values are one line of text.
+
 Licences: ``soundfile`` is BSD-3-Clause; the ``libsndfile`` it bundles is LGPL-2.1 and is
 loaded dynamically, which is compatible with this project's GPL-3.0-or-later.
 """
@@ -25,9 +31,10 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import tempfile
 import warnings
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -49,7 +56,9 @@ __all__ = [
     "iter_audio_blocks",
     "read_audio",
     "read_mono",
+    "read_tags",
     "select_channel",
+    "update_tags",
     "write_audio",
 ]
 
@@ -75,6 +84,143 @@ def _escape_comment(text: str) -> str:
 
 def _unescape_comment(text: str) -> str:
     return _ESCAPE_RE.sub(lambda m: chr(int(m.group(1)[1:], 16)), text)
+
+
+_TAG_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]*")
+_TAG_LINE_RE = re.compile(r"([A-Z][A-Z0-9_]*)=(.*)")
+
+
+def _check_tags(tags: Mapping[str, str | None]) -> dict[str, str | None]:
+    out: dict[str, str | None] = {}
+    for key, value in tags.items():
+        k = str(key).upper()
+        if not _TAG_KEY_RE.fullmatch(k):
+            raise AudioFileError(f"clave de etiqueta no válida: {key!r} (usa [A-Z][A-Z0-9_]*)")
+        if value is not None:
+            value = str(value)
+            if "\n" in value or "\r" in value:
+                raise AudioFileError(f"la etiqueta {k} no puede contener saltos de línea")
+        out[k] = value
+    return out
+
+
+def _split_wav_comment(text: str | None) -> tuple[str | None, dict[str, str]]:
+    """``(comment without tag lines, tags)`` of a WAV comment."""
+    if not text:
+        return None, {}
+    lines, tags = [], {}
+    for line in text.split("\n"):
+        m = _TAG_LINE_RE.fullmatch(line)
+        if m:
+            tags[m.group(1)] = m.group(2)
+        else:
+            lines.append(line)
+    rest = "\n".join(lines).strip("\n")
+    return (rest or None), tags
+
+
+def _join_wav_comment(comment: str | None, tags: Mapping[str, str | None]) -> str | None:
+    lines = [comment] if comment else []
+    lines += [f"{k}={v}" for k, v in tags.items() if v is not None]
+    return "\n".join(lines) or None
+
+
+# FLAC metadata (https://xiph.org/flac/format.html): "fLaC", then blocks with a 4-byte header
+# (bit 7 = last block, bits 0-6 = type, 24-bit big-endian length). Type 4 = VORBIS_COMMENT,
+# little-endian: vendor length + vendor, count, then count x (length + "KEY=value" UTF-8).
+_FLAC_MAGIC = b"fLaC"
+_FLAC_STREAMINFO = 0
+_FLAC_VORBIS_COMMENT = 4
+_FLAC_MAX_BLOCK = (1 << 24) - 1
+
+
+def _read_flac_blocks(f) -> list[tuple[int, bytes]]:  # noqa: ANN001 - binary file object
+    """Metadata blocks ``(type, body)``; leaves ``f`` at the first audio frame."""
+    if f.read(4) != _FLAC_MAGIC:
+        raise ValueError("no empieza por 'fLaC' (¿etiqueta ID3 delante?)")
+    blocks: list[tuple[int, bytes]] = []
+    while True:
+        head = f.read(4)
+        if len(head) != 4:
+            raise ValueError("cabecera de metadatos FLAC truncada")
+        n = int.from_bytes(head[1:4], "big")
+        body = f.read(n)
+        if len(body) != n:
+            raise ValueError("bloque de metadatos FLAC truncado")
+        blocks.append((head[0] & 0x7F, body))
+        if head[0] & 0x80:
+            return blocks
+
+
+def _parse_vorbis(body: bytes) -> tuple[bytes, list[str]]:
+    def u32(i: int) -> int:
+        if i + 4 > len(body):
+            raise ValueError("comentario Vorbis truncado")
+        return int.from_bytes(body[i : i + 4], "little")
+
+    n = u32(0)
+    vendor, i = body[4 : 4 + n], 4 + n
+    count, i = u32(i), i + 4
+    comments = []
+    for _ in range(count):
+        n, i = u32(i), i + 4
+        if i + n > len(body):
+            raise ValueError("comentario Vorbis truncado")
+        comments.append(body[i : i + n].decode("utf-8", "replace"))
+        i += n
+    return vendor, comments
+
+
+def _build_vorbis(vendor: bytes, comments: list[str]) -> bytes:
+    out = [len(vendor).to_bytes(4, "little"), vendor, len(comments).to_bytes(4, "little")]
+    for c in comments:
+        b = c.encode("utf-8")
+        out += [len(b).to_bytes(4, "little"), b]
+    return b"".join(out)
+
+
+def _flac_tags(path: Path) -> dict[str, str]:
+    with path.open("rb") as f:
+        blocks = _read_flac_blocks(f)
+    tags: dict[str, str] = {}
+    for t, body in blocks:
+        if t == _FLAC_VORBIS_COMMENT:
+            for c in _parse_vorbis(body)[1]:
+                key, sep, value = c.partition("=")
+                if sep:
+                    tags[key.upper()] = _unescape_comment(value)  # libsndfile escapes its own
+    return tags
+
+
+def _flac_set_tags(path: Path, tags: Mapping[str, str | None]) -> None:
+    """Replace (``None`` = delete) Vorbis comments of a FLAC file; atomic rewrite."""
+    tmp = _temp_path(path)
+    try:
+        with path.open("rb") as src:
+            blocks = _read_flac_blocks(src)
+            idx = next((i for i, (t, _) in enumerate(blocks) if t == _FLAC_VORBIS_COMMENT), None)
+            if idx is None:
+                vendor, comments = b"adv_tg", []
+                idx = 1 if blocks and blocks[0][0] == _FLAC_STREAMINFO else 0
+                blocks.insert(idx, (_FLAC_VORBIS_COMMENT, b""))
+            else:
+                vendor, comments = _parse_vorbis(blocks[idx][1])
+            comments = [c for c in comments if c.partition("=")[0].upper() not in tags]
+            comments += [f"{k}={v}" for k, v in tags.items() if v is not None]
+            body = _build_vorbis(vendor, comments)
+            if len(body) > _FLAC_MAX_BLOCK:
+                raise ValueError("las etiquetas no caben en un bloque de metadatos FLAC")
+            blocks[idx] = (_FLAC_VORBIS_COMMENT, body)
+            with tmp.open("wb") as dst:
+                dst.write(_FLAC_MAGIC)
+                for i, (t, b) in enumerate(blocks):
+                    last = 0x80 if i == len(blocks) - 1 else 0
+                    dst.write(bytes([last | t]) + len(b).to_bytes(3, "big") + b)
+                shutil.copyfileobj(src, dst, 1 << 20)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _sf():  # noqa: ANN202 - lazy import keeps ``import adv_tg`` light
@@ -182,6 +328,8 @@ def read_audio(path: Path | str) -> AudioData:
             data = f.read(dtype="float64", always_2d=False)
             fs, ch, fmt, sub = int(f.samplerate), int(f.channels), f.format, f.subtype
             comment = _unescape_comment(f.comment) if f.comment else None
+        if fmt == "WAV":
+            comment = _split_wav_comment(comment)[0]
     except AudioFileError as exc:
         _dbg.file_read(p, ok=False, error=exc)
         raise
@@ -240,6 +388,73 @@ def read_mono(path: Path | str, mode: ChannelMode = "max_energy") -> tuple[int, 
     """Convenience: ``(sample_rate, one channel as float64)`` of an audio file."""
     data = read_audio(path)
     return data.sample_rate, select_channel(data, mode)
+
+
+def read_tags(path: Path | str) -> dict[str, str]:
+    """``KEY=value`` tags of an audio file (keys upper case; see the module docstring).
+
+    FLAC: every Vorbis comment (including libsndfile's own ``COMMENT``/``TITLE``...). WAV: the
+    tag lines of the comment. Other formats: empty.
+
+    Raises:
+        AudioFileError: If the file is missing, unsupported or corrupt.
+    """
+    p = Path(path)
+    _check_readable(p)
+    fmt = audio_info(p).format
+    try:
+        if fmt == "FLAC":
+            return _flac_tags(p)
+        if fmt == "WAV":
+            with _sf().SoundFile(str(p)) as f:
+                text = _unescape_comment(f.comment) if f.comment else None
+            return _split_wav_comment(text)[1]
+    except AudioFileError:
+        raise
+    except Exception as exc:
+        raise _open_error(p, exc) from exc
+    return {}
+
+
+def update_tags(path: Path | str, tags: Mapping[str, str | None]) -> Path:
+    """Set (or delete with ``None``) tags of an existing WAV or FLAC file, atomically.
+
+    FLAC: only the metadata is rewritten (audio frames copied byte for byte). WAV: the file is
+    rewritten with the same subtype (lossless) and the tag lines of its comment replaced.
+
+    Raises:
+        AudioFileError: Missing/unsupported file, invalid tags or write failure.
+    """
+    p = Path(path)
+    new = _check_tags(tags)
+    fmt = audio_info(p).format
+    try:
+        if fmt == "FLAC":
+            _flac_set_tags(p, new)
+        elif fmt == "WAV":
+            data = read_audio(p)
+            with _sf().SoundFile(str(p)) as f:
+                text = _unescape_comment(f.comment) if f.comment else None
+            comment, old = _split_wav_comment(text)
+            merged = {**old, **new}
+            write_audio(
+                p,
+                data.samples,
+                data.sample_rate,
+                subtype=data.subtype,
+                comment=comment,
+                tags=merged,
+            )
+        else:
+            raise AudioFileError(f"no se pueden etiquetar archivos {fmt}: '{p}'")
+    except AudioFileError:
+        raise
+    except Exception as exc:
+        err = AudioFileError(f"no se pudieron escribir las etiquetas de '{p}': {exc}")
+        _dbg.file_write(p, ok=False, error=err)
+        raise err from exc
+    _dbg.file_write(p, tags=len(new))
+    return p
 
 
 def iter_audio_blocks(
@@ -357,6 +572,7 @@ def write_audio(
     *,
     subtype: str | None = None,
     comment: str | None = None,
+    tags: Mapping[str, str | None] | None = None,
 ) -> Path:
     """Write a whole signal to ``path`` (format from the extension; atomic).
 
@@ -367,6 +583,7 @@ def write_audio(
         sample_rate: Sample rate in Hz.
         subtype: libsndfile subtype; default ``"FLOAT"`` for WAV and ``"PCM_24"`` for FLAC.
         comment: Optional comment metadata.
+        tags: Optional ``KEY=value`` tags (see the module docstring; ``None`` values skipped).
 
     Returns:
         The destination path.
@@ -378,6 +595,7 @@ def write_audio(
     if int(sample_rate) <= 0:
         raise AudioFileError(f"tasa de muestreo no válida ({sample_rate}) para '{p}'")
     fmt, sub = _resolve_format(p, subtype)
+    tag_map = _check_tags(tags or {})
     data, clipped = _prepare(samples, sub, p)
     if clipped:
         _warn_clipped(p, clipped, sub)
@@ -387,9 +605,12 @@ def write_audio(
         with _sf().SoundFile(
             str(tmp), "w", samplerate=int(sample_rate), channels=channels, format=fmt, subtype=sub
         ) as f:
-            if comment:
-                f.comment = _escape_comment(comment)
+            text = _join_wav_comment(comment, tag_map) if fmt == "WAV" else comment
+            if text:
+                f.comment = _escape_comment(text)
             f.write(data)
+        if fmt == "FLAC" and tag_map:
+            _flac_set_tags(tmp, tag_map)
         os.replace(tmp, p)
     except Exception as exc:
         tmp.unlink(missing_ok=True)
@@ -418,6 +639,9 @@ class AudioWriter:
         channels: Number of channels (blocks are ``(n,)`` for mono or ``(n, channels)``).
         subtype: libsndfile subtype (defaults as in ``write_audio``).
         comment: Optional comment metadata.
+        tags: Optional ``KEY=value`` tags (as in ``write_audio``). In FLAC they are written on
+            close, so the ``tags`` attribute can still be changed while recording; in WAV they go
+            into the comment when the file is opened.
     """
 
     def __init__(
@@ -428,6 +652,7 @@ class AudioWriter:
         *,
         subtype: str | None = None,
         comment: str | None = None,
+        tags: Mapping[str, str | None] | None = None,
     ) -> None:
         self.path = Path(path)
         if int(sample_rate) <= 0:
@@ -438,6 +663,7 @@ class AudioWriter:
         self.sample_rate = int(sample_rate)
         self.channels = int(channels)
         self.comment = comment
+        self.tags: dict[str, str | None] = _check_tags(tags or {})
         self.frames_written = 0
         self.clipped_samples = 0
         self._warned = False
@@ -458,8 +684,12 @@ class AudioWriter:
                 format=self.format,
                 subtype=self.subtype,
             )
-            if self.comment:
-                self._file.comment = _escape_comment(self.comment)
+            if self.format == "WAV":
+                text = _join_wav_comment(self.comment, self.tags)
+            else:
+                text = self.comment
+            if text:
+                self._file.comment = _escape_comment(text)
         except Exception as exc:
             self._tmp.unlink(missing_ok=True)
             err = AudioFileError(f"no se pudo crear '{self.path}': {exc}")
@@ -495,6 +725,8 @@ class AudioWriter:
             if discard:
                 tmp.unlink(missing_ok=True)
                 return
+            if self.format == "FLAC" and self.tags:
+                _flac_set_tags(tmp, _check_tags(self.tags))
             os.replace(tmp, self.path)
         except Exception as exc:
             tmp.unlink(missing_ok=True)

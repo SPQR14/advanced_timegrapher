@@ -1,8 +1,9 @@
-# Fase 4 (Reloj): recomendaciones y pendientes
+# Fase 4 (Reloj): resultados, recomendaciones y pendientes
 
-Estado al 25/10/2026: fase 4 **en curso** (rama `feature/fase4_timeDrift`, sin commit). Hechos el
-módulo `core/adc_clock.py`, su integración con la marcha y las marcas de reloj en la captura; ver
-la sección 6. Siguiente paso: herramienta de consola en vivo (sección 6.4).
+Estado al 26/10/2026: fase 4 **en curso** (rama `feature/fase4_timeDrift`; la primera parte está
+en el commit `84ddfbc`). Hechos el módulo `core/adc_clock.py`, su integración con la marcha, las
+marcas de reloj en la captura (sección 6) y la persistencia por dispositivo con las etiquetas
+en las grabaciones (sección 7). Siguiente paso: herramienta de consola en vivo (sección 6.4).
 
 Objetivo: conocer la frecuencia real del ADC (ppm ± σ) para que la marcha no lleve el sesgo del
 reloj de la tarjeta. 1 ppm = 0.0864 s/d.
@@ -122,7 +123,7 @@ El error del Bulova no hace falta suponerlo a partir de su especificación: se p
 - [ ] Herramienta de consola `python -m adv_tg.tools.*` (medir ppm en vivo con el CM18).
 - [x] Tests headless: un ppm inyectado en sintético se recupera (bloques con jitter positivo,
       saltos de reloj, deriva lenta); los que necesitan hardware o red se saltan.
-- [ ] Persistencia por dispositivo y ppm ± σ en las etiquetas del FLAC.
+- [x] Persistencia por dispositivo y ppm ± σ en las etiquetas del FLAC (sección 7).
 - [ ] Validación con el Bulova: "≈ +8 ppm con el CM18" (criterio mantenido, ver sección 5).
 
 ## 5. Decisiones del usuario (25/10/2026)
@@ -191,7 +192,9 @@ Rendimiento en sintético (jitter exponencial de 1 ms, picos de 5–60 ms): σ �
 1. Herramienta `python -m adv_tg.tools.adc_clock`: ppm en vivo con el CM18 comparando las tres
    marcas (`host_ns`, `adc_ns`, `wall_ns`) para ver cuál tiene menos jitter; modos PPS acústico y
    eléctrico (entrada de línea, otra interfaz: el CM18 es mono).
-2. Persistencia del ppm por dispositivo; ppm ± σ y nivel en las etiquetas Vorbis del FLAC.
+2. ~~Persistencia del ppm por dispositivo; ppm ± σ y nivel en las etiquetas Vorbis del FLAC.~~
+   Hecho el 26/10/2026 (sección 7). La herramienta del punto 1 debe guardar sus medidas con
+   `CalibrationStore.add`.
 3. Validación con el Bulova (≈ +8 ppm con el CM18).
 
 ### 6.5 Tests y estado de la suite
@@ -204,6 +207,59 @@ Rendimiento en sintético (jitter exponencial de 1 ms, picos de 5–60 ms): σ �
 - Fallo ajeno a la fase: `test_smoke.py::test_version`, porque el `.venv` conserva los
   metadatos de la 0.3.0 tras el salto a 0.4.0. Se arregla con `.venv/bin/pip install -e .`.
 
+## 7. Persistencia y etiquetas (26/10/2026)
+
+### 7.1 Etiquetas en las grabaciones (`utils/audio_files.py`)
+
+- `read_tags(path)`, `update_tags(path, {clave: valor | None})` y parámetro `tags=` en
+  `write_audio` / `AudioWriter`. Claves en mayúsculas (`[A-Z][A-Z0-9_]*`), valores de una línea.
+- FLAC: comentarios Vorbis reales, leídos y reescritos a mano (formato de bloques de metadatos
+  FLAC, sin dependencias nuevas; libsndfile solo expone campos fijos). La reescritura copia las
+  tramas de audio byte a byte y es atómica; si no hay bloque VORBIS_COMMENT lo inserta tras
+  STREAMINFO. `metaflac --list` y `flac -t` lo validan.
+- WAV: sin etiquetas libres; van como líneas `CLAVE=valor` del comentario (ICMT) y
+  `read_audio` las quita de `AudioData.comment`. `update_tags` reescribe el WAV con el mismo
+  subtipo (sin pérdida).
+- Claves (`core/adc_clock.py`: `drift_to_tags` / `drift_from_tags`):
+  `ADV_TG_ADC_DRIFT_{PPM, SIGMA_PPM, SYSTEMATIC_PPM, LEVEL, METHOD, SPAN_S, CALIBRATED_AT, NOTE}`,
+  más `ADV_TG_DEVICE`, `ADV_TG_SAMPLE_RATE` y `ADV_TG_RECORDED_AT`. El nivel 0 se escribe
+  explícitamente (se sabe que la grabación NO estaba calibrada).
+
+### 7.2 Calibraciones por dispositivo (`utils/adc_calibration.py`)
+
+- `CalibrationStore`: JSON `adc_calibration.json` en la carpeta de configuración (macOS
+  `~/Library/Application Support/adv_tg`, Windows `%APPDATA%\adv_tg`, Linux
+  `$XDG_CONFIG_HOME/adv_tg`; `ADV_TG_CONFIG_DIR` la sustituye, y los tests la aíslan siempre).
+  Clave: nombre del dispositivo (sin distinguir mayúsculas) + tasa de muestreo. Historial de
+  hasta 50 registros por dispositivo. Escritura atómica; un archivo corrupto no se sobrescribe
+  nunca (error claro y el usuario decide). No guarda el nivel 0.
+- Elección (`best` / `pick_best`): menor incertidumbre tras sumar en cuadratura el
+  envejecimiento del cristal, `CRYSTAL_AGING_PPM_PER_YEAR = 1.0` × antigüedad (en valor
+  absoluto: una calibración posterior a la grabación también envejece). Empates: la más
+  reciente. El valor de 1 ppm/año es una suposición razonable para cristales USB, sin medir.
+- `recording_tags(device, fs)`: etiquetas para una grabación hecha ahora.
+
+### 7.3 Herramientas
+
+- `capture_check --wav/--out`: estampa dispositivo, fecha y la mejor calibración guardada (o
+  nivel 0 con un aviso que remite a `adc_calibration`). Un almacén ilegible nunca impide
+  grabar. En modo `--file` conserva las etiquetas `ADV_TG_*` del archivo de origen.
+- `measure`: `resolve_adc_drift` decide la corrección: `--adc-drift-ppm` (0 = forzar sin
+  corrección) > la de menor incertidumbre entre las etiquetas del archivo y la guardada para
+  `--device` (envejecida a la fecha de la grabación) > sin calibrar. El informe muestra la línea
+  "Reloj ADC" con el origen; el JSON añade `adc_drift_ppm`, `adc_drift_sigma_ppm` y
+  `adc_drift_source`.
+- Nueva `python -m adv_tg.tools.adc_calibration` (`list`, `set`, `forget`, `show`, `tag`).
+- Comprobación con `docs/samples/bulova_nm10.flac`: sin calibrar −0.72 s/d; con +8.1 ppm
+  (de prueba) −0.02 s/d, y las ventanas se desplazan +0.70 s/d.
+
+### 7.4 Pendiente relacionado
+
+- La GUI todavía no graba desde hardware (`record_audio` lo rechaza; fase 5): cuando lo haga,
+  debe usar `AudioWriter(..., tags=recording_tags(...)[0])`.
+- Observación sin investigar (anterior a esta fase): en el Bulova la media de las ventanas de
+  10 s (≈ +1 s/d sin calibrar) no coincide con la marcha global (−0.72 s/d).
+
 ## Fuentes
 
 - [Mac OS X System.nanoTime Improvements (OpenJDK)](https://mail.openjdk.org/pipermail/hotspot-dev/2013-May/009510.html)
@@ -212,3 +268,47 @@ Rendimiento en sintético (jitter exponencial de 1 ms, picos de 5–60 ms): σ �
 - [Monotonic clock on OS X (Stack Overflow)](https://dev.library.kiwix.org/content/stackoverflow_en_nopic_2021-08/questions/11680461/monotonic-clock-on-osx)
 - [Apple Technical Q&A QA1196](https://developer.apple.com/library/content/qa/qa1196/_index.html)
 - [AudioTimeStamp.mRateScalar (dplug)](https://dplug.dpldocs.dlang.org/derelict.carbon.coreaudio.AudioTimeStamp.mRateScalar.html)
+
+## 8. Resumen de estado (26/10/2026)
+
+### 8.1 Entregables
+
+| Entregable | Estado |
+|---|---|
+| Cálculo de la deriva (ppm ± σ, niveles de confianza) | ✅ |
+| Corrección aplicada a la marcha | ✅ |
+| Marcas de tiempo en la captura | ✅ |
+| Tests con datos sintéticos | ✅ |
+| Calibración guardada por dispositivo y dentro de las grabaciones | ✅ (26/10/2026) |
+| Herramienta de consola que mide los ppm en vivo con el CM18 | ❌ |
+| Validación: el Bulova debe dar ≈ +8 ppm con el CM18 | ❌ |
+
+1. **Herramienta en vivo** (`python -m adv_tg.tools.adc_clock`): se puede hacer sin hardware.
+   Mediría los ppm del CM18 contra la hora del sistema que macOS ajusta por internet
+   (`time.time_ns`) y guardaría el resultado como calibración del dispositivo; el modo PPS
+   queda preparado para cuando llegue el GPS.
+2. **Validación:** con esa herramienta, dejar el CM18 grabando 20–30 min junto al Bulova y
+   comprobar que sale ≈ +8 ppm (criterio mantenido por el usuario, sección 5). Requiere al
+   usuario y el CM18.
+
+El GPS no es necesario para cerrar la fase; sirve para mejorar la precisión después.
+
+### 8.2 Otros cambios del 26/10/2026
+
+- Botón "☕ Buy me a coffee" de la GUI: abre https://buymeacoffee.com/sqpr14 en el navegador
+  (`BUY_ME_A_COFFEE_URL` en `ui/main_window.py`), con la dirección en la ayuda emergente
+  (inglés y español) y en la barra de estado si el sistema no puede abrir el navegador. Test en
+  `tests/test_gui_smoke.py`.
+- Suite: 462 pasan, 2 saltados, 1 xfail; el único fallo es `test_smoke.py::test_version`
+  (metadatos de la 0.3.0 en el `.venv`; se arregla con `.venv/bin/pip install -e .`).
+
+### 8.3 Hardware PPS en camino
+
+El usuario va a comprar un GPS NEO-6M, un adaptador USB-serie y un buzzer pasivo de 4 kHz para
+el PPS acústico. Precauciones:
+
+- Las placas GY-NEO6MV2 suelen sacar solo VCC, RX, TX y GND; el PPS va al LED. Si no hay pin
+  "PPS", se suelda un cable en el lado del LED de su resistencia. LED parpadeando a 1 Hz =
+  posición fija y PPS válido. La antena cerámica necesita estar junto a una ventana.
+- El adaptador debe ser USB-TTL (CP2102/CH340), no RS-232 con DB9.
+- Si el buzzer es magnético (bobina), poner ~1 kΩ en serie para no sobrecargar la salida PPS.

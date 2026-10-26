@@ -23,7 +23,7 @@ PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 | 1 | Captura: flujo de muestras sin bloqueos + herramienta de consola; captura en proceso aparte (1d) y audio real en la GUI sin medir (1b) | **terminada**; validada con el CM18 (ingesta 100 %) |
 | 2 | Detector de batimientos incremental (P1/P2/P3), alineación fina por plantillas de tic y tac (`t_fine`) + audio WAV/FLAC | **terminada**: validado con sintético y con 5 grabaciones reales; frente a tg queda a ≤ 1.4 s/d y ≤ 0.25 ms (ver [`docs/resultados_pruebas_fase2.md`](docs/resultados_pruebas_fase2.md), sección 6) |
 | 3 | Métricas: marcha, error de batimiento, amplitud (`core/metrics.py`, `tools/measure.py`) | **implementada**, pendiente de confirmación: sintético dentro de tolerancia y grabaciones reales dentro de la banda de tg/WAM (ver [`docs/fase3_resultados.md`](docs/fase3_resultados.md)) |
-| 4 | Reloj: deriva del ADC vs host + NTP, calibración manual opcional | pendiente |
+| 4 | Reloj: deriva del ADC vs host + NTP, calibración manual opcional | **en curso**: estimador, integración con la marcha, calibraciones por dispositivo y etiquetas en las grabaciones (ver [`docs/resultados_fase4.md`](docs/resultados_fase4.md)) |
 | 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | pendiente |
 
 ## Estructura
@@ -61,6 +61,7 @@ src/adv_tg/
 │   ├── check_samples.py   # CLI: valida el detector con grabaciones reales (fase 2)
 │   ├── detect_beats.py    # CLI: detecta batimientos en un WAV/FLAC (fase 2)
 │   ├── measure.py         # CLI: marcha, error de batimiento y amplitud de un WAV/FLAC (fase 3)
+│   ├── adc_calibration.py # CLI: calibraciones del reloj de la tarjeta por dispositivo (fase 4)
 │   └── gil_probe.py       # banco de pruebas GIL / hilos / GUI (fases 1c-1d)
 ├── ui/
 │   ├── __init__.py
@@ -158,6 +159,10 @@ Toda lectura y escritura de archivos de audio pasa por `adv_tg.utils.audio_files
 - Lectura: `float64` en [-1, 1]; `select_channel` elige por defecto el canal de **mayor
   energía** (el promedio de canales puede cancelarse). Comentario/metadatos en WAV y FLAC.
 - Grabar desde la consola: `python -m adv_tg.tools.capture_check --device N --secs 60 --out toma.flac`.
+- Etiquetas `KEY=value` (`read_tags`, `update_tags`, parámetro `tags=`): en FLAC son comentarios
+  Vorbis de verdad (`metaflac --list` los muestra), escritos sin dependencias nuevas; en WAV van
+  como líneas `KEY=value` del comentario. Las grabaciones de `capture_check` llevan el
+  dispositivo, la fecha y la calibración del reloj de la tarjeta (`ADV_TG_ADC_DRIFT_*`).
 - Licencias: `soundfile` es BSD-3; la `libsndfile` que incluyen sus ruedas es LGPL-2.1 y se
   carga dinámicamente, compatible con la GPLv3 de este proyecto. Las ruedas para Windows,
   macOS (arm64 y x86_64) y Linux ya traen la biblioteca: no hace falta instalar nada más.
@@ -300,6 +305,18 @@ audio):
 ```bash
 python -m adv_tg.tools.measure toma.flac --bph 28800 --lift-angle 51 --json m.json --csv v.csv --plot m.png
 python -m adv_tg.tools.measure cuarzo.flac --bph 57600 --quartz          # cuarzo: solo marcha, un evento por paso
+python -m adv_tg.tools.measure vieja.flac --bph 28800 --device "CM18 USB" # usa la calibración guardada del CM18
+```
+
+Corrección del reloj de la tarjeta (fase 4), por orden: `--adc-drift-ppm`/`--adc-drift-sigma-ppm`
+(`--adc-drift-ppm 0` la desactiva); si no, la de las etiquetas del archivo o la guardada para
+`--device` (la de menor incertidumbre); si no, sin calibrar.
+
+```bash
+python -m adv_tg.tools.adc_calibration set --device "CM18 USB" --ppm 8.3 --sigma 6 --note "Bulova NM10"
+python -m adv_tg.tools.adc_calibration list                       # historial y la que se aplica hoy
+python -m adv_tg.tools.adc_calibration show toma.flac             # etiquetas ADV_TG_* de una grabación
+python -m adv_tg.tools.adc_calibration tag vieja.flac --device "CM18 USB" --date 2026-10-20
 ```
 
 Validación (detalle en [`docs/fase3_resultados.md`](docs/fase3_resultados.md)):

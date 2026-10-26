@@ -6,8 +6,15 @@ statistical uncertainty, rate per window (``--window``, 10 s) and its trend, bea
 amplitude (tic, tac and mean), plus warnings and a confidence score.
 
 Options: ``--json`` all figures, ``--csv`` one row per window, ``--plot`` a PNG (needs the
-optional extra: ``pip install -e ".[plot]"``), ``--quartz`` rate only, ``--adc-drift-ppm``
-ADC clock correction (layer 4 will provide it; 0 = not calibrated).
+optional extra: ``pip install -e ".[plot]"``), ``--quartz`` rate only.
+
+ADC clock correction (layer 4), first match wins (``resolve_adc_drift``):
+
+1. ``--adc-drift-ppm`` / ``--adc-drift-sigma-ppm`` (``--adc-drift-ppm 0`` = force none);
+2. the ``ADV_TG_ADC_DRIFT_*`` tags of the file and, with ``--device NAME``, the calibration
+   stored for that device (``adv_tg.utils.adc_calibration``, aged to the recording date): the
+   one with the smallest uncertainty;
+3. none (rate flagged as not calibrated).
 
 Exit codes: 0 = measured (even if some figure is not available), 2 = input error.
 """
@@ -21,10 +28,12 @@ import math
 import sys
 import time
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 
+from adv_tg.core.adc_clock import ClockLevel, drift_from_tags
 from adv_tg.core.beat_detector import BeatDetector, BeatDetectorConfig
 from adv_tg.core.beat_types import Beat, ParityTemplate
 from adv_tg.core.metrics import (
@@ -35,7 +44,8 @@ from adv_tg.core.metrics import (
     format_beat_error_ms,
     select_beats,
 )
-from adv_tg.utils.audio_files import AudioFileError, audio_info, iter_audio_blocks
+from adv_tg.utils.adc_calibration import CalibrationStore, CalibrationStoreError
+from adv_tg.utils.audio_files import AudioFileError, audio_info, iter_audio_blocks, read_tags
 from adv_tg.utils.debugger import Debugger
 
 __all__ = [
@@ -45,6 +55,7 @@ __all__ = [
     "main",
     "measure_file",
     "print_report",
+    "resolve_adc_drift",
     "write_csv",
     "write_json",
     "write_plot",
@@ -72,6 +83,9 @@ class MeasureResult:
     templates: tuple[ParityTemplate | None, ParityTemplate | None]
     detect_s: float
     metrics_s: float
+    adc_drift_ppm: float = 0.0
+    adc_drift_sigma_ppm: float = 0.0
+    adc_drift_source: str = ""
 
     @property
     def realtime_factor(self) -> float:
@@ -89,6 +103,7 @@ def measure_file(
     window_step_s: float | None = None,
     adc_drift_ppm: float = 0.0,
     adc_drift_sigma_ppm: float = 0.0,
+    adc_drift_source: str = "",
     chunk: int = DEFAULT_CHUNK,
 ) -> MeasureResult:
     """Detect beats block by block and compute the metrics of the whole file.
@@ -146,7 +161,79 @@ def measure_file(
         templates=templates,
         detect_s=busy,
         metrics_s=metrics_s,
+        adc_drift_ppm=adc_drift_ppm,
+        adc_drift_sigma_ppm=adc_drift_sigma_ppm,
+        adc_drift_source=adc_drift_source,
     )
+
+
+def _date(text: str | None) -> str:
+    return text[:10] if text else "fecha desconocida"
+
+
+def resolve_adc_drift(
+    path: Path | str,
+    *,
+    ppm: float | None = None,
+    sigma_ppm: float | None = None,
+    device: str | None = None,
+    store: CalibrationStore | None = None,
+) -> tuple[float, float, str]:
+    """ADC clock correction for a file (see the module docstring for the order).
+
+    Returns:
+        ``(ppm, total sigma in ppm, description of the source in Spanish)``.
+
+    Raises:
+        AudioFileError: Unreadable file.
+        ValueError: ``sigma_ppm`` without ``ppm``, or malformed drift tags.
+        CalibrationStoreError: ``device`` given and the store is unreadable.
+    """
+    if ppm is not None:
+        return float(ppm), float(sigma_ppm or 0.0), "línea de órdenes"
+    if sigma_ppm is not None:
+        raise ValueError("--adc-drift-sigma-ppm requiere --adc-drift-ppm")
+    tags = read_tags(path)
+    candidates: list[tuple[float, float, str]] = []
+    tagged = drift_from_tags(tags)
+    if tagged is not None and tagged.level != ClockLevel.UNCALIBRATED:
+        cal_at = tags.get("ADV_TG_ADC_DRIFT_CALIBRATED_AT")
+        candidates.append(
+            (
+                tagged.ppm,
+                tagged.uncertainty_ppm,
+                f"etiquetas del archivo (nivel {int(tagged.level)}, {tagged.method}, "
+                f"calibrado el {_date(cal_at)})",
+            )
+        )
+    if device:
+        fs = audio_info(path).sample_rate
+        recorded = tags.get("ADV_TG_RECORDED_AT")
+        when = None
+        if recorded:
+            try:
+                when = datetime.fromisoformat(recorded)
+                when = when if when.tzinfo else when.replace(tzinfo=UTC)
+            except ValueError:
+                when = None
+        if when is None:
+            when = datetime.fromtimestamp(Path(path).stat().st_mtime, UTC)
+        cal = (store or CalibrationStore()).best(device, fs, when)
+        if cal is not None:
+            d = cal.effective(when)
+            candidates.append(
+                (
+                    d.ppm,
+                    d.uncertainty_ppm,
+                    f"calibración guardada de '{cal.device}' (nivel {int(d.level)}, {d.method}, "
+                    f"del {cal.measured_at:%Y-%m-%d})",
+                )
+            )
+        elif not candidates:
+            return 0.0, 0.0, f"sin calibrar (no hay calibración de '{device}' a {fs} Hz)"
+    if not candidates:
+        return 0.0, 0.0, "sin calibrar"
+    return min(candidates, key=lambda c: c[1])
 
 
 # ---------------------------------------------------------------------- output
@@ -173,6 +260,11 @@ def print_report(r: MeasureResult) -> None:
         f"{_f(m.rate_uncertainty_s_per_day, '.2f')} s/d ({cal}; σ covarianza "
         f"{_f(m.rate_sigma_s_per_day, '.2f')}, σ bloques {_f(m.rate_sigma_block_s_per_day, '.2f')})"
     )
+    if r.adc_drift_source:
+        print(
+            f"Reloj ADC          : {r.adc_drift_ppm:+.2f} ± {r.adc_drift_sigma_ppm:.2f} ppm "
+            f"({r.adc_drift_source})"
+        )
     if m.windows:
         ws = ", ".join(f"{w.rate_s_per_day:+.1f}" for w in m.windows)
         print(
@@ -223,6 +315,9 @@ def write_json(path: Path, r: MeasureResult) -> None:
         "lift_angle_deg": r.lift_angle_deg,
         "quartz": r.quartz,
         "realtime_factor": r.realtime_factor,
+        "adc_drift_ppm": r.adc_drift_ppm,
+        "adc_drift_sigma_ppm": r.adc_drift_sigma_ppm,
+        "adc_drift_source": r.adc_drift_source,
         "metrics": asdict(r.metrics),
     }
     path.write_text(json.dumps(_clean(data), indent=2, ensure_ascii=False), encoding="utf-8")
@@ -320,13 +415,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="paso entre ventanas en s (por defecto = --window; menor = ventanas solapadas)",
     )
     p.add_argument(
-        "--adc-drift-ppm", type=float, default=0.0, help="error del reloj de la tarjeta (ppm)"
+        "--adc-drift-ppm",
+        type=float,
+        default=None,
+        help="error del reloj de la tarjeta (ppm); por defecto, el de las etiquetas del archivo"
+        " o de --device (0 = sin corrección)",
     )
     p.add_argument(
         "--adc-drift-sigma-ppm",
         type=float,
-        default=0.0,
+        default=None,
         help="incertidumbre del error del reloj de la tarjeta (ppm)",
+    )
+    p.add_argument(
+        "--device",
+        default=None,
+        help="nombre del dispositivo con que se grabó: usa su calibración guardada",
     )
     p.add_argument(
         "--chunk", type=int, default=DEFAULT_CHUNK, help=f"muestras por bloque ({DEFAULT_CHUNK})"
@@ -352,6 +456,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: --chunk debe ser positivo (recibido {args.chunk})")
         return EXIT_ERROR
     try:
+        ppm, sigma, source = resolve_adc_drift(
+            args.file,
+            ppm=args.adc_drift_ppm,
+            sigma_ppm=args.adc_drift_sigma_ppm,
+            device=args.device,
+        )
+    except (AudioFileError, ValueError, CalibrationStoreError) as exc:
+        print(f"ERROR: {exc}")
+        return EXIT_ERROR
+    try:
         with _dbg.phase("measure", file=str(args.file), bph=args.bph):
             r = measure_file(
                 args.file,
@@ -360,8 +474,9 @@ def main(argv: list[str] | None = None) -> int:
                 quartz=args.quartz,
                 window_s=args.window,
                 window_step_s=args.window_step,
-                adc_drift_ppm=args.adc_drift_ppm,
-                adc_drift_sigma_ppm=args.adc_drift_sigma_ppm,
+                adc_drift_ppm=ppm,
+                adc_drift_sigma_ppm=sigma,
+                adc_drift_source=source,
                 chunk=args.chunk,
             )
     except (AudioFileError, ValueError) as exc:
