@@ -1,6 +1,6 @@
 # Advanced Timegrapher: fases de reconstrucción del núcleo
 
-Documento de referencia. Estado al 26/10/2026: **v0.5.0**. Fases 0, 1 (con 1b y 1d), 2 (detector, ver `docs/resultados_pruebas_fase2.md`), 3 (métricas, ver `docs/fase3_resultados.md`) y 4 (reloj, ver `docs/resultados_fase4.md`) terminadas; siguiente: fase 5.
+Documento de referencia. Estado al 26/10/2026: **v0.5.0**. Fases 0, 1 (con 1b y 1d), 2 (detector, ver `docs/resultados_pruebas_fase2.md`), 3 (métricas, ver `docs/fase3_resultados.md`) y 4 (reloj, ver `docs/resultados_fase4.md`) terminadas; fase 5 (integración) implementada y pendiente de confirmar con el CM18 (ver `docs/resultados_fase5.md`).
 
 ## Decisión de base
 
@@ -36,7 +36,7 @@ Implementación limpia en el repo `advanced_timegrapher` (paquete `adv_tg`), sin
 | **2. Detector de batimientos** | Detección incremental con una sola definición de P1/P3 y ventana de búsqueda acotada físicamente. Generador sintético en `tests/` con verdad conocida. **Completada.** | Agente; el usuario aporta grabaciones | Error < 1 muestra en sintético. En grabaciones reales el conteo coincide con duración × BPH / 3600 y no hay falsos. |
 | **3. Métricas** | Marcha, error de batimiento y amplitud sobre la lista de batimientos, ventana larga, rechazo de atípicos, confianza real. | Agente | Sintético dentro de tolerancia y cifras estables en ventana de 30 s. **Implementada** (`docs/fase3_resultados.md`); pendiente de confirmación. |
 | **4. Reloj** | Contador de muestras frente al reloj monotónico del host más NTP; niveles de confianza; ppm ± σ; calibración manual opcional. | Agente | Un ppm inyectado en sintético se recupera. El Bulova da ≈ +8 ppm con el CM18. **Completada (v0.5.0)**; pendientes la herramienta en vivo y la validación con el Bulova (`docs/resultados_fase4.md`, sección 8). |
-| **5. Integración completa** | Worker real que une las capas 1 a 4. MOCK se queda como herramienta de pruebas. Barra de calidad (nivel/saturación, SNR antes de AGC, fiabilidad de detección), autoescala del papel, ocultar cifras con confianza baja. | Agente | ≥ 3 actualizaciones/s, plots a ~30 FPS, etiquetas de deriva y calidad funcionando. |
+| **5. Integración completa** | Worker real que une las capas 1 a 4. MOCK se queda como herramienta de pruebas. Barra de calidad (nivel/saturación, SNR antes de AGC, fiabilidad de detección), autoescala del papel, ocultar cifras con confianza baja. | Agente | ≥ 3 actualizaciones/s, plots a ~30 FPS, etiquetas de deriva y calidad funcionando. **Implementada** (`docs/resultados_fase5.md`): 4/s y 30 FPS con las grabaciones reales en modo repetición; pendiente de confirmar con el CM18. |
 | **6. Validación** | Comparación contra tg con las tres grabaciones; optimización; ganchos para ML. | Usuario + Claude | Diferencias documentadas y dentro de tolerancia. |
 
 ## Fórmulas y convenciones del dominio
@@ -49,8 +49,9 @@ Implementación limpia en el repo `advanced_timegrapher` (paquete `adv_tg`), sin
 
 ## Pendientes que caen en fases posteriores
 
-- Barra de calidad de señal: nivel/saturación, SNR antes de AGC, fiabilidad de detección (fase 5).
-- Eje del papel de marcha con autoescala (fase 5).
-- No mostrar cifras cuando la confianza es baja (fase 5).
+- ~~Barra de calidad de señal: nivel/saturación, SNR antes de AGC, fiabilidad de detección (fase 5).~~ Hecho.
+- ~~Eje del papel de marcha con autoescala (fase 5).~~ Hecho.
+- ~~No mostrar cifras cuando la confianza es baja (fase 5).~~ Hecho.
+- Inestabilidad del inicio de P1 de las plantillas en vivo (fase 6, `docs/resultados_fase5.md`, sección 4).
 - Aviso de saturación de entrada (ya en `capture_check`, fase 1).
 - Recuperar empaquetado/distribución para Windows (el arranque ya aísla las DLL de Qt).

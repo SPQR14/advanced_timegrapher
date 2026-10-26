@@ -12,8 +12,9 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
+from adv_tg.audio.file_replay import FileReplay  # noqa: E402
 from adv_tg.core.models import WatchConfig  # noqa: E402
-from adv_tg.tools.capture_check import FileReplay, read_wav_mono  # noqa: E402
+from adv_tg.tools.capture_check import read_wav_mono  # noqa: E402
 from adv_tg.ui.capture_worker import (  # noqa: E402
     FALLBACK_BLOCKSIZE,
     FALLBACK_LATENCY,
@@ -47,11 +48,25 @@ def py_threads() -> int:
     return sum(1 for t in threading.enumerate() if not isinstance(t, threading._DummyThread))
 
 
-class Factory:
-    """``capture_factory`` that replays ``signal`` in real time via ``FileReplay``."""
+class DeviceReplay(FileReplay):
+    """``FileReplay`` that behaves like a device: running out of data is NOT a normal end."""
 
-    def __init__(self, signal: np.ndarray, fail: int = 0, exc: BaseException | None = None):
+    exhausted = property(lambda self: False, lambda self, value: None)
+
+
+class Factory:
+    """``capture_factory`` that replays ``signal`` in real time via ``DeviceReplay``
+    (``FileReplay`` with ``as_file=True``)."""
+
+    def __init__(
+        self,
+        signal: np.ndarray,
+        fail: int = 0,
+        exc: BaseException | None = None,
+        as_file: bool = False,
+    ):
         self.signal = signal
+        self.cls = FileReplay if as_file else DeviceReplay
         self.fail = fail  # number of calls that raise before succeeding
         self.exc = exc or RuntimeError("Invalid device")
         self.calls: list[tuple[int, str]] = []
@@ -62,7 +77,7 @@ class Factory:
         assert sample_rate == int(stream.sample_rate)
         if len(self.calls) <= self.fail:
             raise self.exc
-        src = FileReplay(stream, self.signal, blocksize or 1024)
+        src = self.cls(stream, self.signal, blocksize or 1024)
         self.sources.append(src)
         return src
 
@@ -245,6 +260,15 @@ def test_device_stopping_by_itself_ends_session(qtbot) -> None:
     with qtbot.waitSignal(worker.session_finished, timeout=3000):
         worker.start_stream()
     assert rec.errors == ["El dispositivo de audio dejó de enviar datos."]
+    assert not worker.isRunning()
+    worker.shutdown()
+
+
+def test_replayed_file_ending_is_not_an_error(qtbot) -> None:
+    worker, rec = make_worker(Factory(tone_and_ticks(0.4), as_file=True))
+    with qtbot.waitSignal(worker.session_finished, timeout=3000):
+        worker.start_stream()
+    assert rec.errors == [] and rec.finished == 1
     assert not worker.isRunning()
     worker.shutdown()
 

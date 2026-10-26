@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import math
 import sys
-import threading
 import time
 import warnings
 from dataclasses import dataclass
@@ -34,6 +33,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from adv_tg.audio.capture import AudioCapture, load_sounddevice
+from adv_tg.audio.file_replay import FileReplay
 from adv_tg.audio.process_capture import ProcessAudioCapture
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
 from adv_tg.utils.adc_calibration import CalibrationStoreError, recording_tags
@@ -165,92 +165,6 @@ def _recording_tags(args: argparse.Namespace, fs: int) -> dict[str, str]:
             "nivel 0 (ver python -m adv_tg.tools.adc_calibration)."
         )
     return tags
-
-
-# ---------------------------------------------------------------------- file replay
-class FileReplay:
-    """Feed a sample array into a ``SampleStream`` in blocks, paced in real time.
-
-    A background thread plays the role of the PortAudio callback: each block is written
-    when its last sample would have been captured. It exposes the same counters as
-    ``AudioCapture``.
-
-    Args:
-        stream: Destination ``SampleStream``.
-        samples: Mono samples to replay.
-        blocksize: Samples per block (> 0).
-    """
-
-    def __init__(self, stream: SampleStream, samples: NDArray[np.float32], blocksize: int) -> None:
-        if blocksize <= 0:
-            raise ValueError(f"blocksize must be positive, got {blocksize}")
-        self._stream = stream
-        self._samples = samples
-        self.blocksize = int(blocksize)
-        self.actual_sample_rate: float | None = stream.sample_rate
-        self.callbacks = 0
-        self.status_flags = 0
-        self.callback_errors = 0
-        self._max_callback_ns = 0
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    @property
-    def max_callback_us(self) -> float:
-        """Longest simulated callback (one ``write``), in microseconds."""
-        return self._max_callback_ns / 1e3
-
-    @property
-    def is_active(self) -> bool:
-        """True while the replay thread is running."""
-        return self._thread is not None and self._thread.is_alive()
-
-    def start(self) -> None:
-        """Start the replay thread. Idempotent."""
-        if self.is_active:
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="FileReplay", daemon=True)
-        _dbg.process_start("FileReplay", samples=len(self._samples), blocksize=self.blocksize)
-        self._thread.start()
-
-    def _run(self) -> None:
-        fs = self._stream.sample_rate
-        n_total = len(self._samples)
-        t0 = time.perf_counter_ns()
-        pos = 0
-        while pos < n_total and not self._stop.is_set():
-            end = min(pos + self.blocksize, n_total)
-            deadline = t0 + int(end / fs * 1e9)
-            wait_s = (deadline - time.perf_counter_ns()) / 1e9
-            if wait_s > 0 and self._stop.wait(wait_s):
-                break
-            t_cb = time.perf_counter_ns()
-            try:
-                self.callbacks += 1
-                # Stamp with the scheduled time (ideal device clock), not the wake-up time,
-                # so OS timer jitter (large on macOS CI) does not show up as gaps.
-                self._stream.write(self._samples[pos:end], deadline)
-            except Exception:
-                self.callback_errors += 1
-            dt = time.perf_counter_ns() - t_cb
-            if dt > self._max_callback_ns:
-                self._max_callback_ns = dt
-            pos = end
-
-    def stop(self) -> None:
-        """Stop the replay thread. Idempotent."""
-        thread = self._thread
-        if thread is None:
-            return
-        self._stop.set()
-        thread.join()
-        self._thread = None
-        _dbg.process_end("FileReplay", callbacks=self.callbacks)
-
-    def close(self) -> None:
-        """Same as ``stop()``."""
-        self.stop()
 
 
 # ---------------------------------------------------------------------- verdict

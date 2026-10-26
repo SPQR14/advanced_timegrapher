@@ -77,8 +77,11 @@ def test_factory_and_null_engine(qtbot) -> None:
     from adv_tg.ui.capture_worker import CaptureStreamWorker
 
     assert isinstance(create_worker(None), MockStreamWorker)
+    from adv_tg.ui.measure_worker import MeasureStreamWorker
+
     hw = create_worker(3)
-    assert isinstance(hw, CaptureStreamWorker) and not hw.isRunning()
+    assert isinstance(hw, MeasureStreamWorker) and isinstance(hw, CaptureStreamWorker)
+    assert not hw.isRunning()
     null = NullStreamWorker()  # kept only as a fallback engine
     errors: list[str] = []
     null.error_occurred.connect(errors.append)
@@ -98,6 +101,7 @@ def test_base_contract_is_strict() -> None:
         "telemetry_ready",
         "waveform_ready",
         "drift_updated",
+        "clock_info",
         "capture_health",
         "level_updated",
         "error_occurred",

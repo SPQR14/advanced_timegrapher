@@ -6,17 +6,17 @@ PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 
 ## Estado (v0.5.0)
 
-- El núcleo de medición (DSP) se está **reconstruyendo desde cero, por capas**. Ya existen la
-  captura (fase 1), el detector de batimientos (fase 2), las métricas (fase 3) y la corrección
-  del reloj de la tarjeta de sonido (fase 4). Se usan desde la consola
-  (`python -m adv_tg.tools.*`); todavía no están integradas en la GUI (fase 5, la siguiente).
+- El núcleo de medición (DSP) se ha **reconstruido desde cero, por capas**: captura (fase 1),
+  detector de batimientos (fase 2), métricas (fase 3) y corrección del reloj de la tarjeta de
+  sonido (fase 4). Desde la fase 5 (implementada, pendiente de confirmar con el CM18) **la GUI
+  mide con un dispositivo real**: marcha, error de batimiento, amplitud, deriva del reloj,
+  calidad de la señal y grabación de la sesión (ver "Fase 5").
+- Las mismas capas se usan desde la consola (`python -m adv_tg.tools.*`).
 - La deriva del reloj de la tarjeta (ppm) se calibra por dispositivo y viaja dentro de cada
   grabación, de modo que `measure` corrige la marcha sola (ver "Fase 4").
 - El botón **☕ Buy me a coffee** abre https://buymeacoffee.com/sqpr14 en el navegador.
-- La GUI tiene todos los paneles, exportaciones e idiomas (EN/ES). **Con un dispositivo de
-  audio real muestra la señal pero todavía NO mide**: forma de onda cruda, nivel/saturación e
-  ingesta de audio (`CaptureStreamWorker`), sin marcha, error de batimiento ni amplitud.
-- El botón **MOCK** (barra superior) activa un motor simulado que genera datos realistas
+- La GUI tiene todos los paneles, exportaciones e idiomas (EN/ES).
+- El botón **MOCK** (barra superior, desactivado al arrancar) activa un motor simulado que genera datos realistas
   (marcha, error de batimiento, amplitud, forma de onda, deriva de reloj, calidad de señal)
   para probar la GUI completa. Mientras está activo se ve la insignia "MOCK" en la barra de
   estado y `[MOCK]` en el título. Los datos MOCK no son mediciones.
@@ -27,8 +27,23 @@ PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 | 1 | Captura: flujo de muestras sin bloqueos + herramienta de consola; captura en proceso aparte (1d) y audio real en la GUI sin medir (1b) | **terminada**; validada con el CM18 (ingesta 100 %) |
 | 2 | Detector de batimientos incremental (P1/P2/P3), alineación fina por plantillas de tic y tac (`t_fine`) + audio WAV/FLAC | **terminada**: validado con sintético y con 5 grabaciones reales; frente a tg queda a ≤ 1.4 s/d y ≤ 0.25 ms (ver [`docs/resultados_pruebas_fase2.md`](docs/resultados_pruebas_fase2.md), sección 6) |
 | 3 | Métricas: marcha, error de batimiento, amplitud (`core/metrics.py`, `tools/measure.py`) | **implementada**, pendiente de confirmación: sintético dentro de tolerancia y grabaciones reales dentro de la banda de tg/WAM (ver [`docs/fase3_resultados.md`](docs/fase3_resultados.md)) |
-| 4 | Reloj: deriva del ADC vs host + NTP, calibración manual opcional | **en curso**: estimador, integración con la marcha, calibraciones por dispositivo y etiquetas en las grabaciones (ver [`docs/resultados_fase4.md`](docs/resultados_fase4.md)) |
-| 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | pendiente |
+| 4 | Reloj: deriva del ADC frente al reloj del host + NTP, referencias externas (PPS/GPS, cuarzo), calibración manual, calibraciones por dispositivo y etiquetas en las grabaciones | **terminada** (v0.5.0); quedan la herramienta de medida en vivo y la validación con el Bulova (ver [`docs/resultados_fase4.md`](docs/resultados_fase4.md), sección 8) |
+| 5 | Integración completa: motor real en la GUI (`MeasureStreamWorker`), barra de calidad, autoescala del papel, cifras ocultas o atenuadas por confianza, grabación de la sesión | **implementada**, pendiente de confirmar con el CM18: 4 actualizaciones/s y 30 FPS con las grabaciones reales (ver [`docs/resultados_fase5.md`](docs/resultados_fase5.md)) |
+
+### Versiones
+
+Cada versión menor cierra una fase. La versión vive en `pyproject.toml` y en
+`src/adv_tg/__init__.py` (`__version__`); `tests/test_smoke.py` comprueba que coincidan, así que
+después de cambiarla hay que reinstalar el paquete (`.venv/bin/pip install -e .`). Cada versión
+lleva su etiqueta de git (`vX.Y.Z`).
+
+| Versión | Fecha | Contenido |
+|---------|-------|-----------|
+| v0.1.0 | 23/10/2026 | Fase 0: esqueleto, GUI, modo MOCK, Debugger, CI |
+| v0.2.0 | 23/10/2026 | Fase 1: captura de audio (`SampleStream`, `AudioCapture`, `capture_check`) |
+| v0.3.0 | 24/10/2026 | Fase 2: detector de batimientos, audio WAV/FLAC |
+| v0.4.0 | 24/10/2026 | Fase 3: métricas (marcha, error de batimiento, amplitud) |
+| v0.5.0 | 26/10/2026 | Fase 4: reloj de la tarjeta (ppm ± σ, niveles de confianza, PPS/GPS, calibraciones por dispositivo, etiquetas en FLAC/WAV); botón "Buy me a coffee" |
 
 ## Estructura
 
@@ -42,6 +57,8 @@ src/adv_tg/
 │   ├── capture.py         # AudioCapture: InputStream mono float32 -> SampleStream (en proceso)
 │   ├── capture_process.py # proceso hijo de captura (sin Qt): callback -> deque -> tubería
 │   ├── gil_stats.py       # estadística de espera por el GIL (compartida)
+│   ├── analysis_process.py # análisis en vivo en un proceso aparte (fase 5)
+│   ├── file_replay.py     # FileReplay: un archivo reproducido en tiempo real (sin hardware)
 │   └── process_capture.py # ProcessAudioCapture: misma interfaz, captura en proceso aparte
 ├── core/
 │   ├── __init__.py
@@ -50,7 +67,8 @@ src/adv_tg/
 │   ├── beat_types.py      # Beat, BeatFlags, ParityTemplate y definiciones físicas
 │   ├── metrics.py         # capa 3: marcha, error de batimiento, amplitud, tendencia
 │   ├── models.py          # WatchConfig, BeatEvent, BeatTelemetry, TelemetryResult
-│   └── sample_stream.py   # SampleStream: buffer circular SPSC con índice absoluto
+│   ├── sample_stream.py   # SampleStream: buffer circular SPSC con índice absoluto
+│   └── session.py         # capa 5: MeasurementSession (detector + métricas + reloj en vivo)
 ├── i18n/
 │   ├── __init__.py
 │   └── translator.py      # textos EN/ES
@@ -73,6 +91,7 @@ src/adv_tg/
 │   ├── assets/            # flechas SVG de los spinbox/combos
 │   ├── main_window.py     # ventana principal (MainWin)
 │   ├── capture_worker.py  # CaptureStreamWorker: audio real en la GUI, sin medir (fase 1b)
+│   ├── measure_worker.py  # MeasureStreamWorker: motor real de la GUI (fase 5)
 │   ├── null_engine.py     # NullStreamWorker: respaldo si la captura no está disponible
 │   ├── stream_worker_base.py  # BaseStreamWorker: contrato GUI <-> motor
 │   └── worker_factory.py  # create_worker(device_id)
@@ -375,6 +394,34 @@ python -m adv_tg.tools.adc_calibration tag vieja.flac --device "CM18 USB" --date
 Pendiente: herramienta de medida en vivo (`python -m adv_tg.tools.adc_clock`) y validación con
 el Bulova (≈ +8 ppm con el CM18). Para la referencia PPS acústica basta un GPS con salida PPS y
 un zumbador pegado al micrófono (`docs/resultados_fase4.md`, secciones 2.3 y 8.3).
+
+## Fase 5: integración completa
+
+Con un dispositivo de audio la GUI usa `MeasureStreamWorker` (`ui/measure_worker.py`): la
+captura de la fase 1 más una `MeasurementSession` (`core/session.py`) que, 4 veces por segundo,
+une detector, métricas de los últimos 30 s y reloj. El análisis corre en un proceso aparte
+(`audio/analysis_process.py`) para no frenar la interfaz; `ADV_TG_ANALYSIS_INPROC=1` lo deja en
+el proceso de la GUI. La aplicación arranca con la entrada de audio por defecto del sistema;
+el MOCK solo se activa con su botón (o si no hay ningún dispositivo). Detalle en
+[`docs/resultados_fase5.md`](docs/resultados_fase5.md).
+
+- **Cifras**: mediana de las últimas 7 actualizaciones; ocultas (`---.-`) con confianza < 0.15
+  y en gris con < 0.30. Solo las visibles entran en el papel, las estadísticas y el CSV.
+- **Barra de calidad**: nivel de entrada hasta que el detector engancha; después SNR ×
+  fracción de batimientos útiles, en rojo si hubo saturación (`⚠`).
+- **Papel** con autoescala (se pausa si lo mueves; "Center Trace" la reanuda) y
+  **osciloscopio** con P1/P2/P3 reales.
+- **Reloj**: la deriva aplicada (calibración guardada o estimación en vivo de nivel 2) con
+  su ± σ y su nivel.
+- **Grabación**: cada sesión se graba en un FLAC temporal con etiquetas; "Record Audio" lo
+  guarda.
+
+Probar la GUI sin micrófono, con una grabación (su frecuencia de muestreo debe coincidir con
+la elegida):
+
+```bash
+ADV_TG_REPLAY_FILE=docs/samples/miyota_9015.flac adv-tg   # elegir cualquier dispositivo, 28800 BPH, 51°
+```
 
 ## Instalación
 
