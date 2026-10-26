@@ -68,7 +68,7 @@ def test_hardware_capture_flow(window, qtbot) -> None:
     x, _ = window.audio_waveform_curve.getData()
     assert x is not None and len(x) > 0
 
-    assert window.record_audio() is None  # hardware recording not available yet
+    assert window.record_audio() is None  # armed: a capture-only engine has nothing to save
 
     window.stop_capture()
     assert window._capture_state == "INACTIVO"
