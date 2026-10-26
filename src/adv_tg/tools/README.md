@@ -5,7 +5,7 @@
 Verifica que la capa de captura recibe el audio completo (ingesta ≥ 99 %, hueco máximo < 3
 bloques, callback < 2 ms). `--isolated` usa la captura en proceso aparte (`ProcessAudioCapture`)
 y añade `dropped_frames`, `backlog_max` y `parent_lag_ms` al resumen; `--fake-source` (con
-`--isolated`) usa una fuente falsa en el proceso hijo, sin micrófono. Ver el README principal.
+`--isolated`) usa una fuente falsa en el proceso hijo, sin micrófono. Ver `docs/resumen_beta1.md`.
 
 ## `adc_calibration`
 

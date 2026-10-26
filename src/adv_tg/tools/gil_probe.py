@@ -442,8 +442,7 @@ def _scenario_gui_probe_capture(args: argparse.Namespace, mock: bool) -> dict[st
     try:
         if mock:
             win.btn_mock.setChecked(True)
-            win.spn_stab.setValue(0)
-            win.spn_duration.setValue(win.spn_duration.maximum())
+            win.set_session_timing(stabilization_s=0, duration_s=3600)
             win.start_capture()
             if not win.dsp_worker.isRunning():
                 raise RuntimeError("el MOCK no arrancó")
@@ -500,8 +499,7 @@ def _scenario_gui_real(args: argparse.Namespace, show: bool) -> dict[str, Any]:
         if sidx < 0:
             raise RuntimeError(f"la GUI no ofrece {args.fs} Hz")
         win.cmb_srate.setCurrentIndex(sidx)
-        win.spn_stab.setValue(0)
-        win.spn_duration.setValue(win.spn_duration.maximum())
+        win.set_session_timing(stabilization_s=0, duration_s=3600)
         errors: list[str] = []
         win.dsp_worker.error_occurred.connect(errors.append)
         win.start_capture()

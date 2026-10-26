@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -86,7 +87,23 @@ def analysis_in_separate_process() -> bool:
 def replay_file() -> Path | None:
     """File to replay instead of the microphone (``ADV_TG_REPLAY_FILE``), or None."""
     value = os.environ.get(REPLAY_ENV_VAR, "").strip()
-    return Path(value).expanduser() if value else None
+    if not value:
+        return None
+    p = Path(value).expanduser()
+    if p.is_file():
+        return p
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        meipass = Path(sys._MEIPASS)
+        filename = p.name
+        for cand in (
+            meipass / value,
+            meipass / "docs" / "samples" / filename,
+            meipass.parent / "Resources" / value,
+            meipass.parent / "Resources" / "docs" / "samples" / filename,
+        ):
+            if cand.is_file():
+                return cand
+    return p
 
 
 def device_name(device_id: int | None) -> str | None:
@@ -340,7 +357,12 @@ class MeasureStreamWorker(CaptureStreamWorker):
     def update_watch_config(self, config: WatchConfig) -> None:
         """Store the config; BPH / lift angle changes apply to the next session (warned)."""
         old = self._config
-        if self._active and (config.bph != old.bph or config.lift_angle != old.lift_angle):
+        changed = (config.bph, config.lift_angle, config.quartz) != (
+            old.bph,
+            old.lift_angle,
+            old.quartz,
+        )
+        if self._active and changed:
             message = (
                 f"El cambio a {config.bph} A/h y {config.lift_angle:g}° se aplicará en la "
                 "próxima sesión"
@@ -436,7 +458,8 @@ class MeasureStreamWorker(CaptureStreamWorker):
         session_cfg = SessionConfig(
             sample_rate=fs,
             bph=float(cfg.bph),
-            lift_angle_deg=float(cfg.lift_angle),
+            lift_angle_deg=None if cfg.quartz else float(cfg.lift_angle),
+            quartz=cfg.quartz,
             span_s=SPAN_S,
             calibration=cal,
             calibration_source=source,
@@ -452,7 +475,11 @@ class MeasureStreamWorker(CaptureStreamWorker):
                 tags, _ = recording_tags(name, int(round(fs)), self._store)
             except CalibrationStoreError:
                 tags, _ = recording_tags(None, int(round(fs)))
-            tags.update({"ADV_TG_BPH": str(cfg.bph), "ADV_TG_LIFT_ANGLE": f"{cfg.lift_angle:g}"})
+            tags["ADV_TG_BPH"] = str(cfg.bph)
+            if cfg.quartz:
+                tags["ADV_TG_QUARTZ"] = "1"
+            else:
+                tags["ADV_TG_LIFT_ANGLE"] = f"{cfg.lift_angle:g}"
             with self._rec_lock:
                 self._pending_recording = path
         _dbg.process_start(
@@ -478,6 +505,13 @@ class MeasureStreamWorker(CaptureStreamWorker):
             self._recording_frames = frames
         if frames <= 0 and path is not None:
             path.unlink(missing_ok=True)
+
+    @property
+    def recording_path(self) -> Path | None:
+        """The last finished session's recording (still owned by the worker), or None."""
+        with self._rec_lock:
+            path = self._recording
+        return path if path is not None and path.exists() else None
 
     @property
     def has_recording(self) -> bool:

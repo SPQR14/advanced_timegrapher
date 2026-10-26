@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keys merged into the Info.plist of "Advanced Timegrapher.app" (see ../adv-tg.spec).
+  NSMicrophoneUsageDescription is MANDATORY: without it macOS denies the microphone silently
+  and the app only receives digital silence.
+  CFBundleShortVersionString / CFBundleVersion are filled in by the spec from adv_tg.__version__.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Advanced Timegrapher</string>
+    <key>CFBundleDisplayName</key>
+    <string>Advanced Timegrapher</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.spqr14.advanced-timegrapher</string>
+    <key>CFBundleIconFile</key>
+    <string>adv-tg.icns</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Advanced Timegrapher listens to your watch through the microphone to measure rate, beat error and amplitude. / Advanced Timegrapher escucha tu reloj por el micrófono para medir marcha, error de batimiento y amplitud.</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
+</dict>
+</plist>

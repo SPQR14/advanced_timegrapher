@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import faulthandler
 import multiprocessing
+import os
 import platform
 import sys
 from collections.abc import Sequence
@@ -68,6 +69,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Needed by the isolated capture child ("spawn") in frozen builds (PyInstaller).
     multiprocessing.freeze_support()
     args = list(sys.argv if argv is None else argv)
+
+    if "--version" in args or "-v" in args:
+        print(f"Advanced Timegrapher {__version__}")
+        return 0
+
+    smoke_test = "--smoke-test" in args or os.environ.get("ADV_TG_SMOKE_TEST") == "1"
+
     _install_excepthook()
     _enable_faulthandler()
 
@@ -110,6 +118,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
         window.show()
+
+        if smoke_test:
+            logger.info("Smoke test passed: application initialized successfully")
+            window.close()
+            return 0
 
     dbg.process_start("Qt event loop (app.exec)")
     exit_code = int(app.exec())
