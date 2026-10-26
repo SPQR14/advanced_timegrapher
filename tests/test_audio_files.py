@@ -15,7 +15,9 @@ from adv_tg.utils.audio_files import (
     iter_audio_blocks,
     read_audio,
     read_mono,
+    read_tags,
     select_channel,
+    update_tags,
     write_audio,
 )
 
@@ -220,3 +222,93 @@ def test_audio_info(tmp_path: Path) -> None:
         "PCM_24",
     )
     assert i.duration_s == pytest.approx(0.01)
+
+
+# ---------------------------------------------------------------------- tags
+def _flac_block_types(path: Path) -> list[int]:
+    b = path.read_bytes()
+    assert b[:4] == b"fLaC"
+    i, types = 4, []
+    while True:
+        types.append(b[i] & 0x7F)
+        last = b[i] & 0x80
+        i += 4 + int.from_bytes(b[i + 1 : i + 4], "big")
+        if last:
+            return types
+
+
+@pytest.mark.parametrize("name", ["t.flac", "t.wav"])
+def test_tags_round_trip_and_update(tmp_path: Path, name: str) -> None:
+    x = _signal(4800)
+    p = write_audio(
+        tmp_path / name, x, 48000, comment="toma ñ", tags={"ADV_TG_A": "1.5", "adv_tg_b": "é"}
+    )
+    tags = read_tags(p)
+    assert tags["ADV_TG_A"] == "1.5" and tags["ADV_TG_B"] == "é"
+    assert read_audio(p).comment == "toma ñ"  # WAV tag lines are not part of the comment
+    before = read_audio(p).samples
+    update_tags(p, {"ADV_TG_A": None, "ADV_TG_C": "3"})
+    tags = read_tags(p)
+    assert "ADV_TG_A" not in tags and tags["ADV_TG_B"] == "é" and tags["ADV_TG_C"] == "3"
+    after = read_audio(p)
+    np.testing.assert_array_equal(after.samples, before)  # lossless rewrite
+    assert after.comment == "toma ñ"
+    assert _no_temp_left(tmp_path)
+
+
+def test_flac_tags_are_vorbis_comments(tmp_path: Path) -> None:
+    p = write_audio(tmp_path / "v.flac", _signal(4800), 48000, tags={"ADV_TG_X": "7"})
+    types = _flac_block_types(p)
+    assert types[0] == 0 and types.count(4) == 1  # STREAMINFO first, one VORBIS_COMMENT
+    assert b"ADV_TG_X=7" in p.read_bytes()[:4096]
+
+
+def test_flac_update_inserts_missing_vorbis_block(tmp_path: Path) -> None:
+    p = write_audio(tmp_path / "n.flac", _signal(4800), 48000)
+    b = bytearray(p.read_bytes())
+    i, out = 4, bytearray(b"fLaC")
+    blocks = []
+    while True:  # drop any VORBIS_COMMENT block libsndfile may have written
+        head, n = b[i], int.from_bytes(b[i + 1 : i + 4], "big")
+        if head & 0x7F != 4:
+            blocks.append((head & 0x7F, bytes(b[i + 4 : i + 4 + n])))
+        i += 4 + n
+        if head & 0x80:
+            break
+    for k, (t, body) in enumerate(blocks):
+        out += bytes([(0x80 if k == len(blocks) - 1 else 0) | t]) + len(body).to_bytes(3, "big")
+        out += body
+    p.write_bytes(bytes(out + b[i:]))
+    assert 4 not in _flac_block_types(p) and read_tags(p) == {}
+    ref = read_audio(p).samples
+    update_tags(p, {"ADV_TG_Y": "ok"})
+    assert read_tags(p) == {"ADV_TG_Y": "ok"}
+    np.testing.assert_array_equal(read_audio(p).samples, ref)
+
+
+def test_audio_writer_tags(tmp_path: Path) -> None:
+    for name in ("w.flac", "w.wav"):
+        with AudioWriter(tmp_path / name, 48000, tags={"ADV_TG_A": "1"}) as w:
+            w.write(_signal(1000))
+            w.tags["ADV_TG_B"] = "2"  # FLAC: still applied on close
+        tags = read_tags(tmp_path / name)
+        assert tags["ADV_TG_A"] == "1"
+        assert ("ADV_TG_B" in tags) == name.endswith(".flac")
+
+
+@pytest.mark.parametrize(
+    "tags", [{"1BAD": "x"}, {"MAL=KEY": "x"}, {"ADV TG": "x"}, {"ADV_TG_A": "dos\nlíneas"}]
+)
+def test_invalid_tags_rejected(tmp_path: Path, tags: dict[str, str]) -> None:
+    with pytest.raises(AudioFileError):
+        write_audio(tmp_path / "x.flac", np.zeros(10), 48000, tags=tags)
+    assert not (tmp_path / "x.flac").exists()
+
+
+def test_read_tags_errors(tmp_path: Path) -> None:
+    with pytest.raises(AudioFileError):
+        read_tags(tmp_path / "no.flac")
+    bad = tmp_path / "bad.flac"
+    bad.write_bytes(b"not audio")
+    with pytest.raises(AudioFileError):
+        read_tags(bad)

@@ -9,12 +9,14 @@ callback is never delayed by the GUI.
 
 * opens ``sounddevice.InputStream`` (1 channel, float32) in the child's main thread, or a
   pure-Python fake source for tests;
-* runs a callback that only stamps ``time.perf_counter_ns()``, appends ``indata[:, 0]`` as
-  bytes to a ``collections.deque`` (thread-safe ``append``) and updates cheap counters (no
-  logging, no locks, exceptions only counted);
+* runs a callback that only stamps ``time.perf_counter_ns()``, ``time.time_ns()`` and the
+  driver's capture time (``adc_end_ns``), appends ``indata[:, 0]`` as bytes to a
+  ``collections.deque`` (thread-safe ``append``) and updates cheap counters (no logging, no
+  locks, exceptions only counted);
 * runs a sender thread that drains the deque into ``data_conn.send_bytes`` frames
-  ``FRAME_HEADER`` (seq uint64, host_ns int64, n_samples uint32) + float32 samples. If the
-  pipe is full the sender blocks and the deque grows (``backlog_max``);
+  ``FRAME_HEADER`` (seq uint64, host_ns int64, adc_ns int64, wall_ns int64, n_samples uint32)
+  + float32 samples. If the pipe is full the sender blocks and the deque grows
+  (``backlog_max``);
 * reports events on ``evt_conn``: ``("opened", dict)``, ``("error", dict)``, ``("stats",
   dict)`` at 1 Hz and ``("stopped", dict)``;
 * obeys ``"stop"`` (drain, then exit) and ``"shutdown"`` (exit now) on ``ctrl_conn``, and
@@ -43,10 +45,10 @@ import numpy as np
 from adv_tg.audio.gil_stats import GilWaitRecorder
 from adv_tg.utils.debugger import Debugger
 
-__all__ = ["FRAME_HEADER", "LOG_NAME", "capture_child_main"]
+__all__ = ["FRAME_HEADER", "LOG_NAME", "adc_end_ns", "capture_child_main"]
 
-#: Frame header: sequence (uint64), host_ns (int64), number of float32 samples (uint32).
-FRAME_HEADER = struct.Struct("<QqI")
+#: Frame header: sequence (uint64), host_ns, adc_ns, wall_ns (int64), float32 samples (uint32).
+FRAME_HEADER = struct.Struct("<QqqqI")
 #: Log file name used by the child (``logs/adv_tg_capture.log``).
 LOG_NAME = "adv_tg_capture"
 STATS_PERIOD_S = 1.0
@@ -54,6 +56,25 @@ SENDER_IDLE_S = 0.002
 DRAIN_TIMEOUT_S = 2.0
 FAKE_BLOCKSIZE = 512
 FAKE_RAMP_MODULO = 1 << 24  # float32 represents integers exactly up to 2**24
+
+
+def adc_end_ns(time_info: Any, frames: int, sample_rate: float) -> int:
+    """Driver capture time of the END of a block, in ns of the PortAudio stream clock.
+
+    ``time_info.inputBufferAdcTime`` stamps the FIRST sample; adding ``frames / fs`` refers it
+    to the block end, like the ``end_index`` of the block log (blocks may vary in size).
+    Callback-safe: no logging, never raises.
+
+    Returns:
+        The stamp in ns, or 0 when the host API does not provide it.
+    """
+    try:
+        t = float(getattr(time_info, "inputBufferAdcTime", 0.0) or 0.0)
+    except Exception:
+        return 0
+    if not t > 0.0:
+        return 0
+    return round((t + frames / sample_rate) * 1e9)
 
 
 class _OpenFailure(Exception):
@@ -95,6 +116,7 @@ class _FakeStream:
         fs, n = self.samplerate, self.blocksize
         idx = np.arange(n, dtype=np.int64)
         t0_ns = time.perf_counter_ns()
+        pa_t0 = self.time
         t0 = t0_ns / 1e9
         k = 0
         while not self._stop.is_set():
@@ -112,7 +134,9 @@ class _FakeStream:
             # host_ns: scheduled time of this block (ideal device clock), so OS timer
             # jitter (large on macOS CI) does not show up as gaps or ingest error.
             info = types.SimpleNamespace(
-                currentTime=time.perf_counter(), host_ns=t0_ns + (k + 1) * n * 10**9 // int(fs)
+                currentTime=time.perf_counter(),
+                host_ns=t0_ns + (k + 1) * n * 10**9 // int(fs),
+                inputBufferAdcTime=pa_t0 + first / fs,
             )
             self._callback(x.reshape(-1, 1), n, info, 0)
             k += 1
@@ -133,7 +157,7 @@ class _ChildCapture:
         self.params = params
         self.fs = float(params["sample_rate"])
         self.data_conn = data_conn
-        self.queue: collections.deque[tuple[int, bytes]] = collections.deque()
+        self.queue: collections.deque[tuple[int, int, int, bytes]] = collections.deque()
         self.stream: Any = None
         self._pa_clock: Any = None
         # Callback counters (written only by the audio thread)
@@ -157,13 +181,15 @@ class _ChildCapture:
         except Exception:
             pa_now = 0.0
         t0 = time.perf_counter_ns()
+        wall = time.time_ns()
         try:
             self.callbacks += 1
             if status:
                 self.status_flags += 1
             # The fake source supplies its scheduled time; real hardware does not.
             stamp = getattr(time_info, "host_ns", None) or t0
-            self.queue.append((stamp, indata[:, 0].tobytes()))
+            adc = adc_end_ns(time_info, frames, self.fs)
+            self.queue.append((stamp, adc, wall, indata[:, 0].tobytes()))
             backlog = len(self.queue)
             if backlog > self.backlog_max:
                 self.backlog_max = backlog
@@ -245,14 +271,14 @@ class _ChildCapture:
         send = self.data_conn.send_bytes
         while True:
             try:
-                host_ns, payload = q.popleft()
+                host_ns, adc_ns, wall_ns, payload = q.popleft()
             except IndexError:
                 if self._sender_stop.is_set():
                     return
                 time.sleep(SENDER_IDLE_S)
                 continue
             try:
-                send(pack(self.seq_sent, host_ns, len(payload) // 4) + payload)
+                send(pack(self.seq_sent, host_ns, adc_ns, wall_ns, len(payload) // 4) + payload)
             except (OSError, ValueError):
                 self.pipe_broken = True
                 return

@@ -1,7 +1,8 @@
 """``AudioCapture``: mono float32 ``sounddevice.InputStream`` that feeds a ``SampleStream``.
 
 The PortAudio callback only writes ``indata[:, 0]`` into the ``SampleStream`` together with
-a host timestamp and updates a few integer counters. It never logs, blocks, takes locks or
+its clock stamps (``perf_counter_ns``, the driver's capture time of the block end and
+``time.time_ns()``, for layer 4) and updates a few integer counters. It never logs, blocks, takes locks or
 does I/O, and any exception inside it is swallowed and counted (an exception escaping the
 callback would abort the PortAudio stream). Everything else (opening the device, checking the
 effective sample rate, tracing) happens outside the callback and uses the ``Debugger``.
@@ -26,6 +27,7 @@ from bisect import bisect_right
 from types import ModuleType
 from typing import Any, Literal
 
+from adv_tg.audio.capture_process import adc_end_ns
 from adv_tg.audio.gil_stats import GIL_WAIT_EDGES_MS, hist_percentile_ms
 from adv_tg.audio.gil_stats import GIL_WAIT_EDGES_US as _GIL_WAIT_EDGES_US
 from adv_tg.core.sample_stream import SampleStream
@@ -158,11 +160,13 @@ class AudioCapture:
         except Exception:
             pa_now = 0.0
         t0 = time.perf_counter_ns()
+        wall = time.time_ns()
         try:
             self.callbacks += 1
             if status:
                 self.status_flags += 1
-            self._stream.write(indata[:, 0], t0)
+            adc = adc_end_ns(time_info, frames, self.sample_rate)
+            self._stream.write(indata[:, 0], t0, adc_ns=adc, wall_ns=wall)
         except Exception:
             self.callback_errors += 1
         dt = time.perf_counter_ns() - t0

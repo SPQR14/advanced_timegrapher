@@ -21,6 +21,12 @@ Threading contract (SPSC, no locks):
 
 The block log entry of the newest block may become visible to ``block_log()`` slightly
 before ``total_samples`` includes it.
+
+Clock stamps (layer 4). Besides ``host_ns`` (``time.perf_counter_ns()`` in the callback) each
+block can carry two optional stamps, read back with ``clock_log()``: ``adc_ns``, the driver's
+capture time of the block END (PortAudio ``inputBufferAdcTime + frames / fs``, on the PortAudio
+stream clock) and ``wall_ns`` (``time.time_ns()``, NTP-disciplined but it can step). 0 means
+"not available".
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ import numpy as np
 from numpy.typing import ArrayLike, DTypeLike, NDArray
 
 __all__ = [
+    "ClockLog",
     "SampleStream",
     "SamplesNotYetAvailable",
     "SamplesOverwritten",
@@ -72,6 +79,23 @@ class StreamStats:
     max_write_us: float
 
 
+@dataclass(frozen=True, slots=True)
+class ClockLog:
+    """Block records with every clock stamp, oldest first (see ``SampleStream.clock_log``).
+
+    Attributes:
+        end_indices: Absolute index one past the last sample of each block.
+        host_ns: ``time.perf_counter_ns()`` stamp of each block.
+        adc_ns: Driver capture time of the block end in ns (0 = not available).
+        wall_ns: ``time.time_ns()`` stamp of each block (0 = not available).
+    """
+
+    end_indices: NDArray[np.int64]
+    host_ns: NDArray[np.int64]
+    adc_ns: NDArray[np.int64]
+    wall_ns: NDArray[np.int64]
+
+
 class SampleStream:
     """Ring buffer of float32 mono samples addressed by absolute sample index.
 
@@ -99,6 +123,8 @@ class SampleStream:
         self._buf = np.zeros(self._capacity, dtype=np.float32)
         self._log_end = np.zeros(self._log_size, dtype=np.int64)
         self._log_ns = np.zeros(self._log_size, dtype=np.int64)
+        self._log_adc = np.zeros(self._log_size, dtype=np.int64)
+        self._log_wall = np.zeros(self._log_size, dtype=np.int64)
         self._init_counters()
 
     def _init_counters(self) -> None:
@@ -138,9 +164,18 @@ class SampleStream:
         self._buf.fill(0.0)
         self._log_end.fill(0)
         self._log_ns.fill(0)
+        self._log_adc.fill(0)
+        self._log_wall.fill(0)
         self._init_counters()
 
-    def write(self, block: ArrayLike, host_ns: int | None = None) -> None:
+    def write(
+        self,
+        block: ArrayLike,
+        host_ns: int | None = None,
+        *,
+        adc_ns: int = 0,
+        wall_ns: int = 0,
+    ) -> None:
         """Append a block of samples (single producer thread only).
 
         If the block is larger than the capacity only its tail is stored, but
@@ -149,6 +184,8 @@ class SampleStream:
         Args:
             block: 1-D samples (any real dtype; stored as float32).
             host_ns: Host timestamp of the block in ns; defaults to ``time.perf_counter_ns()``.
+            adc_ns: Driver capture time of the block end in ns (0 = not available).
+            wall_ns: ``time.time_ns()`` stamp of the block (0 = not available).
         """
         t0 = time.perf_counter_ns()
         if host_ns is None:
@@ -177,6 +214,8 @@ class SampleStream:
         k = self._blocks % self._log_size
         self._log_end[k] = new_total
         self._log_ns[k] = host_ns
+        self._log_adc[k] = adc_ns
+        self._log_wall[k] = wall_ns
         if self._blocks == 0:
             self._first_ns = host_ns
             self._first_block_n = n
@@ -274,20 +313,31 @@ class SampleStream:
             ``(end_indices, host_ns)`` as int64 arrays. Each end index is the absolute index
             one past the last sample of its block.
         """
+        ends, ns = self._log_columns(last, (self._log_end, self._log_ns))
+        return ends, ns
+
+    def clock_log(self, last: int | None = None) -> ClockLog:
+        """Like ``block_log`` but with every clock stamp (see ``ClockLog``)."""
+        ends, ns, adc, wall = self._log_columns(
+            last, (self._log_end, self._log_ns, self._log_adc, self._log_wall)
+        )
+        return ClockLog(ends, ns, adc, wall)
+
+    def _log_columns(
+        self, last: int | None, columns: tuple[NDArray[np.int64], ...]
+    ) -> list[NDArray[np.int64]]:
         size = self._log_size
         blocks = self._blocks
         avail = min(blocks, size)
         if last is not None:
             avail = max(0, min(avail, int(last)))
         idx = (np.arange(blocks - avail, blocks, dtype=np.int64)) % size
-        ends = self._log_end[idx]
-        ns = self._log_ns[idx]
+        out = [c[idx] for c in columns]
         # Drop records the producer may have recycled while we were copying.
         lapped = (self._blocks - blocks) - (size - avail)
         if lapped > 0:
-            ends = ends[lapped:]
-            ns = ns[lapped:]
-        return ends, ns
+            out = [c[lapped:] for c in out]
+        return out
 
     def stats(self) -> StreamStats:
         """Return a snapshot of the ingestion counters (see ``StreamStats``)."""

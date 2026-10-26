@@ -10,5 +10,7 @@
 * ``metrics``: layer 3, rate / beat error / amplitude from the beats and parity templates
   (``compute_metrics``, ``MetricsTracker``).
 
-Clock-drift estimation (layer 4) is not implemented yet.
+* ``adc_clock``: layer 4, real ADC frequency (ppm +- sigma, confidence level) from the block
+  log against the host clock (``ClockDriftTracker``) or from an external reference
+  (``drift_from_ticks``, ``detect_pps_edges``).
 """

@@ -26,7 +26,8 @@ Model and conventions
 * **Rate** ``= (P_nominal / P_true - 1) * 86400`` s/d, positive = gaining.
   ``P_true = P_samples / (fs * (1 + adc_drift_ppm * 1e-6))``: ``adc_drift_ppm`` > 0 means the
   ADC runs fast (more samples per true second). It is the hook for layer 4; with 0 the rate
-  is flagged as not calibrated.
+  is flagged as not calibrated. ``adc_drift_sigma_ppm`` (its uncertainty) is added in
+  quadrature to the rate uncertainty (``rate_clock_sigma_s_per_day``).
 * **Windows and trend.** The rate is also fitted on consecutive, non-overlapping windows of
   ``window_s`` seconds (same regression), for display. The trend (s/d per minute) comes from
   a quadratic term in the same parity-weighted regression over the whole span,
@@ -128,6 +129,9 @@ class MetricsConfig:
         amplitude_range_deg: Valid amplitudes (default 90-400°).
         amplitude_mismatch_deg: Tic/tac amplitude difference that raises a warning (20°).
         adc_drift_ppm: ADC clock error in ppm (> 0 = ADC fast); 0 = not calibrated.
+        adc_drift_sigma_ppm: Total uncertainty of ``adc_drift_ppm`` (``AdcDrift.uncertainty_ppm``
+            of layer 4). It is added in quadrature to the rate uncertainty; a value > 0 also
+            marks the rate as calibrated when the measured drift is exactly 0.
     """
 
     sample_rate: float
@@ -144,6 +148,7 @@ class MetricsConfig:
     amplitude_range_deg: tuple[float, float] = (90.0, 400.0)
     amplitude_mismatch_deg: float = 20.0
     adc_drift_ppm: float = 0.0
+    adc_drift_sigma_ppm: float = 0.0
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.sample_rate) and self.sample_rate > 0):
@@ -173,6 +178,8 @@ class MetricsConfig:
             raise ValueError("amplitude_mismatch_deg debe ser positivo")
         if not math.isfinite(self.adc_drift_ppm):
             raise ValueError("adc_drift_ppm no válido")
+        if not (math.isfinite(self.adc_drift_sigma_ppm) and self.adc_drift_sigma_ppm >= 0):
+            raise ValueError("adc_drift_sigma_ppm no válido")
 
     @property
     def effective_lift_angle_deg(self) -> float:
@@ -231,7 +238,8 @@ class Metrics:
     rate_s_per_day: float = math.nan
     rate_sigma_s_per_day: float = math.nan
     rate_sigma_block_s_per_day: float = math.nan
-    rate_uncertainty_s_per_day: float = math.nan  # max(covariance, block) sigma
+    rate_uncertainty_s_per_day: float = math.nan  # max(covariance, block) (+) clock sigma
+    rate_clock_sigma_s_per_day: float = 0.0  # from adc_drift_sigma_ppm (layer 4)
     rate_calibrated: bool = False
     beat_error_ms: float = math.nan
     beat_error_sigma_ms: float = math.nan
@@ -591,7 +599,7 @@ def compute_metrics(
     )
     if t.size:
         m.span_s = float(t.max() - t.min()) / fs
-    if config.adc_drift_ppm == 0.0:
+    if config.adc_drift_ppm == 0.0 and config.adc_drift_sigma_ppm == 0.0:
         m.warnings.append(
             "marcha sin calibrar: no se ha corregido la deriva del reloj de la tarjeta (fase 4)"
         )
@@ -621,8 +629,12 @@ def compute_metrics(
         m.rate_trend_sigma_s_per_day_per_min,
         m.rate_sigma_block_s_per_day,
     ) = rate_trend(k, t, config)
-    m.rate_uncertainty_s_per_day = float(
-        np.nanmax([m.rate_sigma_s_per_day, m.rate_sigma_block_s_per_day])
+    # The clock error is a common offset: it enters the rate uncertainty, not the windows or
+    # the trend.
+    m.rate_clock_sigma_s_per_day = config.adc_drift_sigma_ppm * 1e-6 * 86400.0
+    m.rate_uncertainty_s_per_day = math.hypot(
+        float(np.nanmax([m.rate_sigma_s_per_day, m.rate_sigma_block_s_per_day])),
+        m.rate_clock_sigma_s_per_day,
     )
     m.window_sigma_factor = _window_sigma_factor(m)
     m.windows = [

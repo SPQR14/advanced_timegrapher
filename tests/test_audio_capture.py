@@ -91,6 +91,35 @@ def test_callback_writes_into_stream(fake_sd: types.ModuleType) -> None:
     cap.close()
 
 
+def test_callback_stamps_adc_end_and_wall_clock(fake_sd: types.ModuleType) -> None:
+    stream, cap = _capture(blocksize=480)
+    cap.start()
+    sd_stream = FakeInputStream.instances[0]
+    block = np.zeros((480, 1), dtype=np.float32)
+    info = types.SimpleNamespace(currentTime=0.0, inputBufferAdcTime=100.0)
+    sd_stream.callback(block, 480, info, None)
+    sd_stream.callback(block, 480, None, None)  # host API without ADC time
+    log = stream.clock_log()
+    assert log.adc_ns.tolist() == [100_010_000_000, 0]  # first sample + 480 / 48 kHz
+    assert np.all(log.wall_ns > 1_600_000_000 * 10**9)  # a plausible epoch time
+    assert np.all(log.host_ns > 0)
+    cap.close()
+
+
+def test_adc_end_ns_is_callback_safe() -> None:
+    from adv_tg.audio.capture_process import adc_end_ns
+
+    class Broken:
+        @property
+        def inputBufferAdcTime(self) -> float:  # noqa: N802 - PortAudio's name
+            raise RuntimeError
+
+    assert adc_end_ns(types.SimpleNamespace(inputBufferAdcTime=2.0), 96, 48_000.0) == 2_002_000_000
+    assert adc_end_ns(types.SimpleNamespace(inputBufferAdcTime=0.0), 96, 48_000.0) == 0
+    assert adc_end_ns(None, 96, 48_000.0) == 0
+    assert adc_end_ns(Broken(), 96, 48_000.0) == 0
+
+
 def test_status_flags_counted(fake_sd: types.ModuleType) -> None:
     stream, cap = _capture()
     cap.start()

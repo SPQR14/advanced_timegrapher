@@ -84,6 +84,10 @@ def test_round_trip_ramp_without_gaps() -> None:
     assert stream.stats().ingest_ratio == pytest.approx(1.0, abs=0.01)
     assert cap.callback_errors == 0 and cap.last_error is None
     cap.stop()  # idempotent
+    log = stream.clock_log()
+    assert np.all(log.wall_ns > 0) and np.all(log.adc_ns > 0)
+    # The fake source stamps its scheduled ADC time: exactly one block apart.
+    np.testing.assert_allclose(np.diff(log.adc_ns), BLOCK / FS * 1e9, atol=1e3)
 
 
 def test_parent_blocked_by_gil_catches_up() -> None:
