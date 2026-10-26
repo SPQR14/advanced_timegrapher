@@ -50,6 +50,7 @@ def test_late_telemetry_after_stop_is_ignored(qtbot) -> None:
 
     window = MainWin()
     qtbot.addWidget(window)
+    window.btn_mock.setChecked(True)  # the default is the system's input device if any
     window.spn_stab.setValue(0)
     window.start_capture()
     qtbot.wait(600)

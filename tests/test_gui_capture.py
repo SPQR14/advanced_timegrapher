@@ -138,6 +138,7 @@ def test_close_window_during_isolated_capture_leaves_no_child(
         worker.set_input_device(device_id)
         return worker
 
+    window.cmb_device.setCurrentIndex(0)  # the window starts on the hardware device
     monkeypatch.setattr(mw, "create_worker", create_isolated)
     window.cmb_device.setCurrentIndex(1)
     window.start_capture()
@@ -147,3 +148,13 @@ def test_close_window_during_isolated_capture_leaves_no_child(
     window.close()
     assert not hw.isRunning()
     qtbot.waitUntil(lambda: mp.active_children() == [], timeout=5000)
+
+
+def test_starts_on_the_default_input_not_mock(window, monkeypatch) -> None:
+    # The fixture's devices: synthetic, Fake CM18 (7), Fake mic 2 (8)
+    assert window.cmb_device.currentIndex() == 1 and not window.is_mock_active()
+    assert not window.btn_mock.isChecked()
+    monkeypatch.setattr(mw, "default_input_device_id", lambda: 8)
+    window.cmb_device.clear()
+    window._populate_audio_devices()
+    assert window.selected_device_id() == 8

@@ -57,12 +57,12 @@ class CaptureChildError(RuntimeError):
 
 
 @contextlib.contextmanager
-def _child_log_env() -> Iterator[None]:
-    """Make the spawned child log to ``logs/adv_tg_capture.log`` (env is inherited at spawn)."""
+def _child_log_env(name: str = LOG_NAME) -> Iterator[None]:
+    """Make the spawned child log to ``logs/<name>.log`` (env is inherited at spawn)."""
     key = LoggerSetup.LOG_NAME_ENV_VAR
     with _spawn_lock:
         old = os.environ.get(key)
-        os.environ[key] = LOG_NAME
+        os.environ[key] = name
         try:
             yield
         finally:

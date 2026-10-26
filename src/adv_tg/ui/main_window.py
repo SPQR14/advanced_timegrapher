@@ -117,6 +117,17 @@ APP_ICON_PATH = ASSETS_DIR / "adv-tg.svg"
 BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/sqpr14"
 
 
+def default_input_device_id() -> int | None:
+    """PortAudio index of the system's default input device, or None if unknown."""
+    try:
+        from adv_tg.audio.capture import load_sounddevice
+
+        idx = int(load_sounddevice().default.device[0])
+    except Exception:
+        return None
+    return idx if idx >= 0 else None
+
+
 def app_icon() -> QIcon:
     """Application icon (vectorised from ``assets/adv-tg.jpg``); null icon if missing."""
     if not APP_ICON_PATH.is_file():
@@ -265,6 +276,7 @@ class MainWin(QMainWindow):
         self._last_saturated_monotonic: float = -math.inf
         self._last_warning: str = ""
         self._tape_autoscale: bool = True
+        self._osc_span_ms: float | None = None
         self._osc_rng = np.random.default_rng(2026)
 
         # Audio recording state (same duration as test)
@@ -663,9 +675,12 @@ class MainWin(QMainWindow):
 
     @staticmethod
     def _optimize_high_freq_curve(curve: pg.PlotDataItem) -> None:
-        """Enable view clipping and peak-preserving auto-downsampling on a high-rate curve."""
+        """Dense, often-redrawn curve: view clipping, peak-preserving auto-downsampling and no
+        antialiasing (with 1-px pens). Antialiased pens wider than 1 px on ~1500-point curves
+        made Qt's ``drawPath`` take most of the GUI thread (visible stutters)."""
         curve.setClipToView(True)
         curve.setDownsampling(auto=True, method="peak")
+        curve.opts["antialias"] = False
 
     @staticmethod
     def _sync_combo_popup_width(combo: QComboBox, min_width: int = 90) -> None:
@@ -1134,7 +1149,7 @@ class MainWin(QMainWindow):
         self.osc_wave_curve = self.oscilloscope_plot.plot(
             [],
             [],
-            pen=pg.mkPen(color="#00e5ff", width=1.6),
+            pen=pg.mkPen(color="#00e5ff", width=1.0),
             clipToView=True,
             autoDownsample=True,
             downsampleMethod="peak",
@@ -1144,7 +1159,7 @@ class MainWin(QMainWindow):
         self.osc_envelope_curve = self.oscilloscope_plot.plot(
             [],
             [],
-            pen=pg.mkPen(color=(255, 171, 0, 180), width=1.2),
+            pen=pg.mkPen(color=(255, 171, 0, 180), width=1.0),
             clipToView=True,
             autoDownsample=True,
             downsampleMethod="peak",
@@ -1202,7 +1217,7 @@ class MainWin(QMainWindow):
         self.audio_waveform_curve = self.waveform_plot.plot(
             [],
             [],
-            pen=pg.mkPen(color="#00e676", width=1.3),
+            pen=pg.mkPen(color="#00e676", width=1.0),
             clipToView=True,
             autoDownsample=True,
             downsampleMethod="peak",
@@ -1255,9 +1270,19 @@ class MainWin(QMainWindow):
         self.statusBar().addPermanentWidget(self.lbl_capture_health)
 
     def _populate_audio_devices(self) -> list[AudioDeviceInfo]:
-        """Populate input audio device selector dynamically via ``list_input_devices()``."""
-        prev_data = self.cmb_device.currentData() if self.cmb_device.count() > 0 else None
+        """Populate input audio device selector dynamically via ``list_input_devices()``.
+
+        On the first population the system's default input is selected (else the first
+        hardware device); the simulated MOCK source only when there is no hardware.
+        """
+        first = self.cmb_device.count() == 0
+        prev_data = None if first else self.cmb_device.currentData()
         devices = list_input_devices()
+        hardware = [d for d in devices if not (d.is_synthetic or d.device_id is None)]
+        if first and hardware:
+            wanted = default_input_device_id()
+            ids = [int(d.device_id) for d in hardware]
+            prev_data = wanted if wanted in ids else ids[0]
 
         was_blocked = self.cmb_device.blockSignals(True)
         try:
@@ -2440,6 +2465,13 @@ class MainWin(QMainWindow):
         peak_abs = float(np.max(np.abs(wave))) or 1.0
         norm_wave = wave / peak_abs
         t_ms = (np.arange(wave.size, dtype=np.float64) / fs) * 1000.0
+        # Fixed X range (the engine sends a fixed-length window): rescaling the axis on every
+        # beat re-laid out the plot and caused visible stutters.
+        span_ms = float(t_ms[-1])
+        if self._osc_span_ms != span_ms:
+            self._osc_span_ms = span_ms
+            self.oscilloscope_plot.enableAutoRange(x=False)
+            self.oscilloscope_plot.setXRange(0.0, span_ms, padding=0.0)
         self.osc_wave_curve.setData(t_ms, norm_wave)
         env_win = max(int(round(0.00015 * fs)), 3)
         env_kernel = np.ones(env_win, dtype=np.float64) / float(env_win)
@@ -2610,6 +2642,9 @@ class MainWin(QMainWindow):
 
     def _show_mock_beat(self, latest_beat: BeatEvent, fs: float) -> None:
         """MOCK oscilloscope: P3 = largest peak, P1/P2 placed by their offsets to it."""
+        if self._osc_span_ms is not None:  # back from the real engine: auto X range again
+            self._osc_span_ms = None
+            self.oscilloscope_plot.enableAutoRange(x=True)
         # Bottom-Left Oscilloscope: beat-triggered bipolar waveform + envelope + P1/P2/P3
         wave = latest_beat.raw_waveform.copy()
         if len(wave) > 0:

@@ -1,7 +1,7 @@
 # Fase 5 (Integración completa): resultados
 
-Estado al 26/10/2026: **implementada, pendiente de confirmación con el CM18** (rama `develop`,
-sin commit). La GUI mide de verdad con un dispositivo de audio: marcha, error de batimiento,
+Estado al 26/10/2026: **implementada; primera prueba del usuario con el CM18 hecha (sección 7)**
+(rama `develop`, sin commit). La GUI mide de verdad con un dispositivo de audio: marcha, error de batimiento,
 amplitud, deriva del reloj de la tarjeta, calidad de la señal y grabación de la sesión.
 
 Criterio de `docs/fases-nucleo.md`: "≥ 3 actualizaciones/s, plots a ~30 FPS, etiquetas de
@@ -24,13 +24,15 @@ CM18 ──► proceso hijo (PortAudio) ──► SampleStream ──► hilo le
 |---|---|---|
 | `MeasurementSession` | `core/session.py` (nuevo, sin Qt) | Une detector (capa 2), `MetricsTracker` de 30 s (capa 3) y `ClockDriftTracker` (capa 4) sobre el `SampleStream`. Devuelve una instantánea con cifras, SNR, fiabilidad de detección, deriva aplicada y la forma de onda del último batimiento |
 | `MeasureStreamWorker` | `ui/measure_worker.py` (nuevo) | Subclase de `CaptureStreamWorker`: mismo manejo del dispositivo, más el análisis y la grabación en el hilo lector mediante un gancho (`_make_hook`) |
+| `ProcessAnalyzer` / `LocalAnalyzer` | `audio/analysis_process.py` (nuevo, sección 7.2) | Análisis en un proceso hijo persistente (o en el hilo lector como respaldo): recibe bloques y marcas, devuelve instantáneas |
 | `FileReplay` | `audio/file_replay.py` (movido desde `tools/capture_check.py`) | Reproduce un archivo en tiempo real; ahora con `speed` (tests) y `exhausted` (fin normal) |
 | `create_worker` | `ui/worker_factory.py` | Hardware → `MeasureStreamWorker` (antes `CaptureStreamWorker`, sin medida) |
 | Contrato | `ui/stream_worker_base.py` | Señal nueva `clock_info(sigma_ppm, nivel, origen)` |
 | Modelos | `core/models.py` | `BeatTelemetry` y `BeatEvent` con campos opcionales del motor real (incertidumbres, fiabilidad, avisos, confianza de tiempo, inicio de la forma de onda) |
 
-Coste del análisis: ~2 ms de detección + ~2.5 ms de métricas por actualización (máx. 7 ms) en
-las grabaciones reales, ~2 % de un núcleo. Por eso vive en el hilo lector, sin hilo propio.
+Coste del análisis: ~9 ms por actualización con una toma del CM18 (detección + métricas). Desde la
+sección 7 corre en un **proceso aparte** (`audio/analysis_process.py`); el hilo lector solo
+reenvía las muestras nuevas y recibe las instantáneas.
 
 ## 2. Qué muestra la GUI con el motor real
 
@@ -144,3 +146,88 @@ Causa de fondo pendiente para la fase 6: el inicio de P1 de la plantilla
 5. Sin micrófono:
    `ADV_TG_REPLAY_FILE=docs/samples/miyota_9015.flac adv-tg`, elegir cualquier dispositivo,
    28800 BPH, 51°.
+
+## 7. Primera prueba con el CM18 (26/10/2026)
+
+Seiko 4R36, 21600 A/h, 53°, sesiones de 60 s con 10 s de estabilización, micrófono
+"USB PnP Sound Device" (CM18). Resultado del usuario: +5.6 s/d, 0.05 ms, 287°; reloj de la tarjeta
++9.46 ppm (48000.45 Hz, −0.82 s/d), audio recibido 100 %, 0 desbordes. La grabación funciona.
+
+### 7.1 Las primeras pruebas "sin sentido"
+
+No fue la autocalibración: las sesiones estaban "sin calibrar" y la estimación en vivo
+(+9.5 ppm) mueve la marcha solo 0.8 s/d, igual en todas. El log y la toma de 70 s muestran:
+
+- **El reloj varía de verdad:** ventanas de 10 s de la toma de 70 s: +1.5, +5.0, +6.8, +3.2,
+  +3.6, +8.9 s/d. El tac es muy ruidoso (580 µs frente a 188 µs del tic).
+- **La ventana de 30 s se llena al principio de cada sesión:** las primeras cifras salen con
+  10–15 s de datos, y la marcha subía de forma continua en casi todas las sesiones (p. ej.
+  +1.5 → +2.1 → +2.6 → +3.7 → +4.1 → +4.6 → +4.9).
+- Entre sesiones el resultado fue de +4.4 a +10 s/d, en línea con esa dispersión. tg y WAM dan
+  +4 y +3 s/d en la grabación de referencia del 4R36.
+- La primera sesión enganchó con un periodo de 8152 muestras (nominal 8000, +1.9 %) y se
+  corrigió sola. Las demás engancharon a 7996–8005.
+
+### 7.2 Tirones de la interfaz
+
+Medido con la GUI reproduciendo la toma de 70 s del CM18 (sin pantalla). Se cuenta cuántas
+veces el hilo de la GUI quedó bloqueado más de 33 ms (un cuadro a 30 FPS) en 40 s:
+
+| Configuración | > 33 ms | p99 | máx. |
+|---|---|---|---|
+| Solo captura, sin análisis | 0–1 | 25 ms | 29 ms |
+| Análisis en el hilo lector | 7–11 | 27 ms | 60 ms |
+| Análisis en proceso aparte | 116–126 | 42 ms | 79 ms |
+| Análisis en proceso aparte, sin pintar la telemetría | 1 | 25 ms | 35 ms |
+| **Proceso aparte + curvas densas de 1 px sin antialiasing** | **0** | **10 ms** | **21 ms** |
+
+- **Causa principal: el dibujo.** El perfil del hilo de la GUI mostró `drawPath` (Qt) en 14 de
+  cada 25 s: curvas de 1 400–1 900 puntos con antialiasing y trazos de 1.2–1.6 px. Con trazo de
+  1 px y sin antialiasing en esas tres curvas (forma de onda, osciloscopio y su envolvente),
+  `drawPath` baja a 0.1 s. El papel y los marcadores conservan su estilo.
+- **Causa secundaria: el GIL.** En el log real el análisis tardó 40–107 ms por actualización
+  (9 ms sin la GUI) y bloqueó la interfaz. Ahora corre en un proceso aparte, persistente durante
+  la vida del worker. Un hilo lector en el hijo evita el interbloqueo por los búferes
+  pequeños de las tuberías de macOS (~8 KB). `ADV_TG_ANALYSIS_INPROC=1` lo devuelve al hilo.
+- **Osciloscopio:** ventana de longitud fija (P1 visible hasta 150° de amplitud) y eje X fijo;
+  antes se reescalaba con cada batimiento.
+
+### 7.3 Otros cambios
+
+- **Aviso tic/tac:** solo aparece si la discrepancia persiste en las amplitudes mostradas
+  (mediana de 1.75 s), con el texto "la amplitud es orientativa". Antes salía con cada salto
+  momentáneo de la plantilla (sección 4).
+- **MOCK desactivado al arrancar:** la ventana elige la entrada por defecto del sistema (si no,
+  el primer dispositivo de hardware). El MOCK solo arranca si no hay hardware, y sigue
+  disponible con su botón.
+
+### 7.4 Ruido ambiental (motores): análisis y plan
+
+Distribución de energía del tic del 4R36 con el CM18 (toma de 70 s): casi toda entre 4 y 15 kHz
+(picos de −10 a −15 dBFS sobre un ruido de −53/−55 dBFS); entre 1 y 2 kHz apenas hay tic (−35
+dBFS). El ruido de motores se concentra por debajo de 2–3 kHz.
+
+Subir el corte inferior del detector, probado en las 7 tomas (5 de referencia + 2 del CM18):
+
+| Corte | Marcha | Error de batimiento | Amplitud |
+|---|---|---|---|
+| 1 kHz (actual) | referencia | referencia | referencia |
+| 2–4 kHz | cambia dentro de su incertidumbre | **inestable**: 4R36 0.20 → 0.66–0.94 ms; toma del CM18 0.37 → 1.50 ms a 4 kHz | ±1–4° |
+
+Sin ruido de motores, subir el corte no mejora nada y empeora el error de batimiento: este
+depende del inicio de P1, que es débil y tiene parte de su energía en graves. No se cambia a
+ciegas.
+
+**Plan** (necesita una grabación con ruido real; el botón Record ya la guarda con etiquetas):
+
+1. Grabar 60–90 s con el reloj en el CM18 mientras pasan motos o coches, y otra igual en
+   silencio justo después.
+2. Con esas dos tomas, comparar con números:
+   a. un paso alto más pronunciado solo para la detección y la marcha, dejando el error de
+      batimiento en la banda actual;
+   b. descartar los batimientos cuyo suelo de ruido local se dispara (marca nueva, como
+      `SATURATED`), para que no entren en las cifras ni en el papel;
+   c. una sustracción espectral del ruido estimado entre batimientos.
+3. Mientras tanto, lo más eficaz es mecánico: apoyar el soporte del CM18 sobre espuma o una
+   superficie que no transmita vibraciones del suelo o la mesa, porque un micrófono de contacto
+   capta sobre todo la vibración, no el aire.

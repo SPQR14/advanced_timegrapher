@@ -176,3 +176,42 @@ def test_config_change_during_session_is_warned(qtbot, watch, monkeypatch) -> No
     qtbot.waitUntil(lambda: bool(rec.errors), timeout=2000)
     assert "próxima sesión" in rec.errors[0] and len(rec.errors) == 1
     worker.shutdown()
+
+
+def test_worker_with_analysis_process(qtbot, watch, monkeypatch) -> None:
+    monkeypatch.setattr(mw, "device_name", lambda device_id: None)
+    worker = MeasureStreamWorker(
+        WatchConfig(bph=28800, lift_angle=52.0, sample_rate=FS),
+        capture_factory=Factory(watch, speed=3.0),
+        analysis_in_process=True,
+    )
+    rec = Recorder(worker)
+    _run(qtbot, worker, 30000)
+    assert worker.analysis_in_process and rec.errors == []
+    last = rec.telemetry[-1]
+    assert last.rate_spd == pytest.approx(6.0, abs=0.5)
+    assert len(rec.telemetry) >= 3 * (watch.size / FS) / 3.0 * 0.7
+    worker.shutdown()
+    assert worker._analyzer is None
+
+
+def test_tic_tac_warning_only_when_it_persists() -> None:
+    from dataclasses import replace
+
+    from adv_tg.core.adc_clock import AdcDrift
+    from adv_tg.core.metrics import Metrics
+    from adv_tg.core.session import DisplayFigures, SessionSnapshot
+
+    m = Metrics(n_beats=100, n_used_even=50, n_used_odd=50, n_excluded=0, excluded_fraction=0.0,
+                rate_s_per_day=5.0, warnings=["amplitud de tic y tac distinta (295° / 127°): x"])  # fmt: skip
+    snap = SessionSnapshot(
+        metrics=m, new_beats=0, beats_total=100, last_beat=None, waveform=np.zeros(0),
+        waveform_start=math.nan, snr_db=30.0, detection_ratio=1.0, usable_ratio=1.0,
+        saturated_beats=0, locked=True, drift=AdcDrift.uncalibrated(), drift_source="",
+        live_drift=AdcDrift.uncalibrated(), audio_s=30.0,
+        display=DisplayFigures(rate_s_per_day=5.0, amplitude_tic_deg=295, amplitude_tac_deg=293),
+    )  # fmt: skip
+    assert mw.snapshot_to_telemetry(snap, FS).warnings == []  # a one-update glitch
+    shown = DisplayFigures(rate_s_per_day=5.0, amplitude_tic_deg=295, amplitude_tac_deg=260)
+    w = mw.snapshot_to_telemetry(replace(snap, display=shown), FS).warnings
+    assert len(w) == 1 and "295° / 260°" in w[0]

@@ -23,7 +23,10 @@ fraction of beats detected; times ``1 - excluded_fraction`` (beats without ``t_f
 saturated) it is the fraction that actually feeds the figures.
 
 Display waveform. The oscilloscope gets the last usable beat, band-passed (same band as the
-detector) for display only; the measurement never sees this filtered copy.
+detector) for display only; the measurement never sees this filtered copy. The window has a
+FIXED length for the session (``display_window``: from the longest lift time down to
+``DISPLAY_MIN_AMPLITUDE_DEG`` plus ``display_pre_ms`` before the reference instant, and
+``display_post_ms`` after it), so the plot never rescales from one beat to the next.
 
 Displayed figures (``SessionSnapshot.display``). In live mode a parity template can give a
 wrong P1 onset for one or two refreshes (Miyota: tac amplitude 295° -> 127° -> 295° within
@@ -54,7 +57,7 @@ from adv_tg.core.adc_clock import (
     host_clock,
 )
 from adv_tg.core.beat_detector import BeatDetector, BeatDetectorConfig, DetectorStats
-from adv_tg.core.beat_types import Beat, BeatFlags, beat_period_s
+from adv_tg.core.beat_types import Beat, BeatFlags, beat_period_s, lift_time_s
 from adv_tg.core.metrics import (
     DEFAULT_LIFT_ANGLE_DEG,
     Metrics,
@@ -72,6 +75,8 @@ DRIFT_REFIT_S = 1.0
 SNR_BEATS = 16
 #: Updates in the median of the displayed figures (see module docstring).
 DISPLAY_UPDATES = 7
+#: The oscilloscope window shows P1 for amplitudes down to this value.
+DISPLAY_MIN_AMPLITUDE_DEG = 150.0
 
 
 @dataclass(frozen=True)
@@ -203,12 +208,23 @@ class MeasurementSession:
         self._history: deque[Metrics] = deque(maxlen=DISPLAY_UPDATES)
         lo, hi = self._detector.config.band_hz
         self._sos = butter(4, [lo, hi], btype="bandpass", fs=fs, output="sos")
+        la = config.lift_angle_deg or DEFAULT_LIFT_ANGLE_DEG
+        pre_s = (
+            lift_time_s(DISPLAY_MIN_AMPLITUDE_DEG, la, config.bph) + config.display_pre_ms * 1e-3
+        )
+        self._display_pre = int(round(pre_s * fs))
+        self._display_len = self._display_pre + int(round(config.display_post_ms * 1e-3 * fs))
         self._apply_drift()
 
     # ------------------------------------------------------------------ properties
     @property
     def detector_stats(self) -> DetectorStats:
         return self._detector.stats
+
+    @property
+    def display_window(self) -> tuple[int, int]:
+        """``(samples before the reference instant, total samples)`` of the oscilloscope."""
+        return self._display_pre, self._display_len
 
     @property
     def metrics_config(self) -> MetricsConfig:
@@ -256,10 +272,8 @@ class MeasurementSession:
     # ------------------------------------------------------------------ waveform
     def _waveform(self, stream: SampleStream, beat: Beat) -> tuple[NDArray[np.float64], float]:
         fs = self._fs
-        ref = beat.reference
-        first = beat.p1 if math.isfinite(beat.p1) else ref
-        a = int(math.floor(first - self.config.display_pre_ms * 1e-3 * fs))
-        b = int(math.ceil(ref + self.config.display_post_ms * 1e-3 * fs))
+        a = int(math.floor(beat.reference)) - self._display_pre
+        b = a + self._display_len
         pad = int(0.005 * fs)  # filter edge margin, cropped afterwards
         lo, hi = a - pad, b + pad
         if lo < stream.oldest_available or hi > stream.total_samples or b <= a:

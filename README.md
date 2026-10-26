@@ -16,7 +16,7 @@ PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
   grabación, de modo que `measure` corrige la marcha sola (ver "Fase 4").
 - El botón **☕ Buy me a coffee** abre https://buymeacoffee.com/sqpr14 en el navegador.
 - La GUI tiene todos los paneles, exportaciones e idiomas (EN/ES).
-- El botón **MOCK** (barra superior) activa un motor simulado que genera datos realistas
+- El botón **MOCK** (barra superior, desactivado al arrancar) activa un motor simulado que genera datos realistas
   (marcha, error de batimiento, amplitud, forma de onda, deriva de reloj, calidad de señal)
   para probar la GUI completa. Mientras está activo se ve la insignia "MOCK" en la barra de
   estado y `[MOCK]` en el título. Los datos MOCK no son mediciones.
@@ -57,6 +57,7 @@ src/adv_tg/
 │   ├── capture.py         # AudioCapture: InputStream mono float32 -> SampleStream (en proceso)
 │   ├── capture_process.py # proceso hijo de captura (sin Qt): callback -> deque -> tubería
 │   ├── gil_stats.py       # estadística de espera por el GIL (compartida)
+│   ├── analysis_process.py # análisis en vivo en un proceso aparte (fase 5)
 │   ├── file_replay.py     # FileReplay: un archivo reproducido en tiempo real (sin hardware)
 │   └── process_capture.py # ProcessAudioCapture: misma interfaz, captura en proceso aparte
 ├── core/
@@ -398,7 +399,10 @@ un zumbador pegado al micrófono (`docs/resultados_fase4.md`, secciones 2.3 y 8.
 
 Con un dispositivo de audio la GUI usa `MeasureStreamWorker` (`ui/measure_worker.py`): la
 captura de la fase 1 más una `MeasurementSession` (`core/session.py`) que, 4 veces por segundo,
-une detector, métricas de los últimos 30 s y reloj. Detalle en
+une detector, métricas de los últimos 30 s y reloj. El análisis corre en un proceso aparte
+(`audio/analysis_process.py`) para no frenar la interfaz; `ADV_TG_ANALYSIS_INPROC=1` lo deja en
+el proceso de la GUI. La aplicación arranca con la entrada de audio por defecto del sistema;
+el MOCK solo se activa con su botón (o si no hay ningún dispositivo). Detalle en
 [`docs/resultados_fase5.md`](docs/resultados_fase5.md).
 
 - **Cifras**: mediana de las últimas 7 actualizaciones; ocultas (`---.-`) con confianza < 0.15

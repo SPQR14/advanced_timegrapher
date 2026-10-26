@@ -5,8 +5,9 @@ capture health ~2/s, capture in a child process) plus a per-session hook that ru
 reader thread:
 
 * every ``ANALYSIS_PERIOD_S`` (0.25 s, i.e. 4 updates per second) a ``MeasurementSession``
-  (``adv_tg.core.session``) processes the new audio and ``telemetry_ready`` carries the
-  figures (``BeatTelemetry``; NaN while a figure is not available) and the last beat for the
+  (``adv_tg.core.session``) processes the new audio in a separate analysis process
+  (``adv_tg.audio.analysis_process``; in the reader thread if it cannot start, or with
+  ``ADV_TG_ANALYSIS_INPROC=1``) and ``telemetry_ready`` carries the figures (``BeatTelemetry``; NaN while a figure is not available) and the last beat for the
   oscilloscope (band-passed for display only, with its real P1/P2/P3 instants);
 * every ``DRIFT_PERIOD_S`` (1 s) ``drift_updated`` and ``clock_info`` report the ADC clock
   correction applied to the rate: the stored calibration of the device
@@ -16,7 +17,9 @@ reader thread:
   the calibration) that ``take_recording`` hands to the GUI when the user saves it; it is
   deleted at the next start and at shutdown.
 
-Cost: ~5 ms per update on the real takes (detector + metrics), i.e. ~2 % of one core.
+Cost: ~9 ms per update on a CM18 take (detector + metrics), in the analysis process. In the
+GUI process it blocked the GUI thread up to 60 ms (see ``adv_tg.audio.analysis_process``); the
+reader thread now only forwards the new samples and unpickles the snapshots.
 
 Replay mode (no microphone): ``ADV_TG_REPLAY_FILE=/path/take.flac adv-tg`` makes every
 hardware device replay that file in real time (its sample rate must match the one selected
@@ -36,11 +39,12 @@ from typing import Any
 import numpy as np
 from PyQt6.QtCore import QObject
 
+from adv_tg.audio.analysis_process import LocalAnalyzer, ProcessAnalyzer
 from adv_tg.audio.file_replay import FileReplay
 from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY, AdcDrift, ClockLevel, drift_from_tags
 from adv_tg.core.models import BeatEvent, BeatTelemetry, WatchConfig
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
-from adv_tg.core.session import MeasurementSession, SessionConfig, SessionSnapshot
+from adv_tg.core.session import SessionConfig, SessionSnapshot
 from adv_tg.ui.capture_worker import (
     CaptureFactory,
     CaptureStreamWorker,
@@ -65,7 +69,18 @@ logger = _dbg.logger
 ANALYSIS_PERIOD_S: float = 0.25
 DRIFT_PERIOD_S: float = 1.0
 REPLAY_ENV_VAR: str = "ADV_TG_REPLAY_FILE"
+INPROC_ENV_VAR: str = "ADV_TG_ANALYSIS_INPROC"
+FINISH_TIMEOUT_S: float = 1.5
 SPAN_S: float = 30.0
+#: Displayed tic/tac amplitudes further apart than this raise a warning.
+AMP_MISMATCH_DEG: float = 20.0
+_AMP_MISMATCH_PREFIX = "amplitud de tic y tac distinta"
+
+
+def analysis_in_separate_process() -> bool:
+    """True unless ``ADV_TG_ANALYSIS_INPROC`` forces the analysis into the reader thread."""
+    forced = os.environ.get(INPROC_ENV_VAR, "").strip().lower() in ("1", "true", "yes", "on")
+    return not forced
 
 
 def replay_file() -> Path | None:
@@ -106,7 +121,15 @@ def snapshot_to_telemetry(snap: SessionSnapshot, fs: float) -> BeatTelemetry:
                 waveform_start_s=snap.waveform_start / fs,
             )
         )
-    warnings = list(m.warnings) + list(snap.detector_warnings)
+    # The tic/tac amplitude mismatch of a single update is usually a template glitch (see
+    # adv_tg.core.session): warn only when it persists in the displayed (median) amplitudes.
+    warnings = [w for w in m.warnings if not w.startswith(_AMP_MISMATCH_PREFIX)]
+    warnings += list(snap.detector_warnings)
+    tic, tac = shown.amplitude_tic_deg, shown.amplitude_tac_deg
+    if math.isfinite(tic) and math.isfinite(tac) and abs(tic - tac) > AMP_MISMATCH_DEG:
+        warnings.append(
+            f"amplitud de tic y tac distinta ({tic:.0f}° / {tac:.0f}°): la amplitud es orientativa"
+        )
     if snap.saturated_beats:
         warnings.append(
             f"{snap.saturated_beats} batimientos saturados: baja la ganancia del micrófono"
@@ -144,11 +167,13 @@ class _SessionHook:
         config: SessionConfig,
         record_path: Path | None,
         record_tags: dict[str, str],
+        analyzer: LocalAnalyzer | ProcessAnalyzer,
     ) -> None:
         self._owner = owner
         self._stream = stream
         self._fs = float(config.sample_rate)
-        self._session = MeasurementSession(config)
+        self._analyzer = analyzer  # its session was started by the worker
+        self._analyzer_dead = False
         self._next_analysis = 0.0
         self._next_drift = 0.0
         self._record_path = record_path
@@ -196,13 +221,19 @@ class _SessionHook:
         self._rec_idx = total
 
     # ------------------------------------------------------------------ analysis
-    def _analyze(self) -> None:
-        t0 = time.perf_counter()
-        snap = self._session.update(self._stream)
-        self._owner.telemetry_ready.emit(snapshot_to_telemetry(snap, self._fs))
-        self.updates += 1
-        self.max_update_ms = max(self.max_update_ms, (time.perf_counter() - t0) * 1e3)
-        self._last = snap
+    def _emit(self, snaps: list[SessionSnapshot]) -> None:
+        for snap in snaps:
+            self._owner.telemetry_ready.emit(snapshot_to_telemetry(snap, self._fs))
+            self.updates += 1
+            self._last = snap
+
+    def _check_analyzer(self) -> None:
+        a = self._analyzer
+        if a.in_process and not self._analyzer_dead and not getattr(a, "alive", True):
+            self._analyzer_dead = True
+            message = "El proceso de análisis se detuvo: reinicia la sesión"
+            logger.error("%s", message)
+            self._owner.error_occurred.emit(message)
 
     def _emit_drift(self) -> None:
         snap = self._last
@@ -216,10 +247,15 @@ class _SessionHook:
         self._owner.clock_info.emit(sigma, int(d.level), snap.drift_source)
 
     def tick(self, now: float) -> None:
+        t0 = time.perf_counter()
         self._record()
+        self._analyzer.feed(self._stream)
         if now >= self._next_analysis:
             self._next_analysis = max(self._next_analysis + ANALYSIS_PERIOD_S, now)
-            self._analyze()
+            self._analyzer.request_update()
+        self._emit(self._analyzer.poll())
+        self._check_analyzer()
+        self.max_update_ms = max(self.max_update_ms, (time.perf_counter() - t0) * 1e3)
         if now >= self._next_drift:
             self._next_drift = max(self._next_drift + DRIFT_PERIOD_S, now)
             self._emit_drift()
@@ -227,7 +263,8 @@ class _SessionHook:
     def close(self) -> None:
         try:
             self._record()
-            self._analyze()  # the audio that arrived since the last update
+            self._analyzer.feed(self._stream)
+            self._emit(self._analyzer.finish(FINISH_TIMEOUT_S))  # audio since the last update
             self._emit_drift()
         finally:
             w, self._writer = self._writer, None
@@ -245,7 +282,9 @@ class _SessionHook:
             _dbg.process_end(
                 "análisis de sesión",
                 updates=self.updates,
-                max_update_ms=round(self.max_update_ms, 2),
+                analysis_process=self._analyzer.in_process,
+                skipped=getattr(self._analyzer, "skipped", 0),
+                max_tick_ms=round(self.max_update_ms, 2),
                 recorded_lost=self._rec_lost,
             )
 
@@ -260,6 +299,8 @@ class MeasureStreamWorker(CaptureStreamWorker):
         stream_factory: As in ``CaptureStreamWorker``.
         calibration_store: Where the stored calibrations are read (default: the user's).
         record: Record each session to a temporary FLAC (default True; never in replay).
+        analysis_in_process: Analyse in a child process (default: True unless
+            ``ADV_TG_ANALYSIS_INPROC`` is set); False analyses in the reader thread.
         parent: Qt parent.
     """
 
@@ -271,6 +312,7 @@ class MeasureStreamWorker(CaptureStreamWorker):
         stream_factory: StreamFactory | None = None,
         calibration_store: CalibrationStore | None = None,
         record: bool = True,
+        analysis_in_process: bool | None = None,
         parent: QObject | None = None,
     ) -> None:
         self._replay = replay_file() if capture_factory is None else None
@@ -290,6 +332,10 @@ class MeasureStreamWorker(CaptureStreamWorker):
         self._recording: Path | None = None
         self._recording_frames = 0
         self._pending_recording: Path | None = None
+        if analysis_in_process is None:
+            analysis_in_process = analysis_in_separate_process()
+        self._analysis_in_process = bool(analysis_in_process)
+        self._analyzer: LocalAnalyzer | ProcessAnalyzer | None = None
 
     def update_watch_config(self, config: WatchConfig) -> None:
         """Store the config; BPH / lift angle changes apply to the next session (warned)."""
@@ -348,6 +394,41 @@ class MeasureStreamWorker(CaptureStreamWorker):
         d = cal.effective()
         return d, f"calibración guardada (nivel {int(d.level)}, {cal.measured_at:%Y-%m-%d})", name
 
+    # ------------------------------------------------------------------ analysis
+    def _get_analyzer(self) -> LocalAnalyzer | ProcessAnalyzer:
+        """Persistent analysis process, or the in-thread fallback."""
+        a = self._analyzer
+        if isinstance(a, ProcessAnalyzer) and not a.alive:
+            a.close()
+            a = None
+        if a is None:
+            if self._analysis_in_process:
+                a = ProcessAnalyzer()
+            else:
+                a = LocalAnalyzer()
+            self._analyzer = a
+        return a
+
+    def _start_analyzer(
+        self, config: SessionConfig, capacity: int
+    ) -> LocalAnalyzer | ProcessAnalyzer:
+        a = self._get_analyzer()
+        try:
+            a.start(config, capacity)
+            return a
+        except Exception as exc:
+            logger.error(
+                "No se pudo iniciar el proceso de análisis (%s); se analiza en el hilo", exc
+            )
+            a.close()
+            self._analyzer = LocalAnalyzer()
+            return self._analyzer
+
+    @property
+    def analysis_in_process(self) -> bool:
+        """The current/last session is analysed in a child process."""
+        return bool(self._analyzer is not None and self._analyzer.in_process)
+
     # ------------------------------------------------------------------ hook
     def _make_hook(self, fs: float, stream: SampleStream) -> _SessionHook:
         cal, source, name = self._calibration(fs)
@@ -383,7 +464,8 @@ class MeasureStreamWorker(CaptureStreamWorker):
             calibration=source,
             recording=str(path) if path else None,
         )
-        return _SessionHook(self, stream, session_cfg, path, tags)
+        analyzer = self._start_analyzer(session_cfg, stream.capacity)
+        return _SessionHook(self, stream, session_cfg, path, tags, analyzer)
 
     # ------------------------------------------------------------------ recording
     def _recording_done(self, path: Path | None, frames: int) -> None:
@@ -417,6 +499,9 @@ class MeasureStreamWorker(CaptureStreamWorker):
 
     def shutdown(self) -> None:
         super().shutdown()
+        analyzer, self._analyzer = self._analyzer, None
+        if analyzer is not None:
+            analyzer.close()
         self.discard_recording()
         with self._rec_lock:
             pending, self._pending_recording = self._pending_recording, None
