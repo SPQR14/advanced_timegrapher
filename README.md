@@ -27,23 +27,8 @@ PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 | 1 | Captura: flujo de muestras sin bloqueos + herramienta de consola; captura en proceso aparte (1d) y audio real en la GUI sin medir (1b) | **terminada**; validada con el CM18 (ingesta 100 %) |
 | 2 | Detector de batimientos incremental (P1/P2/P3), alineación fina por plantillas de tic y tac (`t_fine`) + audio WAV/FLAC | **terminada**: validado con sintético y con 5 grabaciones reales; frente a tg queda a ≤ 1.4 s/d y ≤ 0.25 ms (ver [`docs/resultados_pruebas_fase2.md`](docs/resultados_pruebas_fase2.md), sección 6) |
 | 3 | Métricas: marcha, error de batimiento, amplitud (`core/metrics.py`, `tools/measure.py`) | **implementada**, pendiente de confirmación: sintético dentro de tolerancia y grabaciones reales dentro de la banda de tg/WAM (ver [`docs/fase3_resultados.md`](docs/fase3_resultados.md)) |
-| 4 | Reloj: deriva del ADC frente al reloj del host + NTP, referencias externas (PPS/GPS, cuarzo), calibración manual, calibraciones por dispositivo y etiquetas en las grabaciones | **terminada** (v0.5.0); quedan la herramienta de medida en vivo y la validación con el Bulova (ver [`docs/resultados_fase4.md`](docs/resultados_fase4.md), sección 8) |
-| 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | **siguiente** |
-
-### Versiones
-
-Cada versión menor cierra una fase. La versión vive en `pyproject.toml` y en
-`src/adv_tg/__init__.py` (`__version__`); `tests/test_smoke.py` comprueba que coincidan, así que
-después de cambiarla hay que reinstalar el paquete (`.venv/bin/pip install -e .`). Cada versión
-lleva su etiqueta de git (`vX.Y.Z`).
-
-| Versión | Fecha | Contenido |
-|---------|-------|-----------|
-| v0.1.0 | 23/10/2026 | Fase 0: esqueleto, GUI, modo MOCK, Debugger, CI |
-| v0.2.0 | 23/10/2026 | Fase 1: captura de audio (`SampleStream`, `AudioCapture`, `capture_check`) |
-| v0.3.0 | 24/10/2026 | Fase 2: detector de batimientos, audio WAV/FLAC |
-| v0.4.0 | 24/10/2026 | Fase 3: métricas (marcha, error de batimiento, amplitud) |
-| v0.5.0 | 26/10/2026 | Fase 4: reloj de la tarjeta (ppm ± σ, niveles de confianza, PPS/GPS, calibraciones por dispositivo, etiquetas en FLAC/WAV); botón "Buy me a coffee" |
+| 4 | Reloj: deriva del ADC vs host + NTP, calibración manual opcional | **en curso**: estimador, integración con la marcha, calibraciones por dispositivo y etiquetas en las grabaciones (ver [`docs/resultados_fase4.md`](docs/resultados_fase4.md)) |
+| 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | pendiente |
 
 ## Estructura
 
@@ -328,6 +313,17 @@ audio):
 python -m adv_tg.tools.measure toma.flac --bph 28800 --lift-angle 51 --json m.json --csv v.csv --plot m.png
 python -m adv_tg.tools.measure cuarzo.flac --bph 57600 --quartz          # cuarzo: solo marcha, un evento por paso
 python -m adv_tg.tools.measure vieja.flac --bph 28800 --device "CM18 USB" # usa la calibración guardada del CM18
+```
+
+Corrección del reloj de la tarjeta (fase 4), por orden: `--adc-drift-ppm`/`--adc-drift-sigma-ppm`
+(`--adc-drift-ppm 0` la desactiva); si no, la de las etiquetas del archivo o la guardada para
+`--device` (la de menor incertidumbre); si no, sin calibrar.
+
+```bash
+python -m adv_tg.tools.adc_calibration set --device "CM18 USB" --ppm 8.3 --sigma 6 --note "Bulova NM10"
+python -m adv_tg.tools.adc_calibration list                       # historial y la que se aplica hoy
+python -m adv_tg.tools.adc_calibration show toma.flac             # etiquetas ADV_TG_* de una grabación
+python -m adv_tg.tools.adc_calibration tag vieja.flac --device "CM18 USB" --date 2026-10-20
 ```
 
 Validación (detalle en [`docs/fase3_resultados.md`](docs/fase3_resultados.md)):

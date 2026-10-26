@@ -1,11 +1,9 @@
 # Fase 4 (Reloj): resultados, recomendaciones y pendientes
 
-Fase cerrada en **v0.5.0** (26/10/2026, commit `4d249dd` "Fase4 B"). Quedan abiertos la
-herramienta de medida en vivo y la validación con el Bulova (sección 8.1).
-
-Rama `feature/fase4_timeDrift` (commits `84ddfbc` y `4d249dd`). Hechos el módulo
-`core/adc_clock.py`, su integración con la marcha, las marcas de reloj en la captura (sección 6)
-y la persistencia por dispositivo con las etiquetas en las grabaciones (sección 7).
+Estado al 26/10/2026: fase 4 **en curso** (rama `feature/fase4_timeDrift`; la primera parte está
+en el commit `84ddfbc`). Hechos el módulo `core/adc_clock.py`, su integración con la marcha, las
+marcas de reloj en la captura (sección 6) y la persistencia por dispositivo con las etiquetas
+en las grabaciones (sección 7). Siguiente paso: herramienta de consola en vivo (sección 6.4).
 
 Objetivo: conocer la frecuencia real del ADC (ppm ± σ) para que la marcha no lleve el sesgo del
 reloj de la tarjeta. 1 ppm = 0.0864 s/d.
@@ -259,10 +257,8 @@ Rendimiento en sintético (jitter exponencial de 1 ms, picos de 5–60 ms): σ �
 
 - La GUI todavía no graba desde hardware (`record_audio` lo rechaza; fase 5): cuando lo haga,
   debe usar `AudioWriter(..., tags=recording_tags(...)[0])`.
-- En el Bulova la media de las ventanas de 10 s (≈ +1 s/d sin calibrar) no coincide con la
-  marcha global (−0.72 s/d). No es un fallo: es la compensación por inhibición de 10 s del
-  cuarzo, ya documentada en `docs/fase3_resultados.md` (secciones 7 y 8); la marcha de un
-  cuarzo se mide sobre muchos ciclos.
+- Observación sin investigar (anterior a esta fase): en el Bulova la media de las ventanas de
+  10 s (≈ +1 s/d sin calibrar) no coincide con la marcha global (−0.72 s/d).
 
 ## Fuentes
 
@@ -303,8 +299,8 @@ El GPS no es necesario para cerrar la fase; sirve para mejorar la precisión des
   (`BUY_ME_A_COFFEE_URL` en `ui/main_window.py`), con la dirección en la ayuda emergente
   (inglés y español) y en la barra de estado si el sistema no puede abrir el navegador. Test en
   `tests/test_gui_smoke.py`.
-- Suite: 462 pasan, 2 saltados, 1 xfail; el único fallo era `test_smoke.py::test_version`
-  (metadatos viejos en el `.venv`; se arregla con `.venv/bin/pip install -e .`).
+- Suite: 462 pasan, 2 saltados, 1 xfail; el único fallo es `test_smoke.py::test_version`
+  (metadatos de la 0.3.0 en el `.venv`; se arregla con `.venv/bin/pip install -e .`).
 
 ### 8.3 Hardware PPS en camino
 
