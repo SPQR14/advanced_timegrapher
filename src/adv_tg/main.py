@@ -86,6 +86,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         app = QApplication.instance() or QApplication(args)
         app.setApplicationName("Advanced Timegrapher")
         app.setOrganizationName("AdvancedTimegrapher")
+        # Wayland ignores setWindowIcon and takes the icon from the matching .desktop file.
+        app.setDesktopFileName("adv-tg")
+
+        try:
+            from adv_tg.ui.main_window import app_icon
+
+            app.setWindowIcon(app_icon())
+        except Exception:
+            logger.exception("No se pudo cargar el icono de la aplicación; se continúa sin él")
 
         try:
             from adv_tg.i18n.translator import Translator

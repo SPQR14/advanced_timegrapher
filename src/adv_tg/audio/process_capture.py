@@ -376,7 +376,7 @@ class ProcessAudioCapture:
         self._child_alive = False
 
     def _on_frame(self, buf: bytes) -> None:
-        seq, host_ns, n = FRAME_HEADER.unpack_from(buf, 0)
+        seq, host_ns, adc_ns, wall_ns, n = FRAME_HEADER.unpack_from(buf, 0)
         if seq < self._next_seq:
             self.duplicate_frames += 1
             return
@@ -384,7 +384,7 @@ class ProcessAudioCapture:
             self.dropped_frames += seq - self._next_seq
         self._next_seq = seq + 1
         samples = np.frombuffer(buf, dtype=np.float32, count=n, offset=FRAME_HEADER.size)
-        self._stream.write(samples, host_ns)
+        self._stream.write(samples, host_ns, adc_ns=adc_ns, wall_ns=wall_ns)
         self.frames_received += 1
         self._last_host_ns = host_ns
         lag = time.perf_counter_ns() - host_ns

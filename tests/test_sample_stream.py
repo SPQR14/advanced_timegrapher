@@ -136,6 +136,23 @@ def test_block_log_less_than_size() -> None:
     np.testing.assert_array_equal(ns, [10, 20])
 
 
+def test_clock_log_extra_stamps_and_wrap() -> None:
+    s = SampleStream(100, FS, block_log_size=3)
+    s.write(np.zeros(4), host_ns=10)  # no extra stamps -> 0
+    for i in range(1, 5):
+        s.write(np.zeros(4), host_ns=10 * (i + 1), adc_ns=100 * i, wall_ns=1000 * i)
+    log = s.clock_log()
+    np.testing.assert_array_equal(log.end_indices, [12, 16, 20])
+    np.testing.assert_array_equal(log.host_ns, [30, 40, 50])
+    np.testing.assert_array_equal(log.adc_ns, [200, 300, 400])
+    np.testing.assert_array_equal(log.wall_ns, [2000, 3000, 4000])
+    np.testing.assert_array_equal(s.clock_log(last=1).adc_ns, [400])
+    s.reset()
+    s.write(np.zeros(2), host_ns=1)
+    log = s.clock_log()
+    assert log.adc_ns.tolist() == [0] and log.wall_ns.tolist() == [0]
+
+
 def _feed(s: SampleStream, n_blocks: int, block: int, keep_every: int = 1) -> None:
     """Write blocks timestamped at their nominal time, keeping 1 of every ``keep_every``."""
     for k in range(n_blocks):

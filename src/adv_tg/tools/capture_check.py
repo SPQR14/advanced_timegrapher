@@ -7,6 +7,11 @@ with ``--file``) into a ``SampleStream`` and verifies that ingestion is complete
 * largest gap between blocks < 3 nominal blocks,
 * longest callback < 2000 µs.
 
+With ``--wav``/``--out`` the recording carries tags (``adv_tg.utils.audio_files``): the device,
+the date and the ADC clock calibration stored for that device (``adv_tg.utils.adc_calibration``;
+an explicit level 0 when there is none). A replayed file keeps the ``ADV_TG_*`` tags of the
+source, since its samples come from the original device.
+
 All statistics, peak levels and file I/O happen on the main thread by reading the
 ``SampleStream``; the audio callback (or the replay thread) only writes into it.
 
@@ -31,7 +36,8 @@ from numpy.typing import NDArray
 from adv_tg.audio.capture import AudioCapture, load_sounddevice
 from adv_tg.audio.process_capture import ProcessAudioCapture
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
-from adv_tg.utils.audio_files import SUPPORTED_EXTENSIONS, read_mono, write_audio
+from adv_tg.utils.adc_calibration import CalibrationStoreError, recording_tags
+from adv_tg.utils.audio_files import SUPPORTED_EXTENSIONS, read_mono, read_tags, write_audio
 from adv_tg.utils.debugger import Debugger
 
 _dbg = Debugger.get(__name__)
@@ -94,14 +100,20 @@ def read_wav_mono(path: Path | str) -> tuple[int, NDArray[np.float32]]:
 read_audio_mono = read_wav_mono
 
 
-def _save_audio(path: Path, samples: NDArray[np.float32], fs: int, fmt: str | None) -> None:
+def _save_audio(
+    path: Path,
+    samples: NDArray[np.float32],
+    fs: int,
+    fmt: str | None,
+    tags: dict[str, str] | None = None,
+) -> None:
     """Save through ``audio_files`` (format from the extension) and explain the subtype."""
     subtype = _SUBTYPES[fmt] if fmt else None
     sub = subtype or ("FLOAT" if path.suffix.lower() == ".wav" else "PCM_24")
     clipped = int(np.count_nonzero(np.abs(samples) > 1.0)) if sub != "FLOAT" else 0
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)  # reported below in Spanish
-        write_audio(path, samples, fs, subtype=subtype, comment="adv_tg capture_check")
+        write_audio(path, samples, fs, subtype=subtype, comment="adv_tg capture_check", tags=tags)
     if sub == "FLOAT":
         print(
             "AVISO: guardado como float32 (IEEE, sin pérdida); algunos programas no abren "
@@ -110,6 +122,49 @@ def _save_audio(path: Path, samples: NDArray[np.float32], fs: int, fmt: str | No
     else:
         note = f"; {clipped} muestras fuera de [-1, 1] recortadas" if clipped else ""
         print(f"AVISO: guardado como {sub} (cuantizado{note}).")
+
+
+def _device_name(device: int | None) -> str | None:
+    """PortAudio name of the input device (``None`` = default input), or None if unknown."""
+    try:
+        info = load_sounddevice().query_devices(device, "input")
+        return str(info["name"]).strip() or None
+    except Exception:
+        return None
+
+
+def _recording_tags(args: argparse.Namespace, fs: int) -> dict[str, str]:
+    """Tags for the saved file; prints which ADC calibration they carry."""
+    if args.file is not None:
+        try:
+            src = read_tags(args.file)
+        except Exception:
+            src = {}
+        tags = {k: v for k, v in src.items() if k.startswith("ADV_TG_")}
+        print(f"Etiquetas: se conservan {len(tags)} etiquetas ADV_TG_* del archivo repetido.")
+        return tags
+    device = None if args.fake_source else _device_name(args.device)
+    try:
+        tags, cal = recording_tags(device, fs)
+    except CalibrationStoreError as exc:
+        print(f"AVISO: {exc}")
+        tags, cal = recording_tags(None, fs)
+        if device:
+            tags["ADV_TG_DEVICE"] = device
+    if cal is not None:
+        d = cal.drift
+        print(
+            f"Reloj ADC: se guarda la calibración de '{cal.device}' del "
+            f"{cal.measured_at:%Y-%m-%d}: {d.ppm:+.2f} ppm ± {d.uncertainty_ppm:.2f} "
+            f"(nivel {int(d.level)}, {d.method})."
+        )
+    else:
+        who = f"'{device}'" if device else "este dispositivo"
+        print(
+            f"Reloj ADC: no hay calibración guardada para {who} a {fs} Hz; se guarda como "
+            "nivel 0 (ver python -m adv_tg.tools.adc_calibration)."
+        )
+    return tags
 
 
 # ---------------------------------------------------------------------- file replay
@@ -550,7 +605,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"AVISO: el archivo no incluye las primeras {lost} muestras (buffer sobrescrito)."
             )
         try:
-            _save_audio(args.wav, data, int(stream.sample_rate), args.wav_format)
+            fs_out = int(stream.sample_rate)
+            _save_audio(args.wav, data, fs_out, args.wav_format, _recording_tags(args, fs_out))
         except Exception as exc:
             print(f"ERROR: no se pudo guardar '{args.wav}': {exc}")
             return EXIT_ERROR
