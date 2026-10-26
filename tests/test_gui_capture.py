@@ -39,7 +39,7 @@ def window(qtbot, monkeypatch: pytest.MonkeyPatch):
     win = mw.MainWin()
     qtbot.addWidget(win)
     win.show()
-    win.spn_stab.setValue(0)
+    win.set_session_timing(stabilization_s=0)
     win.created_workers = created
     yield win
     win.close()

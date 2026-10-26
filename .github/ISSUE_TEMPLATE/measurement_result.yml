@@ -1,0 +1,63 @@
+name: Measurement result / Resultado de medida
+description: Share what Advanced Timegrapher measured on your watch (and, if you can, what another timegrapher said). / Comparte lo que midió la aplicación (y, si puedes, lo que dio otro cronocomparador).
+title: "[Result] <watch / reloj> - <calibre>"
+labels: ["measurement-result"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you! Comparisons with another timegrapher are the most valuable reports we get.
+        Use the **Report** button of the app to create the .zip and drag it into the last field.
+        ¡Gracias! Las comparaciones con otro cronocomparador son los reportes más valiosos.
+        Usa el botón **Reportar** de la aplicación para crear el .zip y arrástralo al último campo.
+  - type: input
+    id: version
+    attributes:
+      label: App version / Versión de la aplicación
+      description: Shown in About / Se ve en Acerca de
+      placeholder: "0.6.0"
+    validations:
+      required: true
+  - type: input
+    id: watch
+    attributes:
+      label: Watch and calibre / Reloj y calibre
+      placeholder: "Seiko 5 SRPD - 4R36"
+    validations:
+      required: true
+  - type: input
+    id: settings
+    attributes:
+      label: BPH, lift angle, position / A/h, ángulo, posición
+      placeholder: "21600, 53°, dial up (DU)"
+    validations:
+      required: true
+  - type: input
+    id: microphone
+    attributes:
+      label: Microphone and computer / Micrófono y ordenador
+      placeholder: "CM18 USB contact mic, MacBook Air M2, macOS 15"
+  - type: textarea
+    id: app_figures
+    attributes:
+      label: Figures shown by Advanced Timegrapher / Cifras de Advanced Timegrapher
+      description: Rate, beat error, amplitude, test duration, clock drift line / Marcha, error de batimiento, amplitud, duración, línea de deriva del reloj
+      placeholder: "+5.6 s/d, 0.05 ms, 287°, 60 s test, clock +9.46 ppm (level 2)"
+    validations:
+      required: true
+  - type: textarea
+    id: reference
+    attributes:
+      label: Reference timegrapher (if any) / Cronocomparador de referencia (si lo hay)
+      description: Device or app, and its figures on the same watch and position, ideally at the same time / Equipo o aplicación, y sus cifras en el mismo reloj y posición, a ser posible a la vez
+      placeholder: "Weishi 1900: +4 s/d, 0.1 ms, 280°"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes / Notas
+      description: Noise, how the watch was wound, anything unusual / Ruido, cuerda, cualquier cosa rara
+  - type: textarea
+    id: attachment
+    attributes:
+      label: Report zip / Zip del reporte
+      description: Drag here the .zip created with the Report button (and the recording if it was too big) / Arrastra aquí el .zip creado con Reportar (y la grabación si era demasiado grande)

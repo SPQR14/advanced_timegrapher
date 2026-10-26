@@ -1,0 +1,120 @@
+name: Build & Package Release
+
+on:
+  push:
+    branches: [ "main", "release/*" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            artifact_name: adv-tg-linux-x86_64.tar.gz
+          - os: macos-latest
+            platform: macos
+            artifact_name: adv-tg-macos.zip
+          - os: windows-latest
+            platform: windows
+            artifact_name: adv-tg-windows-x64.zip
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install System Dependencies (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libasound2t64 libegl1 libgl1
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -e .
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller packaging/adv-tg.spec --noconfirm
+
+      - name: Smoke Test Binary (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          xvfb-run -a ./dist/adv-tg/adv-tg --version
+          xvfb-run -a ./dist/adv-tg/adv-tg --smoke-test
+
+      - name: Smoke Test Binary (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          export QT_QPA_PLATFORM=offscreen
+          "./dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --version
+          "./dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --smoke-test
+          ./dist/adv-tg/adv-tg --smoke-test
+
+      - name: Smoke Test Binary (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          .\dist\adv-tg\adv-tg.exe --version
+          .\dist\adv-tg\adv-tg.exe --smoke-test
+
+      - name: Package Binaries (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          tar -czvf ${{ matrix.artifact_name }} -C dist adv-tg
+
+      - name: Package Binaries (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          cd dist && zip -r -y ../${{ matrix.artifact_name }} "Advanced Timegrapher.app"
+
+      - name: Package Binaries (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\adv-tg -DestinationPath ${{ matrix.artifact_name }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/*
+          draft: false
+          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+          generate_release_notes: true

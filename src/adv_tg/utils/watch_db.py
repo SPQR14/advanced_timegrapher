@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import sys
 from pathlib import Path
 
 from adv_tg.utils.debugger import Debugger
@@ -11,7 +12,24 @@ from adv_tg.utils.logger_setup import LoggerSetup
 logger = LoggerSetup.setup_logger(__name__)
 _dbg = Debugger.get(__name__)
 
-WATCH_DB_PATH: Path = Path(__file__).resolve().parent / "db" / "watch_db.csv"
+
+def _resolve_watch_db_path() -> Path:
+    """Resolve path to ``watch_db.csv`` in development or frozen PyInstaller builds."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        meipass = Path(sys._MEIPASS)
+        for cand in (
+            meipass / "adv_tg" / "utils" / "db" / "watch_db.csv",
+            meipass / "utils" / "db" / "watch_db.csv",
+            meipass / "db" / "watch_db.csv",
+            meipass / "Resources" / "adv_tg" / "utils" / "db" / "watch_db.csv",
+            meipass.parent / "Resources" / "adv_tg" / "utils" / "db" / "watch_db.csv",
+        ):
+            if cand.is_file():
+                return cand
+    return Path(__file__).resolve().parent / "db" / "watch_db.csv"
+
+
+WATCH_DB_PATH: Path = _resolve_watch_db_path()
 
 
 def load_watch_db(csv_path: Path | str | None = None) -> dict[str, tuple[int, float]]:
