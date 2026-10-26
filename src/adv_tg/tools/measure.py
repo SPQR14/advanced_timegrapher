@@ -88,6 +88,7 @@ def measure_file(
     window_s: float = 10.0,
     window_step_s: float | None = None,
     adc_drift_ppm: float = 0.0,
+    adc_drift_sigma_ppm: float = 0.0,
     chunk: int = DEFAULT_CHUNK,
 ) -> MeasureResult:
     """Detect beats block by block and compute the metrics of the whole file.
@@ -114,6 +115,7 @@ def measure_file(
         window_s=window_s,
         window_step_s=window_step_s,
         adc_drift_ppm=adc_drift_ppm,
+        adc_drift_sigma_ppm=adc_drift_sigma_ppm,
     )
     beats: list[Beat] = []
     frames = 0
@@ -321,6 +323,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--adc-drift-ppm", type=float, default=0.0, help="error del reloj de la tarjeta (ppm)"
     )
     p.add_argument(
+        "--adc-drift-sigma-ppm",
+        type=float,
+        default=0.0,
+        help="incertidumbre del error del reloj de la tarjeta (ppm)",
+    )
+    p.add_argument(
         "--chunk", type=int, default=DEFAULT_CHUNK, help=f"muestras por bloque ({DEFAULT_CHUNK})"
     )
     p.add_argument("--json", type=Path, default=None, help="guarda todas las cifras en JSON")
@@ -353,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
                 window_s=args.window,
                 window_step_s=args.window_step,
                 adc_drift_ppm=args.adc_drift_ppm,
+                adc_drift_sigma_ppm=args.adc_drift_sigma_ppm,
                 chunk=args.chunk,
             )
     except (AudioFileError, ValueError) as exc:

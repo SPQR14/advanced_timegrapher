@@ -86,6 +86,22 @@ def test_uncertainties_report_the_larger_of_covariance_and_blocks() -> None:
         assert rep == max(cov, block)
 
 
+def test_adc_drift_sigma_adds_to_rate_uncertainty() -> None:
+    beats = _beats(300, jitter_us=(50.0, 50.0), seed=6)
+    base = compute_metrics(beats, _templates(), _cfg())
+    m = compute_metrics(beats, _templates(), _cfg(adc_drift_sigma_ppm=10.0))
+    assert m.rate_calibrated and not base.rate_calibrated
+    assert m.rate_clock_sigma_s_per_day == pytest.approx(0.864)
+    stat = max(m.rate_sigma_s_per_day, m.rate_sigma_block_s_per_day)
+    assert m.rate_uncertainty_s_per_day == pytest.approx(math.hypot(stat, 0.864))
+    assert m.rate_s_per_day == base.rate_s_per_day
+    assert [w.rate_uncertainty_s_per_day for w in m.windows] == [
+        w.rate_uncertainty_s_per_day for w in base.windows
+    ]
+    with pytest.raises(ValueError):
+        _cfg(adc_drift_sigma_ppm=-1.0)
+
+
 def test_overlapping_windows() -> None:
     beats = _beats(6 * 60, jitter_us=(30.0, 30.0), seed=3)  # ~60 s
     m = compute_metrics(beats, _templates(), _cfg(window_step_s=5.0))
