@@ -45,8 +45,7 @@ def window(qtbot, monkeypatch: pytest.MonkeyPatch):
     win = mw.MainWin()
     qtbot.addWidget(win)
     win.show()
-    win.spn_stab.setValue(0)
-    win.spn_duration.setValue(60)
+    win.set_session_timing(stabilization_s=0, duration_s=60)
     win.cmb_bph.setCurrentText("28800")
     win.spn_lift.setValue(52.0)
     yield win

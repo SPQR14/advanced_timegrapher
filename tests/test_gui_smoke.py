@@ -33,7 +33,7 @@ def test_main_window_with_mock(qtbot) -> None:
     assert window.cmb_device.currentIndex() == 0
     assert window.lbl_mock_badge.isVisibleTo(window)
 
-    window.spn_stab.setValue(0)
+    window.set_session_timing(stabilization_s=0)
     window.start_capture()
     qtbot.wait(1000)
     assert window.isVisible()
@@ -51,7 +51,7 @@ def test_late_telemetry_after_stop_is_ignored(qtbot) -> None:
     window = MainWin()
     qtbot.addWidget(window)
     window.btn_mock.setChecked(True)  # the default is the system's input device if any
-    window.spn_stab.setValue(0)
+    window.set_session_timing(stabilization_s=0)
     window.start_capture()
     qtbot.wait(600)
     window.stop_capture()

@@ -25,6 +25,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -38,7 +39,6 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QProgressBar,
     QPushButton,
-    QSpinBox,
     QSplitter,
     QStyledItemDelegate,
     QTableWidget,
@@ -57,15 +57,12 @@ from adv_tg.ui.capture_worker import (
     level_text,
     level_to_quality,
 )
+from adv_tg.ui.dialogs import AboutDialog, CalibrationDialog, LiveDrift
 from adv_tg.ui.measure_worker import MeasureStreamWorker
+from adv_tg.ui.measure_worker import device_name as measure_device_name
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
 from adv_tg.ui.worker_factory import create_worker
-from adv_tg.utils.audio_io import (
-    AudioDeviceInfo,
-    is_flac_supported,
-    list_input_devices,
-    save_audio_recording,
-)
+from adv_tg.utils.audio_io import AudioDeviceInfo, list_input_devices
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
 from adv_tg.utils.watch_db import load_watch_db
@@ -115,6 +112,30 @@ ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 APP_ICON_PATH = ASSETS_DIR / "adv-tg.svg"
 #: Page opened by the "Buy me a coffee" button.
 BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/sqpr14"
+
+
+#: Mechanical beats per hour offered in the top bar.
+MECHANICAL_BPH: tuple[int, ...] = (18000, 19800, 21600, 25200, 28800, 36000)
+#: Quartz motor steps per second (Citizen 1/s, TMI 4/s, Bulova Precisionist 16/s...).
+QUARTZ_STEPS_PER_S: tuple[int, ...] = (1, 2, 4, 8, 16)
+DEFAULT_QUARTZ_STEPS: int = 1
+
+#: Test durations offered in the top bar (seconds).
+DURATION_CHOICES_S: tuple[int, ...] = (30, 45, 60, 120, 240, 300, 900, 1800, 3600)
+DEFAULT_DURATION_S: int = 60
+#: Stabilization times offered in the top bar (seconds).
+STABILIZATION_CHOICES_S: tuple[int, ...] = (10, 15, 20)
+DEFAULT_STABILIZATION_S: int = 10
+
+
+def _format_duration(seconds: float) -> str:
+    """``30 s``, ``120 s``, ``240 s``, ``5 min``, ``1 h`` (seconds below 5 minutes)."""
+    secs = float(seconds)
+    if secs >= 3600 and secs % 3600 == 0:
+        return f"{int(secs // 3600)} h"
+    if secs >= 300 and secs % 60 == 0:
+        return f"{int(secs // 60)} min"
+    return f"{secs:g} s"
 
 
 def default_input_device_id() -> int | None:
@@ -731,10 +752,18 @@ class MainWin(QMainWindow):
         self.lbl_bph = QLabel()
         self.lbl_bph.setObjectName("TopBarLabel")
         self.cmb_bph = QComboBox()
-        for bph in (18000, 21600, 25200, 28800, 36000):
+        self._last_mechanical_bph = 21600
+        for bph in MECHANICAL_BPH:
             self.cmb_bph.addItem(str(bph), bph)
         self._configure_combo_box(self.cmb_bph, min_width=95)
         self.cmb_bph.setCurrentText("21600")
+
+        # Quartz mode: steps per second instead of mechanical BPH, rate only
+        self.lbl_quartz = QLabel()
+        self.lbl_quartz.setObjectName("TopBarLabel")
+        self.chk_quartz = QCheckBox()
+        self.chk_quartz.setObjectName("QuartzCheck")
+        self.chk_quartz.toggled.connect(self._on_quartz_toggled)
 
         # Lift Angle
         self.lbl_lift = QLabel()
@@ -769,21 +798,23 @@ class MainWin(QMainWindow):
         self._configure_combo_box(self.cmb_srate, min_width=96)
         self.cmb_srate.setCurrentIndex(0)
 
-        # Stabilization time
+        # Stabilization time (fixed choices)
         self.lbl_stab = QLabel()
         self.lbl_stab.setObjectName("TopBarLabel")
-        self.spn_stab = QSpinBox()
-        self.spn_stab.setRange(0, 30)
-        self.spn_stab.setValue(10)
-        self.spn_stab.setSuffix(" s")
+        self.cmb_stab = QComboBox()
+        for secs in STABILIZATION_CHOICES_S:
+            self.cmb_stab.addItem(_format_duration(secs), float(secs))
+        self._configure_combo_box(self.cmb_stab, min_width=78)
+        self.cmb_stab.setCurrentIndex(STABILIZATION_CHOICES_S.index(DEFAULT_STABILIZATION_S))
 
-        # Test duration
+        # Test duration (fixed choices)
         self.lbl_duration = QLabel()
         self.lbl_duration.setObjectName("TopBarLabel")
-        self.spn_duration = QSpinBox()
-        self.spn_duration.setRange(5, 600)
-        self.spn_duration.setValue(30)
-        self.spn_duration.setSuffix(" s")
+        self.cmb_duration = QComboBox()
+        for secs in DURATION_CHOICES_S:
+            self.cmb_duration.addItem(_format_duration(secs), float(secs))
+        self._configure_combo_box(self.cmb_duration, min_width=90)
+        self.cmb_duration.setCurrentIndex(DURATION_CHOICES_S.index(DEFAULT_DURATION_S))
 
         # Language selector (EN / ES)
         self.lbl_lang = QLabel()
@@ -800,12 +831,13 @@ class MainWin(QMainWindow):
             (self.lbl_test_name, self.txt_test_name),
             (self.lbl_caliber, self.cmb_caliber),
             (self.lbl_bph, self.cmb_bph),
+            (self.lbl_quartz, self.chk_quartz),
             (self.lbl_lift, self.spn_lift),
             (self.lbl_position, self.cmb_position),
             (self.lbl_device, self.cmb_device),
             (self.lbl_srate, self.cmb_srate),
-            (self.lbl_stab, self.spn_stab),
-            (self.lbl_duration, self.spn_duration),
+            (self.lbl_stab, self.cmb_stab),
+            (self.lbl_duration, self.cmb_duration),
             (self.lbl_lang, self.cmb_lang),
         ):
             pair = QVBoxLayout()
@@ -822,6 +854,13 @@ class MainWin(QMainWindow):
         self.btn_mock.setCheckable(True)
         self.btn_mock.setCursor(Qt.CursorShape.PointingHandCursor)
         top_layout.addWidget(self.btn_mock, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        # "About" (version, licence, folders for bug reports)
+        self.btn_about = QPushButton()
+        self.btn_about.setObjectName("MockButton")
+        self.btn_about.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_about.clicked.connect(lambda: self.open_about_dialog())
+        top_layout.addWidget(self.btn_about, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         # "Buy me a coffee" button in the top-right corner (opens BUY_ME_A_COFFEE_URL)
         self.btn_buy_coffee = QPushButton("☕ Buy me a coffee")
@@ -939,6 +978,11 @@ class MainWin(QMainWindow):
             stats_grid.addWidget(v_lbl, row_idx, 1)
 
         stats_layout.addLayout(stats_grid)
+        self.btn_calibrate = QPushButton()
+        self.btn_calibrate.setObjectName("ActionButton")
+        self.btn_calibrate.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_calibrate.clicked.connect(lambda: self.open_calibration_dialog())
+        stats_layout.addWidget(self.btn_calibrate)
         left_layout.addWidget(self.stats_panel)
 
         # Positional Test Management & CSV Export: "Guardar Posición", "Guardar CSV" & Collapsible "Estadísticas Globales"
@@ -1484,6 +1528,36 @@ class MainWin(QMainWindow):
         self.lbl_session_status.setText(self.translator.tr(key))
         self.lbl_session_status.setStyleSheet(color)
 
+    def _fill_bph_choices(self, quartz: bool) -> None:
+        """Mechanical BPH, or quartz steps per second (data = steps per hour)."""
+        was_blocked = self.cmb_bph.blockSignals(True)
+        try:
+            self.cmb_bph.clear()
+            if quartz:
+                for steps in QUARTZ_STEPS_PER_S:
+                    self.cmb_bph.addItem(f"{steps}/s", steps * 3600)
+                self.cmb_bph.setCurrentIndex(QUARTZ_STEPS_PER_S.index(DEFAULT_QUARTZ_STEPS))
+            else:
+                for bph in MECHANICAL_BPH:
+                    self.cmb_bph.addItem(str(bph), bph)
+                self.cmb_bph.setCurrentText(str(self._last_mechanical_bph))
+        finally:
+            self.cmb_bph.blockSignals(was_blocked)
+
+    def _on_quartz_toggled(self, checked: bool) -> None:
+        """Quartz: steps/s choices, no lift angle nor caliber presets; figures rate only."""
+        if checked:
+            self._last_mechanical_bph = int(self.cmb_bph.currentData() or 21600)
+        self._fill_bph_choices(checked)
+        self.spn_lift.setEnabled(not checked)
+        self.cmb_caliber.setEnabled(not checked)
+        if checked:
+            self.cmb_caliber.setCurrentText("Custom")
+        tr = self.translator.tr
+        self.lbl_bph.setText(tr("quartz_steps") if checked else tr("bph"))
+        _dbg.state_change("modo cuarzo", not checked, checked)
+        self._on_watch_config_changed()
+
     def _on_caliber_changed(self, caliber_name: str) -> None:
         """Update BPH and Lift Angle automatically when a caliber preset is selected."""
         if caliber_name in CALIBER_PRESETS:
@@ -1821,6 +1895,49 @@ class MainWin(QMainWindow):
             _dbg.file_write(out_path, ok=False, error=exc)
             raise
 
+    # ------------------------------------------------------------------ dialogs
+    def _calibration_target(self) -> tuple[str, int] | None:
+        """``(device name, sample rate)`` the calibration dialog edits, or None (MOCK/replay)."""
+        worker = self.dsp_worker
+        device_id = self.selected_device_id()
+        if device_id is None or not isinstance(worker, MeasureStreamWorker):
+            return None
+        if worker.replay_path is not None:
+            return None
+        name = measure_device_name(device_id)
+        if name is None:  # PortAudio not reachable: the label is "[id] name"
+            text = self.cmb_device.currentText()
+            name = text.split("] ", 1)[1] if "] " in text else text
+        return name, int(self.current_watch_config().sample_rate)
+
+    def open_calibration_dialog(self, exec_dialog: bool = True) -> CalibrationDialog | None:
+        """Manual calibration of the selected device's clock (applies to the next session)."""
+        target = self._calibration_target()
+        if target is None:
+            self.statusBar().showMessage(self.translator.tr("cal_unavailable"), 6000)
+            return None
+        live = None
+        if (
+            self._last_clock_level is not None
+            and self._last_clock_level >= 2
+            and self._last_clock_source.startswith("en vivo")
+            and self._last_drift_sigma_ppm is not None
+        ):
+            live = LiveDrift(
+                self._last_drift_ppm, self._last_drift_sigma_ppm, self._last_clock_level
+            )
+        dlg = CalibrationDialog(self.translator, target[0], target[1], live=live, parent=self)
+        if exec_dialog:
+            dlg.exec()
+        return dlg
+
+    def open_about_dialog(self, exec_dialog: bool = True) -> AboutDialog:
+        """Version, licence, links and the configuration and log folders."""
+        dlg = AboutDialog(self.translator, parent=self)
+        if exec_dialog:
+            dlg.exec()
+        return dlg
+
     def _on_buy_coffee_clicked(self) -> bool:
         """Open the 'Buy me a coffee' page in the default browser.
 
@@ -1984,20 +2101,10 @@ class MainWin(QMainWindow):
             logger.error("Failed to print audio traces: %s", exc, exc_info=True)
             return False
 
-    def _on_recording_ready(self, audio_buffer: np.ndarray, sample_rate: int) -> None:
-        """Store completed test audio recording from the worker thread."""
-        self._recorded_audio = np.asarray(audio_buffer, dtype=np.float64).copy()
-        self._recorded_sample_rate = int(sample_rate)
-        logger.info(
-            "Test audio recording buffered (%d samples @ %d Hz)",
-            len(self._recorded_audio),
-            self._recorded_sample_rate,
-        )
-
     def _ensure_test_length_recording(self) -> tuple[np.ndarray, int]:
         """Return an audio recording matching the exact configured test duration."""
         cfg = self.current_watch_config()
-        duration_s = float(self.spn_duration.value())
+        duration_s = self.duration_s()
         expected_samples = int(round(duration_s * cfg.sample_rate))
 
         if (
@@ -2036,9 +2143,7 @@ class MainWin(QMainWindow):
         self._recorded_sample_rate = cfg.sample_rate
         return self._recorded_audio, self._recorded_sample_rate
 
-    def record_audio(
-        self, file_path: Path | str | None = None, prefer_flac: bool = True
-    ) -> Path | None:
+    def record_audio(self, file_path: Path | str | None = None) -> Path | None:
         """Save the session audio: during a session it is saved when the session ends.
 
         Hardware (``MeasureStreamWorker``): the engine records every session to a temporary
@@ -2050,55 +2155,17 @@ class MainWin(QMainWindow):
                 "Audio recording armed for active test session; will prompt to save upon completion"
             )
             return None
+        return self.save_recorded_audio(file_path=file_path)
 
-        return self.save_recorded_audio(file_path=file_path, prefer_flac=prefer_flac)
-
-    def save_recorded_audio(
-        self, file_path: Path | str | None = None, prefer_flac: bool = True
-    ) -> Path | None:
-        """Save the test-length audio recording to disk (FLAC by default if possible, else Ogg Vorbis)."""
+    def save_recorded_audio(self, file_path: Path | str | None = None) -> Path | None:
+        """Save the last session's audio (FLAC with tags; MOCK: synthetic WAV)."""
         if self.is_mock_active():
             return self._save_mock_recording(file_path)
         if isinstance(self.dsp_worker, MeasureStreamWorker):
             return self._save_session_recording(file_path)
-        if self._recorded_audio is None:
-            logger.warning("No recording available: the measurement engine is not implemented yet")
-            self.statusBar().showMessage(self.translator.tr("no_recording_available"), 6000)
-            return None
-
-        audio_data, sample_rate = self._ensure_test_length_recording()
-        flac_ok = prefer_flac and is_flac_supported()
-        default_ext = "flac" if flac_ok else "ogg"
-        test_name = self.txt_test_name.text().strip() or "watch_test"
-
-        if file_path is None:
-            default_name = f"{test_name}.{default_ext}"
-            if flac_ok:
-                file_filter = "FLAC Audio (*.flac);;Ogg Vorbis Audio (*.ogg)"
-            else:
-                file_filter = "Ogg Vorbis Audio (*.ogg)"
-
-            chosen, _ = QFileDialog.getSaveFileName(
-                self,
-                self.translator.tr("dialog_save_audio"),
-                default_name,
-                file_filter,
-            )
-            if not chosen:
-                logger.info("Audio recording save dialog cancelled by user")
-                return None
-            target_path = Path(chosen)
-        else:
-            target_path = Path(file_path)
-
-        saved_path = save_audio_recording(
-            file_path=target_path,
-            samples=audio_data,
-            sample_rate=sample_rate,
-            prefer_flac=prefer_flac,
-        )
-        _dbg.file_write(saved_path, samples=len(audio_data), fs=sample_rate)
-        return saved_path
+        logger.warning("No recording available: this engine does not record")
+        self.statusBar().showMessage(self.translator.tr("no_recording_available"), 6000)
+        return None
 
     def _save_session_recording(self, file_path: Path | str | None = None) -> Path | None:
         """Move the hardware session's temporary FLAC (with its tags) to the chosen path."""
@@ -2178,7 +2245,9 @@ class MainWin(QMainWindow):
         self.lbl_test_name.setText(tr("test_name"))
         self.txt_test_name.setPlaceholderText(tr("test_name_placeholder"))
         self.lbl_caliber.setText(tr("caliber"))
-        self.lbl_bph.setText(tr("bph"))
+        self.lbl_bph.setText(tr("quartz_steps") if self.chk_quartz.isChecked() else tr("bph"))
+        self.lbl_quartz.setText(tr("quartz"))
+        self.chk_quartz.setToolTip(tr("quartz_tooltip"))
         self.lbl_lift.setText(tr("lift_angle"))
         self.lbl_position.setText(tr("position"))
         self.lbl_device.setText(tr("in_device"))
@@ -2217,6 +2286,9 @@ class MainWin(QMainWindow):
         self.btn_save_csv.setText(tr("btn_save_csv"))
         self.btn_export_test_results.setText(tr("btn_export_test_results"))
         self.btn_buy_coffee.setText(tr("btn_buy_coffee"))
+        self.btn_about.setText(tr("btn_about"))
+        self.btn_calibrate.setText(tr("btn_calibrate"))
+        self.btn_calibrate.setToolTip(tr("btn_calibrate_tooltip"))
         self.btn_buy_coffee.setToolTip(tr("coffee_tooltip").format(url=BUY_ME_A_COFFEE_URL))
         arrow = "▼" if self.btn_global_stats.isChecked() else "▶"
         self.btn_global_stats.setText(f"{arrow} {tr('btn_global_stats')}")
@@ -2245,20 +2317,49 @@ class MainWin(QMainWindow):
         self.waveform_plot.setLabel("bottom", tr("waveform_x"))
         self.waveform_plot.setLabel("left", tr("waveform_y"))
 
+    def stabilization_s(self) -> float:
+        """Selected stabilization time in seconds."""
+        return float(self.cmb_stab.currentData())
+
+    def duration_s(self) -> float:
+        """Selected test duration in seconds."""
+        return float(self.cmb_duration.currentData())
+
+    def set_session_timing(
+        self, stabilization_s: float | None = None, duration_s: float | None = None
+    ) -> None:
+        """Select a stabilization time and/or test duration (automation and tests).
+
+        A value that is not one of the choices is added to the list and selected.
+        """
+        for combo, value in ((self.cmb_stab, stabilization_s), (self.cmb_duration, duration_s)):
+            if value is None:
+                continue
+            idx = combo.findData(float(value))
+            if idx < 0:
+                combo.addItem(_format_duration(value), float(value))
+                idx = combo.count() - 1
+            combo.setCurrentIndex(idx)
+
     def current_watch_config(self) -> WatchConfig:
         """Build a `WatchConfig` instance from the active Top Bar controls."""
         bph = int(self.cmb_bph.currentData() or int(self.cmb_bph.currentText()))
         lift_angle = float(self.spn_lift.value())
         sample_rate = int(self.cmb_srate.currentData() or 48000)
-        return WatchConfig(bph=bph, lift_angle=lift_angle, sample_rate=sample_rate)
+        return WatchConfig(
+            bph=bph,
+            lift_angle=lift_angle,
+            sample_rate=sample_rate,
+            quartz=self.chk_quartz.isChecked(),
+        )
 
     def _check_session_duration(self) -> None:
         """Automatically stop capture once (stabilization_s + duration_s) has elapsed."""
         if self._capture_start_monotonic is None:
             return
         elapsed_s = max(0.0, time.monotonic() - self._capture_start_monotonic)
-        stab_s = float(self.spn_stab.value())
-        duration_s = float(self.spn_duration.value())
+        stab_s = self.stabilization_s()
+        duration_s = self.duration_s()
         total_limit_s = stab_s + duration_s
 
         if self._capture_state == "ESTABILIZANDO" and elapsed_s >= stab_s:
@@ -2321,7 +2422,7 @@ class MainWin(QMainWindow):
             self.lbl_stat_drift_val.setText("")
             self._clear_oscilloscope_markers()
 
-        duration_s = float(self.spn_duration.value())
+        duration_s = self.duration_s()
         self.paper_tape_plot.setXRange(0.0, max(10.0, duration_s))
 
         self.btn_start.setEnabled(False)
@@ -2331,7 +2432,7 @@ class MainWin(QMainWindow):
         position = self.cmb_position.currentText()
         base_rate, base_be, base_amp = POSITION_VARIATION.get(position, (+4.5, 0.35, 280.0))
 
-        stab_s = float(self.spn_stab.value())
+        stab_s = self.stabilization_s()
         self._set_capture_state(
             "ESTABILIZANDO" if stab_s > 0.0 else "MIDIENDO",
             engine=type(self.dsp_worker).__name__,
@@ -2400,8 +2501,8 @@ class MainWin(QMainWindow):
             self.cmb_position,
             self.cmb_device,
             self.cmb_srate,
-            self.spn_stab,
-            self.spn_duration,
+            self.cmb_stab,
+            self.cmb_duration,
         ):
             widget.setEnabled(enabled)
 
@@ -2523,8 +2624,8 @@ class MainWin(QMainWindow):
                 confidence=confidence,
             )
 
-        stab_s = float(self.spn_stab.value())
-        duration_s = float(self.spn_duration.value())
+        stab_s = self.stabilization_s()
+        duration_s = self.duration_s()
 
         if self._capture_start_monotonic is not None:
             elapsed_s = max(0.0, time.monotonic() - self._capture_start_monotonic)

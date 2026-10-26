@@ -21,11 +21,14 @@ class WatchConfig:
         lift_angle: Escapement lift angle in degrees (typically 44.0 to 58.0, standard 52.0).
         sample_rate: Audio sampling rate in Hz (e.g., 96000 or 192000,
         default set at 48000).
+        quartz: Quartz watch: ``bph`` counts motor steps per hour (3600 x steps/s), only the
+            rate is measured and ``lift_angle`` is ignored.
     """
 
     bph: int = 21600
     lift_angle: float = 52.0
     sample_rate: int = 48000
+    quartz: bool = False
 
     def __post_init__(self) -> None:
         if self.bph <= 0:
@@ -38,10 +41,11 @@ class WatchConfig:
             logger.error("Invalid WatchConfig sample_rate=%d", self.sample_rate)
             raise ValueError("sample_rate must be a positive integer")
         logger.info(
-            "WatchConfig initialized with bph=%d, lift_angle=%.1f, sample_rate=%d",
+            "WatchConfig initialized with bph=%d, lift_angle=%.1f, sample_rate=%d, quartz=%s",
             self.bph,
             self.lift_angle,
             self.sample_rate,
+            self.quartz,
         )
 
     @property
