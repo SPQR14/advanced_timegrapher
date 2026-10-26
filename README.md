@@ -4,11 +4,15 @@ Cronocomparador (timegrapher) por software para relojes mecánicos: escucha el t
 micrófono y mostrará marcha (s/d), error de batimiento (ms) y amplitud (°), con una GUI en
 PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 
-## Estado (v0.3.0)
+## Estado (v0.5.0)
 
 - El núcleo de medición (DSP) se está **reconstruyendo desde cero, por capas**. Ya existen la
-  captura (fase 1), el detector de batimientos (fase 2) y las métricas (fase 3, implementada y
-  pendiente de confirmación). Todavía no están integradas en la GUI (fase 5).
+  captura (fase 1), el detector de batimientos (fase 2), las métricas (fase 3) y la corrección
+  del reloj de la tarjeta de sonido (fase 4). Se usan desde la consola
+  (`python -m adv_tg.tools.*`); todavía no están integradas en la GUI (fase 5, la siguiente).
+- La deriva del reloj de la tarjeta (ppm) se calibra por dispositivo y viaja dentro de cada
+  grabación, de modo que `measure` corrige la marcha sola (ver "Fase 4").
+- El botón **☕ Buy me a coffee** abre https://buymeacoffee.com/sqpr14 en el navegador.
 - La GUI tiene todos los paneles, exportaciones e idiomas (EN/ES). **Con un dispositivo de
   audio real muestra la señal pero todavía NO mide**: forma de onda cruda, nivel/saturación e
   ingesta de audio (`CaptureStreamWorker`), sin marcha, error de batimiento ni amplitud.
@@ -23,8 +27,23 @@ PyQt6 + pyqtgraph. Desciende del proyecto anterior "Watch Escape Analyzer EVO".
 | 1 | Captura: flujo de muestras sin bloqueos + herramienta de consola; captura en proceso aparte (1d) y audio real en la GUI sin medir (1b) | **terminada**; validada con el CM18 (ingesta 100 %) |
 | 2 | Detector de batimientos incremental (P1/P2/P3), alineación fina por plantillas de tic y tac (`t_fine`) + audio WAV/FLAC | **terminada**: validado con sintético y con 5 grabaciones reales; frente a tg queda a ≤ 1.4 s/d y ≤ 0.25 ms (ver [`docs/resultados_pruebas_fase2.md`](docs/resultados_pruebas_fase2.md), sección 6) |
 | 3 | Métricas: marcha, error de batimiento, amplitud (`core/metrics.py`, `tools/measure.py`) | **implementada**, pendiente de confirmación: sintético dentro de tolerancia y grabaciones reales dentro de la banda de tg/WAM (ver [`docs/fase3_resultados.md`](docs/fase3_resultados.md)) |
-| 4 | Reloj: deriva del ADC vs host + NTP, calibración manual opcional | **en curso**: estimador, integración con la marcha, calibraciones por dispositivo y etiquetas en las grabaciones (ver [`docs/resultados_fase4.md`](docs/resultados_fase4.md)) |
-| 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | pendiente |
+| 4 | Reloj: deriva del ADC frente al reloj del host + NTP, referencias externas (PPS/GPS, cuarzo), calibración manual, calibraciones por dispositivo y etiquetas en las grabaciones | **terminada** (v0.5.0); quedan la herramienta de medida en vivo y la validación con el Bulova (ver [`docs/resultados_fase4.md`](docs/resultados_fase4.md), sección 8) |
+| 5 | Integración con la GUI (reemplaza `NullStreamWorker`; `MockStreamWorker` queda como herramienta de pruebas) | **siguiente** |
+
+### Versiones
+
+Cada versión menor cierra una fase. La versión vive en `pyproject.toml` y en
+`src/adv_tg/__init__.py` (`__version__`); `tests/test_smoke.py` comprueba que coincidan, así que
+después de cambiarla hay que reinstalar el paquete (`.venv/bin/pip install -e .`). Cada versión
+lleva su etiqueta de git (`vX.Y.Z`).
+
+| Versión | Fecha | Contenido |
+|---------|-------|-----------|
+| v0.1.0 | 23/10/2026 | Fase 0: esqueleto, GUI, modo MOCK, Debugger, CI |
+| v0.2.0 | 23/10/2026 | Fase 1: captura de audio (`SampleStream`, `AudioCapture`, `capture_check`) |
+| v0.3.0 | 24/10/2026 | Fase 2: detector de batimientos, audio WAV/FLAC |
+| v0.4.0 | 24/10/2026 | Fase 3: métricas (marcha, error de batimiento, amplitud) |
+| v0.5.0 | 26/10/2026 | Fase 4: reloj de la tarjeta (ppm ± σ, niveles de confianza, PPS/GPS, calibraciones por dispositivo, etiquetas en FLAC/WAV); botón "Buy me a coffee" |
 
 ## Estructura
 
@@ -41,6 +60,7 @@ src/adv_tg/
 │   └── process_capture.py # ProcessAudioCapture: misma interfaz, captura en proceso aparte
 ├── core/
 │   ├── __init__.py
+│   ├── adc_clock.py       # capa 4: deriva del reloj del ADC (ppm ± σ), PPS, etiquetas
 │   ├── beat_detector.py   # BeatDetector: capa 2, P1/P2/P3 en índices absolutos
 │   ├── beat_types.py      # Beat, BeatFlags, ParityTemplate y definiciones físicas
 │   ├── metrics.py         # capa 3: marcha, error de batimiento, amplitud, tendencia
@@ -73,7 +93,8 @@ src/adv_tg/
 │   └── worker_factory.py  # create_worker(device_id)
 └── utils/
     ├── __init__.py
-    ├── audio_files.py     # lectura/escritura WAV y FLAC (único módulo que usa soundfile)
+    ├── adc_calibration.py # calibraciones del reloj por dispositivo (JSON del usuario)
+    ├── audio_files.py     # lectura/escritura WAV y FLAC + etiquetas (único módulo que usa soundfile)
     ├── audio_io.py        # enumeración de dispositivos, guardado FLAC/Ogg de la GUI
     ├── db/watch_db.csv    # calibres (BPH, ángulo de levantamiento)
     ├── debugger.py        # clase Debugger (trazas)
@@ -289,7 +310,8 @@ audio):
     reales);
   - marcha por ventanas (10 s; solapadas con `window_step_s`) y tendencia en s/d por minuto,
     con aviso si supera 3σ;
-  - parámetro `adc_drift_ppm` para la fase 4 (con 0 se avisa de "sin calibrar").
+  - corrección del reloj de la tarjeta (`adc_drift_ppm` y su σ, fase 4; con 0 se avisa de
+    "sin calibrar").
 - **Error de batimiento (ms):** en los inicios de P1 de las plantillas, 2·|c| de la misma
   regresión.
 - **Amplitud (°):** con el t_lift de las plantillas (inicio de P1 → inicio de P3); tic, tac y
@@ -308,17 +330,6 @@ python -m adv_tg.tools.measure cuarzo.flac --bph 57600 --quartz          # cuarz
 python -m adv_tg.tools.measure vieja.flac --bph 28800 --device "CM18 USB" # usa la calibración guardada del CM18
 ```
 
-Corrección del reloj de la tarjeta (fase 4), por orden: `--adc-drift-ppm`/`--adc-drift-sigma-ppm`
-(`--adc-drift-ppm 0` la desactiva); si no, la de las etiquetas del archivo o la guardada para
-`--device` (la de menor incertidumbre); si no, sin calibrar.
-
-```bash
-python -m adv_tg.tools.adc_calibration set --device "CM18 USB" --ppm 8.3 --sigma 6 --note "Bulova NM10"
-python -m adv_tg.tools.adc_calibration list                       # historial y la que se aplica hoy
-python -m adv_tg.tools.adc_calibration show toma.flac             # etiquetas ADV_TG_* de una grabación
-python -m adv_tg.tools.adc_calibration tag vieja.flac --device "CM18 USB" --date 2026-10-20
-```
-
 Validación (detalle en [`docs/fase3_resultados.md`](docs/fase3_resultados.md)):
 
 - **Sintético:** marcha ±0.2 s/d, error de batimiento ±0.03 ms y amplitud ±2 % en limpio
@@ -335,6 +346,39 @@ Validación (detalle en [`docs/fase3_resultados.md`](docs/fase3_resultados.md)):
   (`docs/fase3_resultados.md`, secciones 7 y 8).
 - **Incertidumbre de la marcha por ventanas:** la σ de covarianza por un factor de ruido
   correlacionado (`window_sigma_factor`, ≥ 1).
+
+## Fase 4: reloj de la tarjeta de sonido
+
+La marcha se mide contando muestras, así que hereda el error del cristal de la tarjeta:
+1 ppm = 0.0864 s/d. El CM18 va a unos +8 ppm (≈ −0.7 s/d de sesgo); una tarjeta USB típica
+puede llegar a ±30–50 ppm (±2.6–4.3 s/d). Detalle completo en
+[`docs/resultados_fase4.md`](docs/resultados_fase4.md).
+
+- `core/adc_clock.py`: estima los ppm ± σ comparando el contador de muestras con el reloj del
+  host (envolvente inferior de las marcas de cada bloque, robusta a retrasos y saltos de reloj)
+  o con una referencia externa (`drift_from_ticks`: PPS de un GPS, cuarzo de error conocido;
+  `detect_pps_edges`: PPS eléctrico por entrada de línea).
+- Niveles de confianza: 0 sin calibrar (±30 ppm declarados), 1 reloj del host sin disciplinar,
+  2 reloj disciplinado por NTP, 3 referencia externa o calibración manual.
+- `utils/adc_calibration.py`: calibraciones guardadas por dispositivo y tasa de muestreo
+  (macOS: `~/Library/Application Support/adv_tg/adc_calibration.json`; `ADV_TG_CONFIG_DIR` la
+  cambia). Se aplica la de menor incertidumbre tras sumar el envejecimiento del cristal
+  (1 ppm/año).
+- Las grabaciones de `capture_check` llevan la calibración en sus etiquetas (`ADV_TG_ADC_DRIFT_*`);
+  `measure` la aplica sola. Orden: `--adc-drift-ppm`/`--adc-drift-sigma-ppm`
+  (`--adc-drift-ppm 0` la desactiva); si no, la de menor incertidumbre entre las etiquetas del
+  archivo y la guardada para `--device`; si no, sin calibrar.
+
+```bash
+python -m adv_tg.tools.adc_calibration set --device "CM18 USB" --ppm 8.3 --sigma 6 --note "Bulova NM10"
+python -m adv_tg.tools.adc_calibration list                       # historial y la que se aplica hoy
+python -m adv_tg.tools.adc_calibration show toma.flac             # etiquetas ADV_TG_* de una grabación
+python -m adv_tg.tools.adc_calibration tag vieja.flac --device "CM18 USB" --date 2026-10-20
+```
+
+Pendiente: herramienta de medida en vivo (`python -m adv_tg.tools.adc_clock`) y validación con
+el Bulova (≈ +8 ppm con el CM18). Para la referencia PPS acústica basta un GPS con salida PPS y
+un zumbador pegado al micrófono (`docs/resultados_fase4.md`, secciones 2.3 y 8.3).
 
 ## Instalación
 
