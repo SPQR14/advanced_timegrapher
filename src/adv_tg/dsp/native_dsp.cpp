@@ -10,6 +10,12 @@
 #include <stdexcept>
 #include <tuple>
 
+#if __has_include("native_dsp_source_hash.h")
+#include "native_dsp_source_hash.h"
+#else
+#define NATIVE_DSP_SOURCE_SHA256 ""
+#endif
+
 namespace py = pybind11;
 
 namespace adv_tg_dsp {
@@ -596,4 +602,6 @@ PYBIND11_MODULE(adv_tg_dsp_native, m) {
         py::arg("edge"),
         "scipy.signal.sosfiltfilt(sos, x) with odd padding of length edge (zi = sosfilt_zi(sos))."
     );
+
+    m.attr("SOURCE_SHA256") = NATIVE_DSP_SOURCE_SHA256;
 }

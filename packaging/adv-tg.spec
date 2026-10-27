@@ -33,6 +33,12 @@ if samples_dir.exists():
 # sounddevice bundles PortAudio on macOS and Windows, but Linux uses system PortAudio.
 # If libportaudio is present on the Linux build host, bundle it directly into the package.
 binaries = []
+try:
+    from PyInstaller.utils.hooks import collect_dynamic_libs
+    binaries += collect_dynamic_libs("adv_tg")
+except Exception:
+    pass
+
 dsp_dir = ROOT / "src" / "adv_tg" / "dsp"
 if dsp_dir.exists():
     for ext_pattern in ("*.so", "*.pyd", "*.dylib"):

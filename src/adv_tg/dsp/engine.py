@@ -13,6 +13,8 @@ gated: a slope or denominator below ``GATE`` (1e-12) counts as zero, in C++ and 
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -41,6 +43,18 @@ try:
 
     _HAS_NATIVE = True
     _dbg.logger.info("adv_tg.dsp: extensión C++ cargada")
+    _cpp = Path(__file__).resolve().parent / "native_dsp.cpp"
+    if _cpp.is_file():
+        try:
+            _current_sha = hashlib.sha256(_cpp.read_bytes()).hexdigest()
+            _built_sha = getattr(_native, "SOURCE_SHA256", "")
+            if _built_sha and _current_sha != _built_sha:
+                _dbg.logger.warning(
+                    "adv_tg.dsp: native_dsp.cpp ha cambiado tras la última compilación. "
+                    "Recompila la extensión nativa con: pip install -e ."
+                )
+        except Exception:
+            pass
 except ImportError as err:  # pragma: no cover - depends on the build
     _native = None
     _HAS_NATIVE = False
@@ -62,8 +76,8 @@ def _scipy_signal() -> Any:
     except ImportError as exc:
         raise DspBackendError(
             "Falta la extensión C++ de adv_tg (adv_tg.dsp.adv_tg_dsp_native) y SciPy no está "
-            "instalado. Reinstala con un compilador de C++ (pip install -e .) o instala SciPy "
-            "(pip install scipy)."
+            "instalado. Reinstala con un compilador de C++ (pip install -e .) o instala el respaldo con: "
+            'pip install "advanced-timegrapher[fallback]".'
         ) from exc
     return signal
 

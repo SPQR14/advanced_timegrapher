@@ -1,15 +1,39 @@
 # Empaquetado y Distribución Multiplataforma (Beta)
 
-Este directorio contiene las especificaciones y utilidades para construir los binarios de la beta (macOS `.app`/`.zip`, Windows `.zip`, Linux `.tar.gz`) y distribuirlos a través de GitHub Releases y GitHub Actions al crear una etiqueta (`v0.6.0-beta.1` o similar).
+Este directorio contiene las especificaciones y utilidades para construir los binarios de la beta (macOS `.app`/`.zip`, Windows `.zip`, Linux `.tar.gz`) y distribuirlos a través de GitHub Releases y GitHub Actions al crear una etiqueta (`v0.6.1-beta.2` o similar).
 
 | Archivo | Para qué |
 |---|---|
-| `INSTRUCCIONES_GEMINI.md` | Encargo pendiente: wheels precompilados con cibuildwheel, app construida desde el wheel, macOS Intel, prueba de humo estricta |
 | `launcher.py` | Script de entrada: invoca `multiprocessing.freeze_support()` antes de cualquier importación pesada |
 | `adv-tg.spec` | Especificación de PyInstaller validada (carpeta única; `.app` en macOS con inyección de `Info.plist` e icono) |
 | `macos/Info.plist` | Configuración del bundle de macOS, incluyendo **`NSMicrophoneUsageDescription`** e icono |
 | `macos/adv-tg.icns` | Icono multi-resolución de macOS (16x16 hasta 1024x1024) |
 | `windows/adv-tg.ico` | Icono estándar para ejecutables de Windows |
+
+---
+
+## Flujo de Construcción: Wheels → App Bundle
+
+Para garantizar que los paquetes instalables con `pip` y los ejecutables empaquetados lleven **exactamente el mismo binario precompilado**:
+
+```
+GitHub Actions:
+ 1. [cibuildwheel]  ──> Compila wheels nativos (cp311, cp312, cp313 para Linux, macOS arm64/x86_64, Windows)
+ 2. [PyInstaller]   ──> Instala el wheel compilado ('pip install <wheel>') y empaqueta la aplicación standalone
+ 3. [Strict Smoke]  ──> Valida que la app arranca, carga la extensión C++, excluye SciPy y ejecuta medición
+ 4. [GitHub Release]──> Publica los 4 bundles de aplicación, todos los wheels y el sdist
+```
+
+### Tabla de Artefactos de Release
+
+| Artefacto | Plataforma y Arquitectura | Tipo |
+|---|---|---|
+| `adv-tg-macos-arm64.zip` | macOS Apple Silicon (M1/M2/M3/M4) | Bundle `.app` con Info.plist de micrófono |
+| `adv-tg-macos-x86_64.zip` | macOS Intel | Bundle `.app` con Info.plist de micrófono |
+| `adv-tg-windows-x64.zip` | Windows 10/11 x64 | Carpeta standalone con `adv-tg.exe` e icono |
+| `adv-tg-linux-x86_64.tar.gz` | Linux x86_64 (glibc / manylinux) | Carpeta standalone con PortAudio integrado |
+| `advanced_timegrapher-*.whl` | Multiplataforma (Python 3.11–3.13) | Wheels binarios precompilados (sin necesidad de compilador C++) |
+| `advanced_timegrapher-*.tar.gz` | Código fuente universal | Source distribution (sdist) |
 
 ---
 

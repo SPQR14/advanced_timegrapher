@@ -26,6 +26,7 @@ CMakeCache.txt
 *.dll
 *.pyd
 *.a
+src/adv_tg/dsp/native_dsp_source_hash.h
 
 # Qt / PyQt6
 *.qm

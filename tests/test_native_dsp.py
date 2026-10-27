@@ -151,3 +151,21 @@ def test_fallback_matches_native_when_both_exist() -> None:
         ref = sosfiltfilt(sos, x)
     if is_native_dsp_available():
         np.testing.assert_allclose(sosfiltfilt(sos, x), ref, rtol=0, atol=1e-10)
+
+
+@native
+def test_native_dsp_source_hash_matches_cpp() -> None:
+    """If native_dsp.cpp exists in the workspace, its SHA-256 must match the compiled module."""
+    import hashlib
+    from pathlib import Path
+
+    from adv_tg.dsp import adv_tg_dsp_native
+
+    cpp_path = Path(__file__).resolve().parent.parent / "src" / "adv_tg" / "dsp" / "native_dsp.cpp"
+    if cpp_path.is_file():
+        expected_sha = hashlib.sha256(cpp_path.read_bytes()).hexdigest()
+        actual_sha = getattr(adv_tg_dsp_native, "SOURCE_SHA256", None)
+        assert actual_sha == expected_sha, (
+            f"El hash compilado ({actual_sha}) no coincide con el código fuente ({expected_sha}). "
+            "Recompila la extensión con: pip install -e ."
+        )
