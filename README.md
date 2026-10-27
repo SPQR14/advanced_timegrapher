@@ -80,7 +80,14 @@ the first time your system will warn you. This is expected; follow the steps bel
 
 ### Option B: from the source code (for technical users)
 
-Requires **Python 3.11 or later** and Git.
+Requires **Python 3.11 or later**, Git and a **C++ compiler** (the analysis core has a C++
+part that is built during the installation):
+
+- **macOS:** Xcode Command Line Tools: run `xcode-select --install` in Terminal.
+- **Windows:** [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+  with the **Desktop development with C++** workload.
+- **Linux:** `sudo apt install build-essential python3-dev` (Debian/Ubuntu) or your
+  distribution's equivalent.
 
 ```bash
 git clone https://github.com/SPQR14/advanced_timegrapher.git
@@ -113,7 +120,7 @@ Terminal app (or your IDE) will ask for microphone access.
      beat error are not affected, but the **amplitude will only be indicative**.
 4. Choose the **Stabilization** time (10, 15 or 20 s): the app listens but does not record
    figures yet, so the watch can settle after you put it on the microphone.
-5. Choose the **Test Duration** (30 s to 1 h). 60 s is a good start; for comparing positions use
+5. Choose the **Test Duration** (12 s to 1 h). 60 s is a good start; for comparing positions use
    2 minutes or more.
 6. Optionally type a **Test Name** (it is used in the exported files).
 7. Press **START**. The status bar shows *STABILIZING…* and then *MEASURING*. The first figures
@@ -177,7 +184,8 @@ shows the history and lets you delete it.
 
 - **Record Audio**: saves the test's sound as a FLAC file, with the microphone, date and clock
   calibration stored inside the file. Press it during the test and it will ask where to save
-  when the test ends; press it after the test to save the last one.
+  when the test ends; press it after the test to save the last one. Only available for tests
+  of up to **240 s** (longer recordings would take hundreds of MB).
 - **Save Position**: adds the current result to the positions table; **Global Statistics
   (Positional Delta)** shows the differences between positions.
 - **Export Results to CSV**, **Export Test Results**, **Export Traces**, **Print Traces**: the
@@ -324,7 +332,14 @@ así que la primera vez el sistema avisa. Es normal; sigue estos pasos.
 
 ### Opción B: desde el código fuente (usuarios técnicos)
 
-Requiere **Python 3.11 o posterior** y Git.
+Requiere **Python 3.11 o posterior**, Git y un **compilador de C++** (el núcleo del análisis
+tiene una parte en C++ que se compila durante la instalación):
+
+- **macOS:** Xcode Command Line Tools: ejecuta `xcode-select --install` en Terminal.
+- **Windows:** [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+  con la carga de trabajo **Desarrollo para el escritorio con C++**.
+- **Linux:** `sudo apt install build-essential python3-dev` (Debian/Ubuntu) o el equivalente
+  de tu distribución.
 
 ```bash
 git clone https://github.com/SPQR14/advanced_timegrapher.git
@@ -359,7 +374,7 @@ aplicación Terminal (o tu editor) pedirá acceso al micrófono.
      orientativa**.
 4. Elige la **Estabilización** (10, 15 o 20 s): la aplicación escucha pero aún no registra
    cifras, para que el reloj se asiente después de colocarlo.
-5. Elige la **Duración Test** (de 30 s a 1 h). 60 s está bien para empezar; para comparar
+5. Elige la **Duración Test** (de 12 s a 1 h). 60 s está bien para empezar; para comparar
    posiciones usa 2 minutos o más.
 6. Si quieres, escribe un **Nombre de la prueba** (se usa en los archivos exportados).
 7. Pulsa **INICIAR**. La barra de estado muestra *ESTABILIZANDO…* y después *MIDIENDO*. Las
@@ -426,7 +441,8 @@ ventana muestra el historial y permite borrarlo.
 
 - **Grabar Sonido**: guarda el sonido de la prueba en un archivo FLAC, con el micrófono, la
   fecha y la calibración del reloj dentro del archivo. Pulsado durante la prueba, pregunta dónde
-  guardarlo al terminar; pulsado después, guarda la última prueba.
+  guardarlo al terminar; pulsado después, guarda la última prueba. Solo está disponible en
+  pruebas de hasta **240 s** (las grabaciones más largas ocuparían cientos de MB).
 - **Guardar Posición**: añade el resultado actual a la tabla de posiciones; **Estadísticas
   Globales (Delta Posicional)** muestra las diferencias entre posiciones.
 - **Exportar resultados a CSV**, **Exportar resultados de la prueba**, **Exportar Trazas** e

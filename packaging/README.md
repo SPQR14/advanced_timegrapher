@@ -4,6 +4,7 @@ Este directorio contiene las especificaciones y utilidades para construir los bi
 
 | Archivo | Para qué |
 |---|---|
+| `INSTRUCCIONES_GEMINI.md` | Encargo pendiente: wheels precompilados con cibuildwheel, app construida desde el wheel, macOS Intel, prueba de humo estricta |
 | `launcher.py` | Script de entrada: invoca `multiprocessing.freeze_support()` antes de cualquier importación pesada |
 | `adv-tg.spec` | Especificación de PyInstaller validada (carpeta única; `.app` en macOS con inyección de `Info.plist` e icono) |
 | `macos/Info.plist` | Configuración del bundle de macOS, incluyendo **`NSMicrophoneUsageDescription`** e icono |

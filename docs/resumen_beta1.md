@@ -507,3 +507,51 @@ Al importar el paquete se aíslan las DLL de Qt del venv frente a otras instalac
 GNU General Public License v3.0 (ver `LICENSE`). El código de otros timegraphers con licencia
 incompatible (p. ej. `tg`, GPLv2-only) no se copia ni se porta: el núcleo es implementación
 propia.
+
+## Después de la beta 1: C++, sin SciPy, pruebas largas
+
+Rama `feature/UI_comprehensive_paths_CPP_optimizations` (26/10/2026).
+
+### Núcleo DSP sin SciPy (`src/adv_tg/dsp/`)
+
+- `filters.py` (numpy): diseño Butterworth paso banda en secciones SOS (`butter_bandpass_sos`),
+  `sosfilt_zi` y la regla de relleno de `sosfiltfilt`. Es un port línea a línea de SciPy 1.18
+  (`buttap`, `lp2bp_zpk`, `bilinear_zpk`, `zpk2sos` con emparejamiento `"nearest"`): coeficientes
+  **idénticos** (diferencia 0) en 96 configuraciones (44.1–192 kHz, órdenes 1–6, 4 bandas).
+- `native_dsp.cpp` (pybind11, `setup.py`): envolvente de cada celda (filtro de fase cero, FIR de
+  Hilbert y media móvil), búsqueda de sub-eventos (con la regla de mesetas de
+  `scipy.signal.find_peaks` y su respaldo por `argmax` solo si no hay ningún máximo local),
+  `sosfilt` y `sosfiltfilt`. Libera el GIL.
+- `engine.py`: usa el C++; sin la extensión recurre a SciPy si está instalado
+  (`DspBackendError` si tampoco). SciPy queda solo como dependencia de desarrollo (referencia
+  de los tests) y el `.spec` lo excluye del paquete (~98 MB menos en el entorno).
+- **Noise gate**: toda división cuyo denominador sea < `GATE` = 1e-12 cuenta como cero (pendiente
+  de la interpolación del inicio, `a0` de cada sección). Compilación con `-ffast-math
+  -fno-finite-math-only` (NaN/inf conservan su sentido); en Windows `/fp:fast`.
+- Verificación: las 5 grabaciones dan **los mismos batimientos** que el detector original con
+  SciPy (máx. Δ`t_fine` 2.3e-10 muestras, Δp3 0); el detector va un 12–19 % más rápido.
+- Requisito nuevo: instalar desde el código necesita un compilador de C++ (README).
+- Eliminado: `BeatDetector._split` (ahora en `engine`) y `correlate_burst` (sin uso).
+
+### Pruebas largas y gráficas
+
+- Duraciones de 12 s a **1 h** (se quitaron 2, 12 y 24 h hasta optimizar el resto).
+- **Grabación** solo en pruebas de hasta 240 s (`RECORDING_MAX_DURATION_S`): botón desactivado
+  con explicación, el motor no crea el FLAC temporal (`MeasureStreamWorker.set_recording_enabled`)
+  y el MOCK ya no puede generar en memoria el audio de una prueba larga.
+- **Cinta de papel**: trazo de 1 px, *downsampling* por picos y recorte a la vista; símbolos
+  solo hasta 240 puntos por curva (1 min). Redibujado con 1 h de datos: **7 ms** (antes 1.8 s;
+  un trazo de 1.8 px con antialiasing costaba 1.5 s aun con *downsampling*).
+- Carpetas de registros y calibraciones: solo en el menú **Herramientas** y en **Acerca de**
+  (función común `ui.dialogs.open_folder`).
+
+### Perfil del análisis en vivo (4R36, con el C++)
+
+| Etapa | % del tiempo |
+|---|---|
+| Métricas (`compute_metrics`), de ello `fit_parity_weighted` 55 % | 60 % |
+| Detector: seguimiento 13 %, alineación fina 9 %, sub-eventos 9 %, envolvente 8.5 %, suelo de ruido 7.6 % | 32 % |
+| Forma de onda del osciloscopio | 5 % |
+
+Siguiente candidato a C++ si hiciera falta: el ajuste robusto de las métricas
+(`fit_parity_weighted`).

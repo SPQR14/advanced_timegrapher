@@ -33,6 +33,12 @@ if samples_dir.exists():
 # sounddevice bundles PortAudio on macOS and Windows, but Linux uses system PortAudio.
 # If libportaudio is present on the Linux build host, bundle it directly into the package.
 binaries = []
+dsp_dir = ROOT / "src" / "adv_tg" / "dsp"
+if dsp_dir.exists():
+    for ext_pattern in ("*.so", "*.pyd", "*.dylib"):
+        for lib in dsp_dir.glob(ext_pattern):
+            binaries.append((str(lib), "adv_tg/dsp"))
+
 if sys.platform.startswith("linux"):
     try:
         out = subprocess.check_output(["ldconfig", "-p"], text=True, stderr=subprocess.DEVNULL)
@@ -57,13 +63,16 @@ if sys.platform.startswith("linux"):
 # 3. Child processes and lazy imports:
 # The capture and analysis processes are spawned independently and import these modules.
 hiddenimports = [
+    "adv_tg.dsp",
+    "adv_tg.dsp.engine",
+    "adv_tg.dsp.filters",
+    "adv_tg.dsp.adv_tg_dsp_native",
     "adv_tg.audio.capture_process",
     "adv_tg.audio.analysis_process",
     "sounddevice",
     "soundfile",
     "cffi",
     "numpy",
-    "scipy",
     "PyQt6.QtCore",
     "PyQt6.QtGui",
     "PyQt6.QtWidgets",
@@ -86,7 +95,8 @@ a = Analysis(  # noqa: F821
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["matplotlib", "pytest", "pytestqt", "tkinter", "IPython"],
+    # SciPy is not used at runtime (filter design in numpy, filtering in C++): never bundle it.
+    excludes=["matplotlib", "pytest", "pytestqt", "tkinter", "IPython", "scipy"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)  # noqa: F821

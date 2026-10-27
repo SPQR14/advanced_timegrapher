@@ -345,6 +345,7 @@ class MeasureStreamWorker(CaptureStreamWorker):
         )
         self._store = calibration_store
         self._record = record and self._replay is None
+        self._record_enabled = True  # per session, see set_recording_enabled
         self._rec_lock = threading.Lock()
         self._recording: Path | None = None
         self._recording_frames = 0
@@ -467,7 +468,7 @@ class MeasureStreamWorker(CaptureStreamWorker):
         self.discard_recording()
         path: Path | None = None
         tags: dict[str, str] = {}
-        if self._record:
+        if self._record and self._record_enabled:
             fd, tmp = tempfile.mkstemp(prefix="adv_tg_sesion_", suffix=".flac")
             os.close(fd)
             path = Path(tmp)
@@ -505,6 +506,10 @@ class MeasureStreamWorker(CaptureStreamWorker):
             self._recording_frames = frames
         if frames <= 0 and path is not None:
             path.unlink(missing_ok=True)
+
+    def set_recording_enabled(self, enabled: bool) -> None:
+        """Record the next sessions or not (the GUI disables it for long tests)."""
+        self._record_enabled = bool(enabled)
 
     @property
     def recording_path(self) -> Path | None:

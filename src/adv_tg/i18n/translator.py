@@ -56,6 +56,7 @@ class Translator:
                 "Microphone (desktop apps), and check the input device and its volume."
             ),
             "no_signal_other": "No sound from the microphone: check the input device, its volume and that it is not muted.",
+            "recording_too_long": "Recording is only available for tests up to {limit} s",
             "btn_report": "Report",
             "btn_report_tooltip": "Create a zip with logs and settings to attach to a GitHub issue",
             "report_title": "Report a result or a problem",
@@ -77,6 +78,10 @@ class Translator:
             "report_done": "Report saved:\n{path}\n\nNow open GitHub and attach this file.",
             "report_open_github": "Open GitHub",
             "report_show_file": "Show file",
+            "open_logs_folder": "Open Logs Folder",
+            "open_calibration_folder": "Open Calibration Folder",
+            "menu_help": "Help",
+            "menu_tools": "Tools",
             "btn_about": "About",
             "about_title": "About Advanced Timegrapher",
             "about_body": (
@@ -202,6 +207,7 @@ class Translator:
                 "Micrófono (aplicaciones de escritorio) y revisa el dispositivo y su volumen."
             ),
             "no_signal_other": "No llega sonido del micrófono: revisa el dispositivo, su volumen y que no esté silenciado.",
+            "recording_too_long": "La grabación solo está disponible en pruebas de hasta {limit} s",
             "btn_report": "Reportar",
             "btn_report_tooltip": "Crea un zip con registros y ajustes para adjuntar en GitHub",
             "report_title": "Reportar un resultado o un problema",
@@ -223,6 +229,10 @@ class Translator:
             "report_done": "Reporte guardado:\n{path}\n\nAhora abre GitHub y adjunta este archivo.",
             "report_open_github": "Abrir GitHub",
             "report_show_file": "Mostrar archivo",
+            "open_logs_folder": "Abrir carpeta de registros",
+            "open_calibration_folder": "Abrir carpeta de calibración",
+            "menu_help": "Ayuda",
+            "menu_tools": "Herramientas",
             "btn_about": "Acerca de",
             "about_title": "Acerca de Advanced Timegrapher",
             "about_body": (

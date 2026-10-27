@@ -48,7 +48,6 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.signal import butter, sosfiltfilt
 
 from adv_tg.core.adc_clock import (
     AdcDrift,
@@ -66,6 +65,8 @@ from adv_tg.core.metrics import (
     timing_confidence,
 )
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
+from adv_tg.dsp.engine import sosfiltfilt
+from adv_tg.dsp.filters import butter_bandpass_sos, sosfilt_zi
 
 __all__ = ["MeasurementSession", "SessionConfig", "SessionSnapshot"]
 
@@ -207,7 +208,8 @@ class MeasurementSession:
         self._last_beat: Beat | None = None
         self._history: deque[Metrics] = deque(maxlen=DISPLAY_UPDATES)
         lo, hi = self._detector.config.band_hz
-        self._sos = butter(4, [lo, hi], btype="bandpass", fs=fs, output="sos")
+        self._sos = butter_bandpass_sos(4, (lo, hi), fs)
+        self._zi = sosfilt_zi(self._sos)
         la = config.lift_angle_deg or DEFAULT_LIFT_ANGLE_DEG
         pre_s = (
             lift_time_s(DISPLAY_MIN_AMPLITUDE_DEG, la, config.bph) + config.display_pre_ms * 1e-3
@@ -282,7 +284,7 @@ class MeasurementSession:
             x = stream.read(lo, hi, np.float64)
         except SamplesOverwritten:
             return np.zeros(0), float(a)
-        y = sosfiltfilt(self._sos, x)
+        y = sosfiltfilt(self._sos, x, self._zi)
         return np.ascontiguousarray(y[pad : pad + (b - a)]), float(a)
 
     # ------------------------------------------------------------------ display

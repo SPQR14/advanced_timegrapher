@@ -14,6 +14,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
+    QAction,
     QColor,
     QDesktopServices,
     QFont,
@@ -58,11 +59,18 @@ from adv_tg.ui.capture_worker import (
     level_text,
     level_to_quality,
 )
-from adv_tg.ui.dialogs import AboutDialog, CalibrationDialog, LiveDrift, ReportDialog
+from adv_tg.ui.dialogs import (
+    AboutDialog,
+    CalibrationDialog,
+    LiveDrift,
+    ReportDialog,
+    open_folder,
+)
 from adv_tg.ui.measure_worker import MeasureStreamWorker
 from adv_tg.ui.measure_worker import device_name as measure_device_name
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
 from adv_tg.ui.worker_factory import create_worker
+from adv_tg.utils.adc_calibration import config_dir
 from adv_tg.utils.audio_io import AudioDeviceInfo, list_input_devices
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
@@ -143,8 +151,25 @@ QUARTZ_STEPS_PER_S: tuple[int, ...] = (1, 2, 4, 8, 16)
 DEFAULT_QUARTZ_STEPS: int = 1
 
 #: Test durations offered in the top bar (seconds).
-DURATION_CHOICES_S: tuple[int, ...] = (30, 45, 60, 120, 240, 300, 900, 1800, 3600)
+DURATION_CHOICES_S: tuple[int, ...] = (
+    12,
+    24,
+    30,
+    45,
+    60,
+    120,
+    240,
+    300,
+    900,
+    1800,
+    3600,
+)
 DEFAULT_DURATION_S: int = 60
+#: The paper tape draws point symbols up to this many points per curve (1 min at 4/s).
+TAPE_SYMBOL_MAX_POINTS: int = 240
+#: Longest test whose audio is recorded (FLAC of the session; ~66 KB/s with a CM18). Longer
+#: tests are not recorded: the temporary file would grow to hundreds of MB.
+RECORDING_MAX_DURATION_S: int = 240
 #: Stabilization times offered in the top bar (seconds).
 STABILIZATION_CHOICES_S: tuple[int, ...] = (10, 15, 20)
 DEFAULT_STABILIZATION_S: int = 10
@@ -1095,6 +1120,7 @@ class MainWin(QMainWindow):
         self.btn_record.setObjectName("RecordButton")
         self.btn_record.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_record.clicked.connect(lambda: self.record_audio())
+        self.cmb_duration.currentIndexChanged.connect(lambda _i: self._refresh_record_button())
         left_layout.addWidget(self.btn_record)
 
         # Start / Stop Buttons
@@ -1165,7 +1191,7 @@ class MainWin(QMainWindow):
         self.tape_curve_even = self.paper_tape_plot.plot(
             [],
             [],
-            pen=pg.mkPen(color="#00e5ff", width=1.8),
+            pen=pg.mkPen(color="#00e5ff", width=1.0),
             symbol="o",
             symbolSize=5,
             symbolBrush="#00e5ff",
@@ -1175,13 +1201,20 @@ class MainWin(QMainWindow):
         self.tape_curve_odd = self.paper_tape_plot.plot(
             [],
             [],
-            pen=pg.mkPen(color="#ffab00", width=1.8),
+            pen=pg.mkPen(color="#ffab00", width=1.0),
             symbol="o",
             symbolSize=5,
             symbolBrush="#ffab00",
             symbolPen=None,
             name="Tock (Odd)",
         )
+        # Long tests (1 h = 14 400 points per curve): 1-px pens, peak downsampling and view
+        # clipping; symbols only while the trace is short (_update_tape_symbols). With symbols
+        # and 1.8-px antialiased pens one redraw took 1.8 s at 1 h; now ~6 ms.
+        for curve in (self.tape_curve_even, self.tape_curve_odd):
+            curve.setDownsampling(auto=True, method="peak")
+            curve.setClipToView(True)
+        self._tape_symbols = True
         center_layout.addWidget(self.paper_tape_plot, stretch=1)
 
         # Footer bar right beneath Paper Tape Trace with "Center Trace", "Export Traces", and "Print Traces"
@@ -1346,6 +1379,33 @@ class MainWin(QMainWindow):
         self.lbl_capture_health = QLabel()
         self.lbl_capture_health.setObjectName("StatValue")
         self.statusBar().addPermanentWidget(self.lbl_capture_health)
+
+        self._build_menu_bar()
+
+    def _build_menu_bar(self) -> None:
+        """Construct standard multiplatform menu bar with Settings, Folders and Help."""
+        mb = self.menuBar()
+        mb.clear()
+
+        # Tools Menu
+        self.menu_tools = mb.addMenu(self.translator.tr("menu_tools"))
+        self.action_open_logs = QAction(self)
+        self.action_open_logs.triggered.connect(self.open_logs_folder)
+        self.menu_tools.addAction(self.action_open_logs)
+
+        self.action_open_calibration = QAction(self)
+        self.action_open_calibration.triggered.connect(self.open_calibration_folder)
+        self.menu_tools.addAction(self.action_open_calibration)
+
+        # Help Menu
+        self.menu_help = mb.addMenu(self.translator.tr("menu_help"))
+        self.action_report = QAction(self)
+        self.action_report.triggered.connect(lambda: self.open_report_dialog())
+        self.menu_help.addAction(self.action_report)
+
+        self.action_about = QAction(self)
+        self.action_about.triggered.connect(lambda: self.open_about_dialog())
+        self.menu_help.addAction(self.action_about)
 
     def _populate_audio_devices(self) -> list[AudioDeviceInfo]:
         """Populate input audio device selector dynamically via ``list_input_devices()``.
@@ -1633,6 +1693,21 @@ class MainWin(QMainWindow):
         arrow = "▼" if checked else "▶"
         self.btn_global_stats.setText(f"{arrow} {self.translator.tr('btn_global_stats')}")
         logger.debug("Global statistics panel visibility set to %s", checked)
+
+    def _update_tape_symbols(self) -> None:
+        """Point symbols only while the trace has at most ``TAPE_SYMBOL_MAX_POINTS`` points."""
+        want = len(self._tape_times_even) <= TAPE_SYMBOL_MAX_POINTS
+        if want == self._tape_symbols:
+            return
+        self._tape_symbols = want
+        for curve, color in ((self.tape_curve_even, "#00e5ff"), (self.tape_curve_odd, "#ffab00")):
+            if want:
+                curve.setSymbol("o")
+                curve.setSymbolSize(5)
+                curve.setSymbolBrush(color)
+                curve.setSymbolPen(None)
+            else:
+                curve.setSymbol(None)
 
     def _paper_tape_target_range(self) -> tuple[float, float] | None:
         """Y range that centres the trace (None when there is no data)."""
@@ -2006,6 +2081,20 @@ class MainWin(QMainWindow):
             dlg.exec()
         return dlg
 
+    def open_logs_folder(self) -> bool:
+        """Open the log folder in the system's file manager (menu Tools)."""
+        return self._open_folder(LoggerSetup.LOG_DIR, "open_logs_folder")
+
+    def open_calibration_folder(self) -> bool:
+        """Open the settings and calibrations folder in the file manager (menu Tools)."""
+        return self._open_folder(config_dir(), "open_calibration_folder")
+
+    def _open_folder(self, path: Path, label_key: str) -> bool:
+        ok = open_folder(path)
+        if not ok:  # show the path so the user can open it by hand
+            self.statusBar().showMessage(f"{self.translator.tr(label_key)}: {path}", 8000)
+        return ok
+
     def _on_buy_coffee_clicked(self) -> bool:
         """Open the 'Buy me a coffee' page in the default browser.
 
@@ -2211,12 +2300,30 @@ class MainWin(QMainWindow):
         self._recorded_sample_rate = cfg.sample_rate
         return self._recorded_audio, self._recorded_sample_rate
 
+    def recording_allowed(self) -> bool:
+        """Tests up to ``RECORDING_MAX_DURATION_S`` are recorded; longer ones are not."""
+        return self.duration_s() <= RECORDING_MAX_DURATION_S
+
+    def _refresh_record_button(self) -> None:
+        allowed = self.recording_allowed()
+        self.btn_record.setEnabled(allowed)
+        tr = self.translator.tr
+        self.btn_record.setToolTip(
+            "" if allowed else tr("recording_too_long").format(limit=RECORDING_MAX_DURATION_S)
+        )
+
     def record_audio(self, file_path: Path | str | None = None) -> Path | None:
         """Save the session audio: during a session it is saved when the session ends.
 
         Hardware (``MeasureStreamWorker``): the engine records every session to a temporary
-        FLAC with its tags; MOCK: a synthetic tick train of the test length.
+        FLAC with its tags; MOCK: a synthetic tick train of the test length. Tests longer
+        than ``RECORDING_MAX_DURATION_S`` are not recorded.
         """
+        if not self.recording_allowed():
+            msg = self.translator.tr("recording_too_long").format(limit=RECORDING_MAX_DURATION_S)
+            logger.warning("Recording refused: test of %.0f s", self.duration_s())
+            self.statusBar().showMessage(msg, 8000)
+            return None
         if file_path is None and self.dsp_worker is not None and self.dsp_worker.isRunning():
             self._save_audio_on_finish = True
             logger.info(
@@ -2227,6 +2334,8 @@ class MainWin(QMainWindow):
 
     def save_recorded_audio(self, file_path: Path | str | None = None) -> Path | None:
         """Save the last session's audio (FLAC with tags; MOCK: synthetic WAV)."""
+        if self.is_mock_active() and not self.recording_allowed():
+            return None  # the synthetic train would be built for the whole (long) test
         if self.is_mock_active():
             return self._save_mock_recording(file_path)
         if isinstance(self.dsp_worker, MeasureStreamWorker):
@@ -2357,6 +2466,13 @@ class MainWin(QMainWindow):
         self.btn_about.setText(tr("btn_about"))
         self.btn_report.setText(tr("btn_report"))
         self.btn_report.setToolTip(tr("btn_report_tooltip"))
+
+        self.menu_tools.setTitle(tr("menu_tools"))
+        self.action_open_logs.setText(tr("open_logs_folder"))
+        self.action_open_calibration.setText(tr("open_calibration_folder"))
+        self.menu_help.setTitle(tr("menu_help"))
+        self.action_report.setText(tr("btn_report"))
+        self.action_about.setText(tr("btn_about"))
         self.btn_calibrate.setText(tr("btn_calibrate"))
         self.btn_calibrate.setToolTip(tr("btn_calibrate_tooltip"))
         self.btn_buy_coffee.setToolTip(tr("coffee_tooltip").format(url=BUY_ME_A_COFFEE_URL))
@@ -2372,6 +2488,7 @@ class MainWin(QMainWindow):
         self.btn_print_traces.setText(tr("btn_print_traces"))
         self.btn_center_trace.setText(tr("btn_center_trace"))
         self.btn_record.setText(f"● {tr('btn_record_audio').upper()}")
+        self._refresh_record_button()
         self.btn_start.setText(tr("btn_start"))
         self.btn_stop.setText(tr("btn_stop"))
 
@@ -2471,6 +2588,7 @@ class MainWin(QMainWindow):
 
         self.tape_curve_even.setData([], [])
         self.tape_curve_odd.setData([], [])
+        self._update_tape_symbols()
         self.osc_wave_curve.setData([], [])
         self.osc_envelope_curve.setData([], [])
         self.osc_impulse_markers.setData([], [])
@@ -2520,6 +2638,8 @@ class MainWin(QMainWindow):
         self._active_watch_config = config
         self.dsp_worker.set_input_device(self.selected_device_id())
         self.dsp_worker.update_watch_config(config)
+        if isinstance(self.dsp_worker, MeasureStreamWorker):
+            self.dsp_worker.set_recording_enabled(self.recording_allowed())
         _dbg.process_start(
             "sesión de captura",
             engine=type(self.dsp_worker).__name__,
@@ -2789,6 +2909,7 @@ class MainWin(QMainWindow):
             self._tape_times_odd.append(t_meas)
             self._tape_rate_odd.append(rate_spd + half_be_offset)
 
+            self._update_tape_symbols()
             self.tape_curve_even.setData(self._tape_times_even, self._tape_rate_even)
             self.tape_curve_odd.setData(self._tape_times_odd, self._tape_rate_odd)
             self._autoscale_paper_tape()
