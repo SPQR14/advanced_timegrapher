@@ -1,17 +1,15 @@
-"""DSP of the analysis without SciPy: filter design in numpy, kernels in C++.
+"""DSP of the analysis in pure Python + numpy (no SciPy, no compiled extensions).
 
 * ``filters``: Butterworth band-pass design, ``sosfilt_zi`` and the zero-phase padding rule,
   identical to ``scipy.signal``.
-* ``engine``: native kernels (``adv_tg_dsp_native``, built from ``native_dsp.cpp`` by
-  ``setup.py``) with a SciPy fallback when the extension is missing.
+* ``engine``: vectorised filtering, envelope and candidate kernels (see its docstring).
 """
 
 from adv_tg.dsp.engine import (
     GATE,
-    DspBackendError,
     compute_cell_envelope,
     detect_cell_candidates,
-    is_native_dsp_available,
+    find_local_maxima,
     sosfilt,
     sosfiltfilt,
 )
@@ -19,11 +17,10 @@ from adv_tg.dsp.filters import butter_bandpass_sos, sosfilt_zi, sosfiltfilt_padl
 
 __all__ = [
     "GATE",
-    "DspBackendError",
     "butter_bandpass_sos",
     "compute_cell_envelope",
     "detect_cell_candidates",
-    "is_native_dsp_available",
+    "find_local_maxima",
     "sosfilt",
     "sosfilt_zi",
     "sosfiltfilt",

@@ -78,10 +78,10 @@ the first time your system will warn you. This is expected; follow the steps bel
    your distribution's equivalent.
 2. Download the Linux file, make it executable (`chmod +x <file>`) and run it.
 
-### Option B: using pip (precompiled wheel or from source)
+### Option B: using pip (wheel or from source)
 
-**1. Without a C++ compiler (recommended):**
-Download and install the precompiled wheel from the [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest) page, or point pip directly to the release:
+**1. From the release wheel (recommended):**
+The project is pure Python (no compiler needed). Download and install the wheel from the [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest) page, or point pip directly to the release:
 ```bash
 pip install --find-links https://github.com/SPQR14/advanced_timegrapher/releases/latest advanced-timegrapher
 ```
@@ -99,10 +99,8 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 .venv\Scripts\adv-tg.exe
 ```
-If you have a C++ compiler installed (Xcode Tools on macOS, MSVC Build Tools on Windows, `build-essential` on Linux), the native C++ DSP core is built automatically. If you do not have a C++ compiler, you can install the pure-Python SciPy fallback instead:
-```bash
-pip install -e ".[fallback]"
-```
+No compiler is needed: the whole analysis (filters, envelope, beat detection) is pure Python
+on top of numpy; SciPy is not used.
 
 On Linux you may also need `sudo apt install libportaudio2`. On macOS, the first time, the
 Terminal app (or your IDE) will ask for microphone access.
@@ -333,10 +331,10 @@ así que la primera vez el sistema avisa. Es normal; sigue estos pasos.
    equivalente de tu distribución.
 2. Descarga el archivo de Linux, dale permiso de ejecución (`chmod +x <archivo>`) y ábrelo.
 
-### Opción B: mediante pip (wheel precompilado o desde código fuente)
+### Opción B: mediante pip (wheel o desde código fuente)
 
-**1. Sin compilador de C++ (recomendado):**
-Descarga e instala el wheel precompilado desde la página de [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest), o instala directamente apuntando pip al release:
+**1. Desde el wheel del release (recomendado):**
+El proyecto es Python puro (no hace falta compilador). Descarga e instala el wheel desde la página de [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest), o instala directamente apuntando pip al release:
 ```bash
 pip install --find-links https://github.com/SPQR14/advanced_timegrapher/releases/latest advanced-timegrapher
 ```
@@ -354,10 +352,8 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 .venv\Scripts\adv-tg.exe
 ```
-Si tienes un compilador de C++ instalado (Xcode Tools en macOS, MSVC Build Tools en Windows, `build-essential` en Linux), la extensión C++ se compila automáticamente. Si no dispones de compilador, puedes instalar el respaldo en Python puro con SciPy:
-```bash
-pip install -e ".[fallback]"
-```
+No hace falta compilador: todo el análisis (filtros, envolvente, detección de batimientos) es
+Python puro sobre numpy; no se usa SciPy.
 
 En Linux puede hacer falta `sudo apt install libportaudio2`. En macOS, la primera vez, la
 aplicación Terminal (o tu editor) pedirá acceso al micrófono.

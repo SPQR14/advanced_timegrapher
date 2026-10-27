@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel", "pybind11>=2.12"]
+requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -23,14 +23,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-fallback = [
-    "scipy>=1.11",  # pure-Python DSP fallback if native C++ extension is absent
-]
 dev = [
     "pytest>=8.0",
     "pytest-cov",
     "pytest-qt",
-    "scipy>=1.11",  # reference implementation in the DSP tests only (not used at runtime)
     "pre-commit",
 ]
 # Gráficas de análisis (detect_beats --plot): pip install -e ".[plot]"
@@ -65,20 +61,3 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-
-[tool.cibuildwheel]
-build = "cp311-* cp312-* cp313-*"
-skip = "*-musllinux_* pp*"
-test-requires = ["pytest", "scipy"]
-test-command = "pytest {project}/tests/test_native_dsp.py -q"
-
-[tool.cibuildwheel.macos]
-archs = ["arm64", "x86_64"]
-environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
-
-[tool.cibuildwheel.linux]
-archs = ["x86_64"]
-test-skip = "*"
-
-[tool.cibuildwheel.windows]
-archs = ["AMD64"]

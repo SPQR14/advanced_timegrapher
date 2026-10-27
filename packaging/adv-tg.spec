@@ -33,18 +33,6 @@ if samples_dir.exists():
 # sounddevice bundles PortAudio on macOS and Windows, but Linux uses system PortAudio.
 # If libportaudio is present on the Linux build host, bundle it directly into the package.
 binaries = []
-try:
-    from PyInstaller.utils.hooks import collect_dynamic_libs
-    binaries += collect_dynamic_libs("adv_tg")
-except Exception:
-    pass
-
-dsp_dir = ROOT / "src" / "adv_tg" / "dsp"
-if dsp_dir.exists():
-    for ext_pattern in ("*.so", "*.pyd", "*.dylib"):
-        for lib in dsp_dir.glob(ext_pattern):
-            binaries.append((str(lib), "adv_tg/dsp"))
-
 if sys.platform.startswith("linux"):
     try:
         out = subprocess.check_output(["ldconfig", "-p"], text=True, stderr=subprocess.DEVNULL)
@@ -72,7 +60,6 @@ hiddenimports = [
     "adv_tg.dsp",
     "adv_tg.dsp.engine",
     "adv_tg.dsp.filters",
-    "adv_tg.dsp.adv_tg_dsp_native",
     "adv_tg.audio.capture_process",
     "adv_tg.audio.analysis_process",
     "sounddevice",
@@ -101,7 +88,7 @@ a = Analysis(  # noqa: F821
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    # SciPy is not used at runtime (filter design in numpy, filtering in C++): never bundle it.
+    # SciPy is not used at all (filter design and filtering in pure numpy): never bundle it.
     excludes=["matplotlib", "pytest", "pytestqt", "tkinter", "IPython", "scipy"],
     noarchive=False,
 )

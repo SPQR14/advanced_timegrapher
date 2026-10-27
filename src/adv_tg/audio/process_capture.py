@@ -399,8 +399,8 @@ class ProcessAudioCapture:
             _dbg.logger.error("Proceso de captura: %s", self.last_error)
 
     def _on_data_closed(self) -> None:
-        self._child_alive = False
         if self._stopping:
+            self._child_alive = False
             return
         proc = self._proc
         code = None
@@ -411,6 +411,9 @@ class ProcessAudioCapture:
             self.last_error = (
                 f"El proceso de captura de audio terminó inesperadamente (código {code})."
             )
+        # Only now report the child as dead: a reader polling ``is_active`` must already see
+        # the reason in ``last_error`` (otherwise it reports a generic "stopped sending data").
+        self._child_alive = False
         _dbg.logger.error("%s", self.last_error)
 
     # ------------------------------------------------------------------ stop

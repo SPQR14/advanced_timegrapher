@@ -12,16 +12,18 @@ Este directorio contiene las especificaciones y utilidades para construir los bi
 
 ---
 
-## Flujo de Construcción: Wheels → App Bundle
+## Flujo de Construcción (Python puro)
 
-Para garantizar que los paquetes instalables con `pip` y los ejecutables empaquetados lleven **exactamente el mismo binario precompilado**:
+El proyecto es **Python puro** (numpy, sin SciPy y sin extensiones C/C++), así que no hay
+compilación nativa propia: el mismo código se instala con `pip` y se congela con PyInstaller.
 
 ```
-GitHub Actions:
- 1. [cibuildwheel]  ──> Compila wheels nativos (cp311, cp312, cp313 para Linux, macOS arm64/x86_64, Windows)
- 2. [PyInstaller]   ──> Instala el wheel compilado ('pip install <wheel>') y empaqueta la aplicación standalone
- 3. [Strict Smoke]  ──> Valida que la app arranca, carga la extensión C++, excluye SciPy y ejecuta medición
- 4. [GitHub Release]──> Publica los 4 bundles de aplicación, todos los wheels y el sdist
+GitHub Actions (.github/workflows/build.yml):
+ 1. [python-dist]   ──> python -m build: wheel universal (py3-none-any) + sdist
+ 2. [build]         ──> pip install . + PyInstaller en Linux, macOS (arm64) y Windows
+ 3. [Smoke test]    ──> --version y --smoke-test headless: arranca la GUI, comprueba que SciPy
+                        no está cargado y mide una muestra (o ticks sintéticos) sin hardware
+ 4. [release]       ──> Solo con etiqueta v*: publica los 3 bundles, el wheel y el sdist
 ```
 
 ### Tabla de Artefactos de Release
@@ -29,10 +31,9 @@ GitHub Actions:
 | Artefacto | Plataforma y Arquitectura | Tipo |
 |---|---|---|
 | `adv-tg-macos-arm64.zip` | macOS Apple Silicon (M1/M2/M3/M4) | Bundle `.app` con Info.plist de micrófono |
-| `adv-tg-macos-x86_64.zip` | macOS Intel | Bundle `.app` con Info.plist de micrófono |
 | `adv-tg-windows-x64.zip` | Windows 10/11 x64 | Carpeta standalone con `adv-tg.exe` e icono |
-| `adv-tg-linux-x86_64.tar.gz` | Linux x86_64 (glibc / manylinux) | Carpeta standalone con PortAudio integrado |
-| `advanced_timegrapher-*.whl` | Multiplataforma (Python 3.11–3.13) | Wheels binarios precompilados (sin necesidad de compilador C++) |
+| `adv-tg-linux-x86_64.tar.gz` | Linux x86_64 | Carpeta standalone con PortAudio integrado |
+| `advanced_timegrapher-*-py3-none-any.whl` | Cualquier plataforma (Python ≥ 3.11) | Wheel puro (sin compilador) |
 | `advanced_timegrapher-*.tar.gz` | Código fuente universal | Source distribution (sdist) |
 
 ---
