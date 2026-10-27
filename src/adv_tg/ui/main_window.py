@@ -74,6 +74,7 @@ from adv_tg.utils.adc_calibration import config_dir
 from adv_tg.utils.audio_io import AudioDeviceInfo, list_input_devices
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
+from adv_tg.utils.security import sanitize_csv_cell
 from adv_tg.utils.watch_db import load_watch_db
 
 logger = LoggerSetup.setup_logger(__name__)
@@ -1904,47 +1905,45 @@ class MainWin(QMainWindow):
                 writer.writeheader()
 
                 for rec in self._session_records:
-                    writer.writerow(rec)
+                    writer.writerow({k: sanitize_csv_cell(v) for k, v in rec.items()})
                     rows_written += 1
 
                 if self._last_telemetry is not None and not self._session_records:
-                    writer.writerow(
-                        {
-                            "test_name": test_name,
-                            "caliber": caliber,
-                            "bph": cfg.bph,
-                            "lift_angle": f"{cfg.lift_angle:.1f}",
-                            "sample_rate": cfg.sample_rate,
-                            "position": current_pos,
-                            "record_type": "sample",
-                            "elapsed_s": "0.00",
-                            "rate_spd": f"{self._last_telemetry.rate_spd:.2f}",
-                            "beat_error_ms": f"{self._last_telemetry.beat_error_ms:.2f}",
-                            "amplitude_deg": f"{self._last_telemetry.amplitude_deg:.1f}",
-                            "confidence": f"{self._last_telemetry.confidence:.3f}",
-                            "snr_db": "",
-                        }
-                    )
+                    summary_row = {
+                        "test_name": test_name,
+                        "caliber": caliber,
+                        "bph": cfg.bph,
+                        "lift_angle": f"{cfg.lift_angle:.1f}",
+                        "sample_rate": cfg.sample_rate,
+                        "position": current_pos,
+                        "record_type": "sample",
+                        "elapsed_s": "0.00",
+                        "rate_spd": f"{self._last_telemetry.rate_spd:.2f}",
+                        "beat_error_ms": f"{self._last_telemetry.beat_error_ms:.2f}",
+                        "amplitude_deg": f"{self._last_telemetry.amplitude_deg:.1f}",
+                        "confidence": f"{self._last_telemetry.confidence:.3f}",
+                        "snr_db": "",
+                    }
+                    writer.writerow({k: sanitize_csv_cell(v) for k, v in summary_row.items()})
                     rows_written += 1
 
                 for pos, pos_rec in self._saved_positions.items():
-                    writer.writerow(
-                        {
-                            "test_name": test_name,
-                            "caliber": caliber,
-                            "bph": cfg.bph,
-                            "lift_angle": f"{cfg.lift_angle:.1f}",
-                            "sample_rate": cfg.sample_rate,
-                            "position": pos,
-                            "record_type": "saved_position",
-                            "elapsed_s": "",
-                            "rate_spd": f"{pos_rec.rate_spd:.2f}",
-                            "beat_error_ms": f"{pos_rec.beat_error_ms:.2f}",
-                            "amplitude_deg": f"{pos_rec.amplitude_deg:.1f}",
-                            "confidence": f"{pos_rec.confidence:.3f}",
-                            "snr_db": "",
-                        }
-                    )
+                    pos_row = {
+                        "test_name": test_name,
+                        "caliber": caliber,
+                        "bph": cfg.bph,
+                        "lift_angle": f"{cfg.lift_angle:.1f}",
+                        "sample_rate": cfg.sample_rate,
+                        "position": pos,
+                        "record_type": "saved_position",
+                        "elapsed_s": "",
+                        "rate_spd": f"{pos_rec.rate_spd:.2f}",
+                        "beat_error_ms": f"{pos_rec.beat_error_ms:.2f}",
+                        "amplitude_deg": f"{pos_rec.amplitude_deg:.1f}",
+                        "confidence": f"{pos_rec.confidence:.3f}",
+                        "snr_db": "",
+                    }
+                    writer.writerow({k: sanitize_csv_cell(v) for k, v in pos_row.items()})
                     rows_written += 1
 
             _dbg.file_write(out_path, rows=rows_written)
@@ -2004,36 +2003,34 @@ class MainWin(QMainWindow):
                 writer.writeheader()
                 for pos in positions_order:
                     rec = self._saved_positions[pos]
-                    writer.writerow(
-                        {
-                            "test_name": test_name,
-                            "caliber": caliber,
-                            "bph": cfg.bph,
-                            "lift_angle": f"{cfg.lift_angle:.1f}",
-                            "position": pos,
-                            "rate_spd": f"{rec.rate_spd:.2f}",
-                            "beat_error_ms": f"{rec.beat_error_ms:.2f}",
-                            "amplitude_deg": f"{rec.amplitude_deg:.1f}",
-                            "confidence": f"{rec.confidence:.3f}",
-                            "global_mean_spd": "",
-                            "positional_delta_spd": "",
-                        }
-                    )
-                writer.writerow(
-                    {
+                    row = {
                         "test_name": test_name,
                         "caliber": caliber,
                         "bph": cfg.bph,
                         "lift_angle": f"{cfg.lift_angle:.1f}",
-                        "position": "GLOBAL_SUMMARY",
-                        "rate_spd": "",
-                        "beat_error_ms": "",
-                        "amplitude_deg": "",
-                        "confidence": "",
-                        "global_mean_spd": f"{mean_rate:.2f}" if rates else "",
-                        "positional_delta_spd": f"{max_delta:.2f}" if rates else "",
+                        "position": pos,
+                        "rate_spd": f"{rec.rate_spd:.2f}",
+                        "beat_error_ms": f"{rec.beat_error_ms:.2f}",
+                        "amplitude_deg": f"{rec.amplitude_deg:.1f}",
+                        "confidence": f"{rec.confidence:.3f}",
+                        "global_mean_spd": "",
+                        "positional_delta_spd": "",
                     }
-                )
+                    writer.writerow({k: sanitize_csv_cell(v) for k, v in row.items()})
+                summary = {
+                    "test_name": test_name,
+                    "caliber": caliber,
+                    "bph": cfg.bph,
+                    "lift_angle": f"{cfg.lift_angle:.1f}",
+                    "position": "GLOBAL_SUMMARY",
+                    "rate_spd": "",
+                    "beat_error_ms": "",
+                    "amplitude_deg": "",
+                    "confidence": "",
+                    "global_mean_spd": f"{mean_rate:.2f}" if rates else "",
+                    "positional_delta_spd": f"{max_delta:.2f}" if rates else "",
+                }
+                writer.writerow({k: sanitize_csv_cell(v) for k, v in summary.items()})
             _dbg.file_write(out_path, positions=len(positions_order), delta_spd=round(max_delta, 2))
             return out_path
         except Exception as exc:
