@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from adv_tg.utils import security
 from adv_tg.utils.security import anonymize_text, safe_filename_base, sanitize_csv_cell
 
 
@@ -36,7 +37,27 @@ def test_anonymize_text() -> None:
     home = str(Path.home().resolve())
     sample = f"Logs in {home}/Library/Logs and user {user}"
     anonymized = anonymize_text(sample)
-    if user not in ("root", "nobody"):
-        assert user not in anonymized or user == "<USER>"
     if home != "/":
         assert home not in anonymized
+        assert "~/Library/Logs" in anonymized
+
+
+def test_anonymize_short_username_keeps_words(monkeypatch) -> None:
+    import getpass
+
+    monkeypatch.setattr(getpass, "getuser", lambda: "al")
+    # No home replacement: isolates the username rule on every OS (on Windows a fake POSIX
+    # home becomes "\\Users\\al", which would also match inside "C:\\Users\\al").
+    monkeypatch.setattr(security, "_home_variants", lambda: [])
+    text = "Error al abrir /home/al/x.flac; calibration ok; C:\\Users\\al\\logs"
+    out = anonymize_text(text)
+    assert "Error al abrir" in out and "calibration" in out
+    assert "/home/<USER>/x.flac" in out and "C:\\Users\\<USER>\\logs" in out
+
+
+def test_anonymize_long_username_as_word(monkeypatch) -> None:
+    import getpass
+
+    monkeypatch.setattr(getpass, "getuser", lambda: "sqpr14")
+    out = anonymize_text("owner=sqpr14 path=/Volumes/sqpr14/rec.flac sqpr14x")
+    assert out == "owner=<USER> path=/Volumes/<USER>/rec.flac sqpr14x"
