@@ -72,6 +72,33 @@ def test_default_report_name() -> None:
     assert default_report_name().startswith(f"adv_tg_report_{__version__}_")
 
 
+def test_build_report_anonymizes_sensitive_paths(tmp_path: Path) -> None:
+    import getpass
+
+    user = getpass.getuser()
+    home = str(Path.home().resolve())
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "adv_tg.log").write_text(
+        f"Secret path: {home}/secret_file for user {user}", encoding="utf-8"
+    )
+    out, _ = build_report(
+        tmp_path / "r_anon.zip",
+        description=f"Issue on {home} by {user}",
+        log_dir=logs,
+        calibrations=tmp_path / "none.json",
+    )
+    with zipfile.ZipFile(out) as z:
+        txt = z.read("report.txt").decode("utf-8")
+        log = z.read("logs/adv_tg.log").decode("utf-8")
+    if home != "/":
+        assert home not in txt
+        assert home not in log
+    if user not in ("root", "nobody"):
+        assert user not in txt or user == "<USER>"
+        assert user not in log or user == "<USER>"
+
+
 def test_log_dir_per_platform(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ADV_TG_LOG_DIR", str(tmp_path / "x"))
     assert logger_setup.default_log_dir() == (tmp_path / "x").resolve()

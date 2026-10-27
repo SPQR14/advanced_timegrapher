@@ -143,6 +143,17 @@ def test_missing_and_corrupt_files(tmp_path: Path) -> None:
         audio_info(tmp_path / "nope.flac")
 
 
+def test_read_audio_max_frames_limit(tmp_path: Path) -> None:
+    p = write_audio(tmp_path / "large.wav", np.zeros(1000), 48000)
+    # Exceeding the specified max_frames raises AudioFileError
+    with pytest.raises(AudioFileError, match="excede el límite de memoria"):
+        read_audio(p, max_frames=500)
+    # Specifying max_frames greater than frames succeeds
+    assert len(read_audio(p, max_frames=2000).samples) == 1000
+    # Specifying None disables the limit
+    assert len(read_audio(p, max_frames=None).samples) == 1000
+
+
 def test_unsupported_extension_or_subtype(tmp_path: Path) -> None:
     with pytest.raises(AudioFileError, match="extensión"):
         write_audio(tmp_path / "x.mp3", np.zeros(10), 48000)
@@ -312,3 +323,12 @@ def test_read_tags_errors(tmp_path: Path) -> None:
     bad.write_bytes(b"not audio")
     with pytest.raises(AudioFileError):
         read_tags(bad)
+
+
+def test_parse_vorbis_oversized_count() -> None:
+    from adv_tg.utils.audio_files import _parse_vorbis
+
+    # vendor length 0 + count 1000000 with a tiny 12-byte body
+    body = (0).to_bytes(4, "little") + (1_000_000).to_bytes(4, "little") + b"extra"
+    with pytest.raises(ValueError, match="excede el tamaño del bloque"):
+        _parse_vorbis(body)

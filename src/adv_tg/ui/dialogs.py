@@ -11,6 +11,7 @@ calibrations and optionally the last recording) and opens the GitHub issue choos
 
 from __future__ import annotations
 
+import html
 import platform
 import sys
 from datetime import UTC, datetime
@@ -293,19 +294,19 @@ class AboutDialog(QDialog):
         self.setWindowTitle(tr("about_title"))
         self.setMinimumWidth(480)
         layout = QVBoxLayout(self)
-        title = QLabel(f"<h2>Advanced Timegrapher {__version__}</h2>")
+        title = QLabel(f"<h2>Advanced Timegrapher {html.escape(__version__)}</h2>")
         title.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(title)
         body = QLabel(
             tr("about_body").format(
                 repo=REPO_URL,
                 license="GPL-3.0-or-later",
-                python=platform.python_version(),
-                qt=QT_VERSION_STR,
-                pyqt=PYQT_VERSION_STR,
-                system=f"{platform.system()} {platform.release()} ({sys.platform})",
-                config=config_dir(),
-                logs=LoggerSetup.LOG_DIR,
+                python=html.escape(platform.python_version()),
+                qt=html.escape(QT_VERSION_STR),
+                pyqt=html.escape(PYQT_VERSION_STR),
+                system=html.escape(f"{platform.system()} {platform.release()} ({sys.platform})"),
+                config=html.escape(str(config_dir())),
+                logs=html.escape(str(LoggerSetup.LOG_DIR)),
             )
         )
         body.setTextFormat(Qt.TextFormat.RichText)
@@ -355,7 +356,7 @@ class ReportDialog(QDialog):
         self.setWindowTitle(tr("report_title"))
         self.setMinimumWidth(560)
         layout = QVBoxLayout(self)
-        intro = QLabel(tr("report_intro").format(url=ISSUES_URL))
+        intro = QLabel(tr("report_intro").format(url=html.escape(ISSUES_URL)))
         intro.setWordWrap(True)
         intro.setTextFormat(Qt.TextFormat.RichText)
         intro.setOpenExternalLinks(True)
@@ -370,7 +371,7 @@ class ReportDialog(QDialog):
         if recording is None:
             self.chk_recording.setToolTip(tr("report_no_recording"))
         layout.addWidget(self.chk_recording)
-        privacy = QLabel(tr("report_privacy").format(logs=LoggerSetup.LOG_DIR))
+        privacy = QLabel(tr("report_privacy").format(logs=html.escape(str(LoggerSetup.LOG_DIR))))
         privacy.setWordWrap(True)
         privacy.setObjectName("HelpText")
         layout.addWidget(privacy)
