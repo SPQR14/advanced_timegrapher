@@ -74,7 +74,7 @@ from adv_tg.utils.adc_calibration import config_dir
 from adv_tg.utils.audio_io import AudioDeviceInfo, list_input_devices
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
-from adv_tg.utils.security import sanitize_csv_cell
+from adv_tg.utils.security import safe_filename_base, sanitize_csv_cell
 from adv_tg.utils.watch_db import load_watch_db
 
 logger = LoggerSetup.setup_logger(__name__)
@@ -1860,7 +1860,7 @@ class MainWin(QMainWindow):
         """Export session telemetry results, statistics, and saved positions to a CSV file."""
         test_name = self.txt_test_name.text().strip() or "watch_test"
         if file_path is None:
-            default_name = f"{test_name}_results.csv"
+            default_name = f"{safe_filename_base(test_name)}_results.csv"
             chosen, _ = QFileDialog.getSaveFileName(
                 self,
                 self.translator.tr("dialog_save_csv"),
@@ -1956,7 +1956,7 @@ class MainWin(QMainWindow):
         """Export only the global positional statistics and positional delta to a CSV file."""
         test_name = self.txt_test_name.text().strip() or "watch_test"
         if file_path is None:
-            default_name = f"{test_name}_global_stats.csv"
+            default_name = f"{safe_filename_base(test_name)}_global_stats.csv"
             chosen, _ = QFileDialog.getSaveFileName(
                 self,
                 self.translator.tr("dialog_export_test_results"),
@@ -2186,7 +2186,7 @@ class MainWin(QMainWindow):
         """Export the audio and telemetry traces to PNG, PDF, or CSV trace data."""
         test_name = self.txt_test_name.text().strip() or "watch_test"
         if file_path is None:
-            default_name = f"{test_name}_traces.png"
+            default_name = f"{safe_filename_base(test_name)}_traces.png"
             chosen, _ = QFileDialog.getSaveFileName(
                 self,
                 self.translator.tr("dialog_export_traces"),
@@ -2392,7 +2392,7 @@ class MainWin(QMainWindow):
             chosen, _ = QFileDialog.getSaveFileName(
                 self,
                 self.translator.tr("dialog_save_audio"),
-                f"{test_name}.flac",
+                f"{safe_filename_base(test_name)}.flac",
                 "FLAC Audio (*.flac)",
             )
             if not chosen:
@@ -2428,7 +2428,7 @@ class MainWin(QMainWindow):
             chosen, _ = QFileDialog.getSaveFileName(
                 self,
                 self.translator.tr("dialog_save_audio"),
-                f"{test_name}_MOCK.wav",
+                f"{safe_filename_base(test_name)}_MOCK.wav",
                 "WAV Audio (*.wav)",
             )
             if not chosen:
