@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import numpy as np
@@ -199,10 +200,19 @@ def test_beat_error_p1_uses_each_parity_offset() -> None:
     assert m.beat_error_ms == pytest.approx(0.2, abs=1e-6)
 
 
-def test_beat_error_falls_back_to_t_fine_without_p1() -> None:
+def test_beat_error_uses_each_beats_p1_when_a_template_has_none() -> None:
     tic, tac = _templates()
     tac = ParityTemplate(1, 24, tac.envelope, math.nan, tac.onset_p3, tac.onset_ref)
     m = compute_metrics(_beats(be_ms=0.3), (tic, tac), _cfg())
+    assert m.beat_error_point == "p1_beat"
+    assert m.beat_error_ms == pytest.approx(0.3, abs=1e-6)
+
+
+def test_beat_error_falls_back_to_t_fine_without_p1() -> None:
+    tic, tac = _templates()
+    tac = ParityTemplate(1, 24, tac.envelope, math.nan, tac.onset_p3, tac.onset_ref)
+    beats = [dataclasses.replace(b, p1=math.nan) for b in _beats(be_ms=0.3)]
+    m = compute_metrics(beats, (tic, tac), _cfg())
     assert m.beat_error_point == "t_fine"
     assert m.beat_error_ms == pytest.approx(0.3, abs=1e-6)
     assert any("t_fine" in w for w in m.warnings)

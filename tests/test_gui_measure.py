@@ -80,11 +80,14 @@ def test_real_engine_in_the_gui(window, qtbot, tmp_path, monkeypatch) -> None:
     assert np.all(np.isfinite(ye)) and np.all(np.diff(xe) > 0)
     for x_, y_ in ((xe, ye), (xo, yo)):
         assert np.polyfit(x_, y_, 1)[0] == pytest.approx(4.0 / 86.4, rel=0.25)
-    lo, hi = window.paper_tape_plot.getViewBox().viewRange()[1]
-    assert lo <= min(ye.min(), yo.min()) and max(ye.max(), yo.max()) <= hi
-    # COSC limits drawn as slopes over the test duration (60 s)
+    # The view holds the drawn (smoothed) rows, from 0 s over a 60-s window.
+    (x_lo, x_hi), (lo, hi) = window.paper_tape_plot.getViewBox().viewRange()
+    de, do = np.array(window._tape_disp_even), np.array(window._tape_disp_odd)
+    assert lo <= min(de.min(), do.min()) and max(de.max(), do.max()) <= hi
+    assert x_lo == pytest.approx(0.0, abs=1e-6) and x_hi == pytest.approx(60.0)
+    # COSC limits drawn as slopes (+6 s/d = 6/86.4 ms per second) across the view
     cx, cy = window.cosc_upper_line.getData()
-    assert cx[-1] == pytest.approx(60.0) and cy[-1] == pytest.approx(6.0 * 60.0 / 86.4)
+    assert (cy[-1] - cy[0]) / (cx[-1] - cx[0]) == pytest.approx(6.0 / 86.4)
     # Oscilloscope markers at the real instants, inside the drawn beat.
     t, y = window.osc_wave_curve.getData()
     assert t is not None and len(t) > 0
@@ -151,8 +154,10 @@ def test_clock_info_label(window) -> None:
 
 
 def test_manual_pan_pauses_autoscale(window) -> None:
-    window._tape_ms_even[:] = [100.0]
-    window._tape_ms_odd[:] = [101.0]
+    window._tape_x_even[:] = [1.0]
+    window._tape_x_odd[:] = [1.2]
+    window._tape_ms_even[:] = window._tape_disp_even[:] = [100.0]
+    window._tape_ms_odd[:] = window._tape_disp_odd[:] = [101.0]
     window._on_paper_tape_manual_range()
     window._autoscale_paper_tape()
     lo, hi = window.paper_tape_plot.getViewBox().viewRange()[1]

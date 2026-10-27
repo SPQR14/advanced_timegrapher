@@ -1491,10 +1491,9 @@ class BeatDetector:
         if t.env is None:
             lag = float(s)
         else:
-            # correlate only the drop burst: P1/P2 move with the amplitude, P3 is the clock
-            b0 = pre - self.tpl_burst
+            b0, b1 = self._align_window(t)
             kern = self._align_kernel
-            burst = np.convolve(t.env, kern, mode="same")[b0:]
+            burst = np.convolve(t.env, kern, mode="same")[b0:b1]
             bz = burst - burst.mean()
             nb = float(np.sqrt(np.dot(bz, bz)))
             region = np.convolve(seg, kern, mode="same")[b0 : b0 + burst.size + 2 * s]
@@ -1533,6 +1532,11 @@ class BeatDetector:
         if len(t.segs) < c.template_min_beats or math.isnan(ref):
             return math.nan
         return origin + ref
+
+    def _align_window(self, t: _Tpl) -> tuple[int, int]:
+        """Template span ``[b0, b1)`` a beat is correlated on to align it."""
+        # the drop burst: P1/P2 move with the amplitude, P3 is the clock
+        return self.tpl_pre - self.tpl_burst, self.tpl_pre + self.tpl_post
 
     def _anchor_frame(self, t: _Tpl) -> None:
         """Track the lag of a full template against its reference (see

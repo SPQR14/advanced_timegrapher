@@ -252,8 +252,7 @@ the ☕ button in the app).
 
 Free software under the **GNU GPL v3.0 or later** (see [`LICENSE`](LICENSE)). Technical
 documentation (architecture, algorithms, validation and command-line tools, in Spanish):
-[`docs/resumen_beta1.md`](docs/resumen_beta1.md) and the result documents of each phase in
-[`docs/`](docs/).
+[`docs/documentation_v0.6.3-beta3.md`](docs/documentation_v0.6.3-beta3.md).
 
 ---
 
@@ -512,5 +511,4 @@ desde el botón ☕ de la aplicación).
 
 Software libre bajo la licencia **GNU GPL v3.0 o posterior** (ver [`LICENSE`](LICENSE)). La
 documentación técnica (arquitectura, algoritmos, validación y herramientas de consola) está en
-[`docs/resumen_beta1.md`](docs/resumen_beta1.md) y en los documentos de resultados de cada fase
-de [`docs/`](docs/).
+[`docs/documentation_v0.6.3-beta3.md`](docs/documentation_v0.6.3-beta3.md).

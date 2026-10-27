@@ -50,7 +50,7 @@ def test_measure_cli_report_json_csv(
     assert m["rate_s_per_day"] == pytest.approx(6.0, abs=0.3)
     assert m["beat_error_ms"] == pytest.approx(0.5, abs=0.05)
     assert m["amplitude_deg"] == pytest.approx(270.0, rel=0.03)
-    assert m["beat_error_point"] == "p1" and isinstance(m["windows"], list)
+    assert m["beat_error_point"] in ("p1", "p1_beat") and isinstance(m["windows"], list)
     rows = list(csv.DictReader(cs.open(encoding="utf-8")))
     assert len(rows) == len(m["windows"]) >= 2
     assert float(rows[0]["rate_s_per_day"]) == pytest.approx(6.0, abs=1.0)
