@@ -5,7 +5,7 @@ with ``--file``) into a ``SampleStream`` and verifies that ingestion is complete
 
 * ingest ratio >= 99 %,
 * largest gap between blocks < 3 nominal blocks,
-* longest callback < 5000 µs.
+* longest callback < 2000 µs.
 
 With ``--wav``/``--out`` the recording carries tags (``adv_tg.utils.audio_files``): the device,
 the date and the ADC clock calibration stored for that device (``adv_tg.utils.adc_calibration``;
@@ -48,7 +48,7 @@ EXIT_ERROR = 2
 
 MIN_INGEST = 0.99
 MAX_GAP_BLOCKS = 3.0
-MAX_CALLBACK_US = 5000.0
+MAX_CALLBACK_US = 2000.0
 CLIP_DBFS = -1.0
 DEFAULT_FS = 48000
 REPLAY_DEFAULT_BLOCKSIZE = 1024
