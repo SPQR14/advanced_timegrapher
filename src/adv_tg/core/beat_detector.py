@@ -238,6 +238,23 @@ class BeatDetectorConfig:
             mode: on mechanical takes the sound of a parity evolves (lobes, ramps) and the
             lag against a fixed reference jumped too (4R36 rate uncertainty x3, Miyota beat
             error 0.15 -> 0.22 ms), while the live onset is validated against tg/WAM.
+        template_hold_ms: Hysteresis of the P1 onset of mechanical templates. At every refresh
+            the new template is aligned to the previous one (normalised cross-correlation: the
+            slow drift of the frame) and its P1 onset is compared with the held one moved by
+            that lag: within this tolerance (default 0.12 ms) the new onset is taken; beyond
+            it the onset jumped to another sub-event and the held point (plus the lag) is kept.
+            Without it the live beat error spiked (Miyota 15.6 ms, H-50 2.8 ms, CM18 4R36
+            1.4-2.0 ms for an instant) while the batch figures are unchanged (identical on the
+            5 real takes). The same hysteresis on the P3 timing point lowered the scatter of
+            10 s rates on all 5 takes (mean 1.48 -> 1.21 s/d) but moved the batch beat error
+            away from tg/WAM (H-50 0.27 -> 0.06 ms, tg 0.3), so it is off by default
+            (``template_hold_p3``; docs/resultados_beta2.md).
+        template_hold_p3: Apply the same hysteresis to the P3 timing point of ``t_fine``.
+            Default False: see ``template_hold_ms``. Both holds start once the template is
+            full, so the held point is chosen on a mature template.
+        template_hold_refreshes: A jumped onset that stays at its new place (within
+            ``template_hold_ms``) for this many consecutive refreshes is accepted: the sound
+            really changed (default 12 refreshes = a full turnover of a 24-beat template).
         quartz: Quartz step motor: one event per step, no escapement structure. P1/P2 are
             not searched (``p3`` is the strongest sub-event of the step) and the template
             spans +-``quartz_template_ms`` around the step, all of it used for the alignment;
@@ -300,6 +317,9 @@ class BeatDetectorConfig:
     template_refresh_min_s: float = 0.5
     template_reanchor_corr: float = 0.8
     template_anchor: bool | None = None
+    template_hold_ms: float = 0.12
+    template_hold_refreshes: int = 12
+    template_hold_p3: bool = False
     quartz: bool = False
     quartz_template_ms: float = 25.0
 
@@ -362,6 +382,10 @@ class BeatDetectorConfig:
             raise ValueError("template_refresh_min_s debe ser >= 0")
         if self.template_refresh_beats < 1:
             raise ValueError("template_refresh_beats debe ser >= 1")
+        if not self.template_hold_ms > 0:
+            raise ValueError("template_hold_ms debe ser positivo")
+        if self.template_hold_refreshes < 1:
+            raise ValueError("template_hold_refreshes debe ser >= 1")
         if not 0.0 < self.template_reanchor_corr < 1.0:
             raise ValueError(
                 f"template_reanchor_corr fuera de (0, 1): {self.template_reanchor_corr}"
@@ -521,6 +545,12 @@ class _Tpl:
         self.anchor: NDArray | None = None
         self.onset_anchor = math.nan
         self.lag = 0.0
+        # onset hysteresis (template_hold_ms): smoothed alignment region of the previous
+        # template, and per point (p3, p1) the held onset, a candidate new place and how many
+        # consecutive refreshes it has kept it
+        self.prev_align: NDArray | None = None
+        self.hold: dict[str, list[float]] = {}
+        self.hold_jumps = 0
 
     @property
     def onset_ref(self) -> float:
@@ -601,6 +631,8 @@ class BeatDetector:
             self.tpl_burst = int(round(3.0 * ms))  # alignment from 3 ms before the anchor
         n_al = max(1, int(round(c.template_align_smooth_ms * ms)))
         self._align_kernel = np.full(n_al, 1.0 / n_al)
+        self.hold_tol = c.template_hold_ms * ms
+        self.hold_search = max(2, int(math.ceil(4.0 * self.hold_tol)))
         self.reset()
 
     # ------------------------------------------------------------------ public API
@@ -1523,7 +1555,16 @@ class BeatDetector:
                 t.onset_p3, t.onset_p1 = self._quartz_onset(t.env), math.nan
                 t.onset_front = math.nan
             else:
-                t.onset_p3, t.onset_p1 = self._template_onsets(t.env)
+                p3, p1 = self._template_onsets(t.env)
+                if full:
+                    # hysteresis on the P1 onset (and optionally P3, see template_hold_ms),
+                    # only on full templates: a point held from an immature template stayed
+                    # wrong (H-50 20 s windows: beat error 0.86 ms in the first one)
+                    lag = self._refresh_lag(t)
+                    p1 = self._hold_onset(t, "p1", p1, lag)
+                    if c.template_hold_p3:
+                        p3 = self._hold_onset(t, "p3", p3, lag)
+                t.onset_p3, t.onset_p1 = p3, p1
                 t.onset_front = self._front_onset(t.env)
             t.pending = 0
             anchor = c.quartz if c.template_anchor is None else c.template_anchor
@@ -1533,6 +1574,58 @@ class BeatDetector:
         if len(t.segs) < c.template_min_beats or math.isnan(ref):
             return math.nan
         return origin + ref
+
+    def _refresh_lag(self, t: _Tpl) -> float:
+        """Lag (samples) of the refreshed template against the previous one (frame drift)."""
+        b0 = self.tpl_pre - self.tpl_burst
+        cur = np.convolve(t.env, self._align_kernel, mode="same")[b0:]
+        prev, t.prev_align = t.prev_align, cur
+        L = self.hold_search
+        if prev is None or prev.size <= 2 * L + 2:
+            return 0.0
+        ref = prev[L:-L]
+        rz = ref - ref.mean()
+        nr = float(np.sqrt(np.dot(rz, rz)))
+        if nr <= _TINY:
+            return 0.0
+        # normalised (Pearson) correlation per lag: the plain one is biased by the sloping
+        # tail of the envelope (a template against itself gave -9 samples)
+        n = rz.size
+        win = np.lib.stride_tricks.sliding_window_view(cur, n)  # lags -L .. +L
+        wz = win - win.mean(axis=1, keepdims=True)
+        den = nr * np.sqrt(np.einsum("ij,ij->i", wz, wz))
+        cc = np.where(den > _TINY, (wz @ rz) / np.maximum(den, _TINY), -1.0)
+        i = int(np.argmax(cc))
+        d = 0.0
+        if 0 < i < cc.size - 1:
+            q = cc[i - 1] - 2.0 * cc[i] + cc[i + 1]
+            d = 0.5 * (cc[i - 1] - cc[i + 1]) / q if q < 0 else 0.0
+        return float(i + d - L)
+
+    def _hold_onset(self, t: _Tpl, key: str, raw: float, lag: float) -> float:
+        """Onset hysteresis (see ``template_hold_ms``): the onset to use for ``key``."""
+        state = t.hold.get(key)
+        if state is None or not math.isfinite(state[0]):
+            t.hold[key] = [raw, math.nan, 0.0]
+            return raw
+        held, cand, count = state
+        expected = held + lag
+        if not math.isfinite(raw) or abs(raw - expected) <= self.hold_tol:
+            t.hold[key] = [raw if math.isfinite(raw) else expected, math.nan, 0.0]
+            return t.hold[key][0]
+        # a jump: keep the held point (moved with the frame) unless the new place persists
+        cand = cand + lag
+        if math.isfinite(cand) and abs(raw - cand) <= self.hold_tol:
+            count += 1
+        else:
+            cand, count = raw, 1.0
+        if count >= self.config.template_hold_refreshes:
+            t.hold[key] = [raw, math.nan, 0.0]
+            return raw
+        if count == 1.0:
+            t.hold_jumps += 1
+        t.hold[key] = [expected, raw, count]
+        return expected
 
     def _anchor_frame(self, t: _Tpl) -> None:
         """Track the lag of a full template against its reference (see

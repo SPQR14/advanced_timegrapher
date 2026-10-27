@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -180,11 +181,11 @@ def test_open_folders_actions(window, monkeypatch) -> None:
 
     assert window.open_logs_folder() is True
     assert len(opened_urls) == 1
-    assert opened_urls[0] == str(LoggerSetup.LOG_DIR.resolve())
+    assert Path(opened_urls[0]) == LoggerSetup.LOG_DIR.resolve()
 
     assert window.open_calibration_folder() is True
     assert len(opened_urls) == 2
-    assert opened_urls[1] == str(config_dir().resolve())
+    assert Path(opened_urls[1]) == config_dir().resolve()
 
     # The Tools menu triggers the same actions (the top bar has no folder buttons any more)
     window.action_open_logs.trigger()

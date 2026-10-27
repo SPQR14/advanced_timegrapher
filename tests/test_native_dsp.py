@@ -169,3 +169,36 @@ def test_native_dsp_source_hash_matches_cpp() -> None:
             f"El hash compilado ({actual_sha}) no coincide con el código fuente ({expected_sha}). "
             "Recompila la extensión con: pip install -e ."
         )
+
+
+def test_template_lag_is_unbiased() -> None:
+    """The refresh lag uses a normalised correlation: a template against itself (or shifted)
+    gives the exact lag (the plain correlation gave -9 samples on a sloping envelope)."""
+    from adv_tg.core.beat_detector import BeatDetector, BeatDetectorConfig, _Tpl
+
+    det = BeatDetector(BeatDetectorConfig(sample_rate=FS, bph=28800, lift_angle_deg=51))
+    n = det.tpl_pre + det.tpl_post
+    i = np.arange(n, dtype=float)
+    env = np.exp(-(((i - det.tpl_pre) / 40.0) ** 2)) + np.clip((i - det.tpl_pre) / 300.0, 0, 0.6)
+    t = _Tpl(24)
+    t.env = env
+    assert det._refresh_lag(t) == 0.0  # first call: nothing to compare with
+    t.env = env.copy()
+    assert abs(det._refresh_lag(t)) < 0.05
+    t.env = np.roll(env, 3)
+    assert abs(det._refresh_lag(t) - 3.0) < 0.3
+
+
+def test_onset_hold_blocks_jumps_and_accepts_persistent_moves() -> None:
+    from adv_tg.core.beat_detector import BeatDetector, BeatDetectorConfig, _Tpl
+
+    det = BeatDetector(BeatDetectorConfig(sample_rate=FS, bph=21600, lift_angle_deg=53))
+    t = _Tpl(24)
+    assert det._hold_onset(t, "p1", 100.0, 0.0) == 100.0
+    assert det._hold_onset(t, "p1", 102.0, 0.0) == 102.0  # 2 samples < 0.12 ms: drift
+    assert det._hold_onset(t, "p1", 145.0, 0.0) == 102.0  # 0.9 ms jump: held
+    assert det._hold_onset(t, "p1", 102.5, 1.0) == 102.5  # back near the held point + lag
+    for _ in range(det.config.template_hold_refreshes - 1):
+        assert det._hold_onset(t, "p1", 150.0, 0.0) == 102.5
+    assert det._hold_onset(t, "p1", 150.0, 0.0) == 150.0  # persisted: the sound changed
+    assert t.hold_jumps == 2

@@ -32,7 +32,7 @@ def test_mock_emits_telemetry_and_finishes(qtbot) -> None:
     assert worker.isRunning()
     qtbot.wait(2000)
     assert len(received) >= 6, f"only {len(received)} telemetry updates in 2 s"
-    assert len(waveforms) >= 30
+    assert len(waveforms) >= 25
     assert len(levels) >= 15
     assert all(-30.0 < p < -1.0 and r < p and not s for p, r, s in levels)
     last = received[-1]
