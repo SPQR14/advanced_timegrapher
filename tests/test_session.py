@@ -10,7 +10,7 @@ import pytest
 from adv_tg.core.adc_clock import AdcDrift, ClockLevel
 from adv_tg.core.sample_stream import SampleStream
 from adv_tg.core.session import MeasurementSession, SessionConfig
-from tests.synth import synth_watch
+from tests.synth import REALISM, synth_watch
 
 FS = 48_000
 BLOCK = 1024
@@ -172,3 +172,73 @@ def test_paper_tape_slope_is_the_rate_and_rows_the_beat_error() -> None:
     assert slopes[0] == pytest.approx(6.0 / 86.4, rel=0.05)
     assert slopes[1] == pytest.approx(6.0 / 86.4, rel=0.05)
     assert abs(intercepts[0] - intercepts[1]) == pytest.approx(0.5, abs=0.05)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        {},
+        {"p1_gain": 0.3, "odd_pre_ramp": (3.0, 0.15), "odd_drop_lobe": (1.2, 0.6, 1.4)},
+    ],
+    ids=["clean", "weak_p1_ramp_two_lobes"],
+)
+def test_nh35_like_watch_live_beat_error_and_tape_rows(variant) -> None:
+    """21600 A/h, LA 53°, 246°, +7 s/d, beat error 0.2 ms, as the GUI measures it (live).
+
+    The beat error must stay near 0.2 ms on every update (no P1/P2 slips between tic and tac),
+    and the paper tape rows (tic and tac at P3) must stay < 0.5 ms apart.
+    """
+    x, _ = synth_watch(
+        bph=21600,
+        rate_s_per_day=7.0,
+        beat_error_ms=0.2,
+        amplitude_deg=246,
+        lift_angle_deg=53,
+        seconds=60,
+        snr_db=25,
+        seed=4,
+        **{**REALISM, **variant},
+    )
+    snaps = feed(MeasurementSession(SessionConfig(sample_rate=FS, bph=21600, lift_angle_deg=53)), x)
+    live = [s for s in snaps if math.isfinite(s.metrics.beat_error_ms)]
+    assert len(live) > 20
+    settled = live[len(live) // 3 :]  # after the 30-s window starts filling
+    be = np.array([s.metrics.beat_error_ms for s in settled])
+    assert np.median(be) == pytest.approx(0.2, abs=0.05)
+    assert be.max() < 0.4
+    last = settled[-1].metrics
+    assert last.rate_s_per_day == pytest.approx(7.0, abs=0.5)
+    assert last.amplitude_deg == pytest.approx(246.0, rel=0.03)
+    # Paper tape: subtract each beat's slope (rate) and compare the two rows.
+    t = np.concatenate([s.tape_time_s for s in snaps])
+    y = np.concatenate([s.tape_offset_ms for s in snaps])
+    par = np.concatenate([s.tape_parity for s in snaps])
+    keep = t > 15.0
+    t, y, par = t[keep], y[keep], par[keep]
+    slope = np.polyfit(t, y, 1)[0]
+    resid = y - slope * t
+    gap = abs(np.median(resid[par == 0]) - np.median(resid[par == 1]))
+    assert gap < 0.5
+
+
+def test_drop_wander_live_beat_error() -> None:
+    """Live (GUI path) with the 4R34 pattern: the beat error stays at 0.2 ms, no 1-3 ms jumps."""
+    x, _ = synth_watch(
+        bph=21600,
+        rate_s_per_day=7.0,
+        beat_error_ms=0.2,
+        amplitude_deg=246,
+        lift_angle_deg=53,
+        seconds=60,
+        snr_db=25,
+        seed=2,
+        odd_drop_wander_ms=3.0,
+        **REALISM,
+    )
+    snaps = feed(MeasurementSession(SessionConfig(sample_rate=FS, bph=21600, lift_angle_deg=53)), x)
+    be = np.array(
+        [s.metrics.beat_error_ms for s in snaps if math.isfinite(s.metrics.beat_error_ms)]
+    )
+    settled = be[len(be) // 3 :]
+    assert np.median(settled) == pytest.approx(0.2, abs=0.05)
+    assert settled.max() < 0.4

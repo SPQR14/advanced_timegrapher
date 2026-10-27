@@ -17,6 +17,7 @@ name contains       BPH         LA     note
 ==================  ==========  =====  ===============
 c07 / h50 / hamilton  21600     50°    weak P1 (ETA C07)
 9015 / miyota       28800       51°    "normal" case
+4r34 / nh34         21600       53°    tic drop wanders ~3 ms after a clean unlock
 4r36 / seiko        21600       53°    slow ramp before the tac drop
 nm10 / bulova       57600       —      quartz 16/s, informational only
 vh31 / tmi          14400       —      quartz 4/s, informational only
@@ -81,6 +82,7 @@ class CalibreConfig:
 BUILTIN_TABLE: tuple[tuple[tuple[str, ...], CalibreConfig], ...] = (
     (("c07", "h50", "hamilton"), CalibreConfig(21600, 50.0, False, "tabla: ETA C07 / H-50")),
     (("9015", "miyota"), CalibreConfig(28800, 51.0, False, "tabla: Miyota 9015")),
+    (("4r34", "nh34"), CalibreConfig(21600, 53.0, False, "tabla: Seiko 4R34 (GMT)")),
     (("4r36", "seiko"), CalibreConfig(21600, 53.0, False, "tabla: Seiko 4R36")),
     (("nm10", "bulova"), CalibreConfig(57600, None, True, "tabla: Bulova cuarzo (informativo)")),
     (("vh31", "tmi"), CalibreConfig(14400, None, True, "tabla: TMI VH31 cuarzo 4/s (informativo)")),

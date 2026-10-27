@@ -270,18 +270,124 @@ def test_long_test_session_is_not_recorded(qtbot, monkeypatch) -> None:
     worker.shutdown()
 
 
-def test_paper_tape_symbols_only_for_short_traces(window) -> None:
-    assert (
-        window.tape_curve_even.opts["autoDownsample"] and window.tape_curve_even.opts["clipToView"]
+def test_paper_tape_dots_with_bounded_redraw(window) -> None:
+    for curve in (window.tape_curve_even, window.tape_curve_odd):
+        assert curve.opts["autoDownsample"] and curve.opts["clipToView"]
+        assert curve.opts["pen"] is None and curve.opts["symbol"] == "o"  # dots, no lines
+
+
+def test_paper_tape_never_shows_negative_time(window) -> None:
+    vb = window.paper_tape_plot.getViewBox()
+    assert vb.state["limits"]["xLimits"][0] == 0.0
+    vb.setXRange(-50.0, 10.0, padding=0.0)
+    assert vb.viewRange()[0][0] >= 0.0
+
+
+def _fill_tape(window, seconds: float, *, rate_spd: float = 4.0, jitter_ms: float = 0.0):
+    """Raw tape rows like the engine's: 3 beats/s per row, slope = rate, optional scatter."""
+    rng = np.random.default_rng(0)
+    x = np.arange(0.0, seconds, 1.0 / 3.0)
+    y = rate_spd * x / 86.4
+    window._tape_x_even[:] = x.tolist()
+    window._tape_ms_even[:] = (y + rng.normal(0.0, jitter_ms, x.size)).tolist()
+    window._tape_x_odd[:] = (x + 1.0 / 6.0).tolist()
+    window._tape_ms_odd[:] = (y + 0.2 + rng.normal(0.0, jitter_ms, x.size)).tolist()
+    window._tape_disp_even.clear()
+    window._tape_disp_odd.clear()
+    window._smooth_tape_rows()
+    window._tape_autoscale = True
+    window._autoscale_paper_tape()
+
+
+def test_paper_tape_window_starts_at_zero_then_scrolls(window) -> None:
+    _fill_tape(window, 20.0)
+    (x_lo, x_hi), (y_lo, y_hi) = window.paper_tape_plot.getViewBox().viewRange()
+    assert x_lo == pytest.approx(0.0, abs=1e-6) and x_hi == pytest.approx(mw.TAPE_WINDOW_S)
+    assert y_hi - y_lo >= 2 * mw.TAPE_ZOOM_HALF_SPANS_MS[0] - 1e-6  # flat row reads flat
+    _fill_tape(window, 300.0)
+    (x_lo, x_hi), _ = window.paper_tape_plot.getViewBox().viewRange()
+    newest = max(window._tape_x_even[-1], window._tape_x_odd[-1])
+    assert x_hi == pytest.approx(newest + mw.TAPE_LEAD_S)
+    assert x_hi - x_lo == pytest.approx(mw.TAPE_WINDOW_S)
+    # COSC guides start at the left edge of the view
+    cx, _ = window.cosc_upper_line.getData()
+    assert cx[0] == pytest.approx(x_lo) and cx[-1] == pytest.approx(x_hi)
+
+
+def test_paper_tape_rows_are_smoothed_but_export_stays_raw(window) -> None:
+    _fill_tape(window, 60.0, jitter_ms=0.5)
+    raw = np.array(window._tape_ms_even)
+    disp = np.array(window._tape_disp_even)
+    assert disp.size == raw.size
+    trend = 4.0 * np.array(window._tape_x_even) / 86.4
+    assert np.std(disp - trend) < 0.6 * np.std(raw - trend)  # median of 7 beats
+    # The drawn curve uses the smoothed rows; the CSV export keeps one raw value per beat.
+    window.tape_curve_even.setData(window._tape_x_even, window._tape_disp_even)
+    assert np.allclose(window.tape_curve_even.yData, disp)
+
+
+def test_paper_tape_zoom_levels(window) -> None:
+    _fill_tape(window, 30.0)
+    spans = []
+    for _ in mw.TAPE_ZOOM_HALF_SPANS_MS:
+        lo, hi = window.paper_tape_plot.getViewBox().viewRange()[1]
+        spans.append(hi - lo)
+        assert window.btn_tape_zoom.text().startswith("Zoom")
+        window.cycle_paper_tape_zoom()
+    assert spans == pytest.approx([2 * h for h in mw.TAPE_ZOOM_HALF_SPANS_MS])
+    assert window._tape_zoom_index == 0  # back to 1x
+
+
+def test_mock_tape_scatter_does_not_grow_with_time(window, monkeypatch) -> None:
+    """MOCK rows integrate the simulated rate; rate * t would scale its noise with t."""
+    monkeypatch.setattr(window, "dsp_worker", None)  # the MOCK branch of _append_tape
+    rng = np.random.default_rng(3)
+    window._mock_tape_last = None
+    for name in ("_tape_x_even", "_tape_ms_even", "_tape_x_odd", "_tape_ms_odd"):
+        getattr(window, name).clear()
+    rate, dt = 4.5, 0.25
+    for i in range(1, 241):  # 60 s at 4 updates/s
+        tel = mw.TelemetryResult(
+            rate_spd=rate + rng.normal(0.0, 0.35),
+            beat_error_ms=0.35,
+            amplitude_deg=283.0,
+            confidence=0.97,
+        )
+        window._append_tape(tel, i * dt)
+    t = np.array(window._tape_x_even)
+    resid = np.array(window._tape_ms_even) - rate * t / 86.4
+    step = np.diff(resid)
+    early, late = np.std(step[: step.size // 4]), np.std(step[-step.size // 4 :])
+    assert late == pytest.approx(early, rel=0.5)  # constant beat-to-beat scatter
+    assert np.ptp(np.array(window._tape_ms_odd) - np.array(window._tape_ms_even)) < 1e-9
+
+
+def test_save_position_never_invents_a_reading(window) -> None:
+    window._saved_positions.clear()
+    window._last_telemetry = None
+    window._update_save_position_enabled()
+    assert not window.btn_save_position.isEnabled()
+    window.save_current_position()  # e.g. a keyboard shortcut while disabled
+    assert window._saved_positions == {}
+    assert "reading" in window.statusBar().currentMessage()
+
+    reading = mw.TelemetryResult(
+        rate_spd=3.2, beat_error_ms=0.4, amplitude_deg=265.0, confidence=0.9
     )
-    assert window.tape_curve_even.opts["pen"].widthF() == 1.0
-    window._tape_x_even[:] = list(range(mw.TAPE_SYMBOL_MAX_POINTS))
-    window._update_tape_symbols()
-    assert window.tape_curve_even.opts["symbol"] == "o"
-    window._tape_x_even.append(1e6)
-    window._update_tape_symbols()
-    assert window.tape_curve_even.opts["symbol"] is None
-    assert window.tape_curve_odd.opts["symbol"] is None
-    window._tape_x_even.clear()
-    window._update_tape_symbols()
-    assert window.tape_curve_odd.opts["symbol"] == "o"
+    window._last_telemetry = reading
+    window._update_save_position_enabled()
+    assert window.btn_save_position.isEnabled()
+    window.save_current_position()
+    assert window._saved_positions[window.cmb_position.currentText()] is reading
+
+
+def test_new_session_forgets_the_previous_reading(window) -> None:
+    window._last_telemetry = mw.TelemetryResult(
+        rate_spd=3.2, beat_error_ms=0.4, amplitude_deg=265.0, confidence=0.9
+    )
+    window.start_capture()
+    try:
+        assert window._last_telemetry is None
+        assert not window.btn_save_position.isEnabled()
+    finally:
+        window.stop_capture()

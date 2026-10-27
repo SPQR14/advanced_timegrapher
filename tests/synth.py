@@ -142,6 +142,7 @@ def synth_watch(
     odd_drop_lobe: tuple[float, float, float] | None = None,
     odd_pre_ramp: tuple[float, float] | None = None,
     odd_jitter_us: float = 0.0,
+    odd_drop_wander_ms: float = 0.0,
     rate_drift_s_per_day_per_min: float = 0.0,
     quartz: bool = False,
     quartz_precursor: tuple[float, float, float] | None = None,
@@ -177,6 +178,10 @@ def synth_watch(
         odd_pre_ramp: ``(duration_ms, level)``: on odd ``k`` a slowly rising, noise-like
             ramp (level relative to P3) ends at the true P3 onset, as the friction before the
             drop of the Seiko 4R36 tac. The true P3 is still the onset of the drop itself.
+        odd_drop_wander_ms: On odd ``k`` the whole drop (P3 burst and its lobe/ramp) arrives
+            a random 0..``odd_drop_wander_ms`` later than its nominal place, beat by beat,
+            while P1 and P2 stay put (Seiko 4R34: the tic drop wanders ~3 ms after a clean
+            unlock). The truth's ``p3`` follows the shifted drop.
         odd_jitter_us: Extra Gaussian jitter (std, added in quadrature to ``jitter_us``) on
             odd ``k`` only: one parity noisier than the other, as the H-50 / 4R36 tac.
         rate_drift_s_per_day_per_min: The rate changes linearly with time,
@@ -251,17 +256,22 @@ def synth_watch(
                         (f * (1.0 + rng.uniform(-f0_jitter, f0_jitter)), a, d) for f, a, d in ms
                     )
                 ms = ms + tuple(tails)
-                _burst(x, fs, t0 + offsets[i], lv * _SCALE, ms, duration)
+                if i == 2 and odd_drop_wander_ms and k % 2 == 1:
+                    drop_shift = rng.uniform(0.0, odd_drop_wander_ms) * 1e-3
+                elif i == 2:
+                    drop_shift = 0.0
+                start = t0 + offsets[i] + (drop_shift if i == 2 else 0.0)
+                _burst(x, fs, start, lv * _SCALE, ms, duration)
                 if i == 2 and odd_pre_ramp is not None and k % 2 == 1:
-                    _ramp(x, fs, t0 + offsets[i], odd_pre_ramp, lv * _SCALE, rng)
+                    _ramp(x, fs, start, odd_pre_ramp, lv * _SCALE, rng)
                 if i == 2 and odd_drop_lobe is not None and k % 2 == 1:
                     delay_ms, lo, hi = odd_drop_lobe
                     lobe = lv * rng.uniform(lo, hi) * _SCALE
-                    _burst(x, fs, t0 + offsets[i] + delay_ms * 1e-3, lobe, ms, duration)
+                    _burst(x, fs, start + delay_ms * 1e-3, lobe, ms, duration)
             ks.append(k)
             p1s.append((t0 + offsets[0]) * fs)
             p2s.append((t0 + offsets[1]) * fs)
-            p3s.append((t0 + offsets[2]) * fs)
+            p3s.append((t0 + offsets[2] + drop_shift) * fs)
         k += 1
 
     if impulsive_noise_rate_hz > 0:

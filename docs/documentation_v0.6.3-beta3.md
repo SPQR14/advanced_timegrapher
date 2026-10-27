@@ -36,6 +36,9 @@ Meter (WAM) solo se usan como referencias de comparación.
 - CI: `ci.yml` y `tests.yml` corren en Linux, macOS y Windows con Python 3.12 y
   `QT_QPA_PLATFORM=offscreen`; `build.yml` genera los paquetes.
 - Seguridad: endurecimiento aplicado el 27/10 (PR #30 y #36; ver sección 8.5).
+- **Licencia: GPL-3.0-or-later**. Se valoró pasar a MIT (27/10/2026) y se descartó: la GPL v3
+  permite aceptar donaciones (botón "Buy me a coffee") y cobrar por los paquetes, y es la
+  licencia de PyQt6, que la aplicación incluye.
 
 ## 3. Historial de versiones
 
@@ -367,6 +370,8 @@ excepciones silenciadas en el callback de audio (solo un contador, sin el tipo d
 12. Seguridad: SEC-08 (`pickle`); `pip-audit` y `bandit` en el CI.
 
 ## 11. Índice de documentos de origen
+
+Retirados de `docs/` en el commit `2187796`; se consultan con `git show 2187796^:docs/<archivo>`.
 
 | Documento | Tema | Fecha / versión |
 |---|---|---|

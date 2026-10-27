@@ -45,11 +45,20 @@ Model and conventions
   ``sqrt(reduced chi^2)`` of the window rates around the trend line when there are >= 6
   windows, else the block/covariance ratio of the take; never below 1 (on the quartz
   references the covariance sigma of a window was 1.4-4.8x too small).
-* **Beat error.** Each beat's P1 instant is projected from its parity template,
-  ``t_p1 = t_fine - (onset_ref - onset_p1)``, and the same regression gives ``c``; the beat
-  error is ``2 |c|`` (half the difference between the tic->tac and tac->tic intervals). If a
-  template has no P1 onset, ``c`` of the ``t_fine`` regression is used and a warning says
-  that the measuring point changed.
+* **Beat error** at P1: ``2 |c|`` of the same regression (half the difference between the
+  tic->tac and tac->tic intervals) on one of two sets of P1 instants:
+
+  - ``"p1"``: projected from the parity template, ``t_p1 = t_fine - (onset_ref - onset_p1)``.
+    Best when P1 is weak (H-50, Miyota), but it inherits the alignment on the drop: when the
+    drop of one parity wanders against a clean unlock (Seiko 4R34: ~3 ms), it is off by
+    1-3 ms;
+  - ``"p1_beat"``: each beat's own P1 onset (``Beat.p1``). Exact on a clean unlock front
+    (4R34 and 4R36: 25-40 µs), noisy on a weak one.
+
+  The template P1 is used unless the per-beat P1 has an uncertainty below
+  ``_BE_SWITCH_RATIO`` (1/1.6) of it: the block jackknife of an uncertainty scatters ~30 %
+  itself, so a near tie keeps the validated estimator. Without any P1, ``c`` of the
+  ``t_fine`` regression is used and a warning says that the measuring point changed.
 * **Amplitude.** ``A = LA / (2 sin(pi f t_lift))``, ``f = BPH / 7200``, with ``t_lift`` from
   the templates ONLY (``ParityTemplate.t_lift_samples``: P1 onset -> P3 onset). Tic, tac and
   their mean are reported; outside ``amplitude_range_deg`` a value is invalid (NaN). With the
@@ -661,49 +670,38 @@ def compute_metrics(
             f"minuto (± {m.rate_trend_sigma_s_per_day_per_min:.2f}); el reloj no está estable"
         )
     if not config.quartz:
-        _beat_error(m, k, t, templates, fit, config)
+        _beat_error(m, beats, k, t, templates, config)
         _amplitude(m, templates, config)
     m.confidence = _confidence(m, config)
     return m
 
 
-def _beat_error(
-    m: Metrics,
-    k: NDArray[np.float64],
-    t: NDArray[np.float64],
-    templates: tuple[ParityTemplate | None, ParityTemplate | None],
-    fit: ParityFit,
-    config: MetricsConfig,
-) -> None:
-    offsets = [tp.onset_ref - tp.onset_p1 if tp is not None else math.nan for tp in templates]
-    p1_fit = None
-    if all(math.isfinite(v) for v in offsets):
-        even = (k.astype(np.int64) % 2) == 0
-        t_p1 = t - np.where(even, offsets[0], offsets[1])
-        p1_fit = fit_parity_weighted(
-            k,
-            t_p1,
-            outlier_sigma=config.outlier_sigma,
-            max_iterations=config.max_iterations,
-            min_per_parity=config.min_beats_per_parity,
-        )
-    if p1_fit is not None:
-        m.beat_error_ms, m.beat_error_sigma_ms = beat_error_from_fit(p1_fit, config.sample_rate)
-        m.beat_error_point = "p1"
-        t_be = t_p1
-    else:
-        m.beat_error_ms, m.beat_error_sigma_ms = beat_error_from_fit(fit, config.sample_rate)
-        m.beat_error_point = "t_fine"
-        t_be = t
-        m.warnings.append(
-            "error de batimiento medido en t_fine (inicio de P3): alguna plantilla no tiene P1"
-        )
+#: The beat error leaves the template P1 for the per-beat P1 only when the latter's
+#: uncertainty is below this fraction of the former's (1 / (1 + 2 x 0.3): the 6-block jackknife
+#: scatters ~30 %, docs/fase3_resultados.md 8.2).
+_BE_SWITCH_RATIO: float = 1.0 / 1.6
+
+
+def _beat_error_candidate(
+    k: NDArray[np.float64], t: NDArray[np.float64], config: MetricsConfig
+) -> tuple[float, float, float, float] | None:
+    """``(beat_error_ms, sigma_ms, sigma_block_ms, uncertainty_ms)`` of one set of instants."""
+    fit = fit_parity_weighted(
+        k,
+        t,
+        outlier_sigma=config.outlier_sigma,
+        max_iterations=config.max_iterations,
+        min_per_parity=config.min_beats_per_parity,
+    )
+    if fit is None:
+        return None
+    be, sigma = beat_error_from_fit(fit, config.sample_rate)
     # block jackknife of the beat error (same blocks as the trend)
     vals: list[float] = []
-    for mask in _blocks(t_be, config.trend_blocks):
+    for mask in _blocks(t, config.trend_blocks):
         f = fit_parity_weighted(
             k[mask],
-            t_be[mask],
+            t[mask],
             outlier_sigma=config.outlier_sigma,
             max_iterations=config.max_iterations,
             min_per_parity=config.min_beats_per_parity,
@@ -712,11 +710,57 @@ def _beat_error(
             vals = []
             break
         vals.append(beat_error_from_fit(f, config.sample_rate)[0])
-    if vals:
-        m.beat_error_sigma_block_ms = _jackknife_sigma(vals)
-    m.beat_error_uncertainty_ms = float(
-        np.nanmax([m.beat_error_sigma_ms, m.beat_error_sigma_block_ms])
+    sigma_block = _jackknife_sigma(vals) if vals else math.nan
+    return be, sigma, sigma_block, float(np.nanmax([sigma, sigma_block]))
+
+
+def _beat_error(
+    m: Metrics,
+    beats: Sequence[Beat],
+    k: NDArray[np.float64],
+    t: NDArray[np.float64],
+    templates: tuple[ParityTemplate | None, ParityTemplate | None],
+    config: MetricsConfig,
+) -> None:
+    """Beat error at P1, from the better of two sets of P1 instants (see the module doc)."""
+    candidates: list[tuple[str, tuple[float, float, float, float]]] = []
+    offsets = [tp.onset_ref - tp.onset_p1 if tp is not None else math.nan for tp in templates]
+    if all(math.isfinite(v) for v in offsets):
+        even = (k.astype(np.int64) % 2) == 0
+        res = _beat_error_candidate(k, t - np.where(even, offsets[0], offsets[1]), config)
+        if res is not None:
+            candidates.append(("p1", res))
+    # each beat's own P1 onset: exact where P1 is a clean front, noisy where it is weak
+    kb = np.asarray(
+        [b.k for b in beats if math.isfinite(b.p1) and not b.flags & _EXCLUDE], dtype=np.float64
     )
+    tb = np.asarray(
+        [b.p1 for b in beats if math.isfinite(b.p1) and not b.flags & _EXCLUDE], dtype=np.float64
+    )
+    res = _beat_error_candidate(kb, tb, config) if kb.size else None
+    if res is not None:
+        candidates.append(("p1_beat", res))
+    if candidates:
+        # the template P1 (validated against tg/WAM) unless the per-beat P1 is clearly more
+        # precise: the block jackknife of the uncertainty scatters ~30 % itself, so only a
+        # ratio beyond 1 + 2 x 0.3 counts as a real difference, not a near tie
+        point, res = candidates[0]
+        for name, cand in candidates[1:]:
+            if cand[3] < _BE_SWITCH_RATIO * res[3]:
+                point, res = name, cand
+    else:
+        point = "t_fine"
+        res = _beat_error_candidate(k, t, config) or (math.nan,) * 4
+        m.warnings.append(
+            "error de batimiento medido en t_fine (inicio de P3): sin instantes de P1 válidos"
+        )
+    m.beat_error_point = point
+    (
+        m.beat_error_ms,
+        m.beat_error_sigma_ms,
+        m.beat_error_sigma_block_ms,
+        m.beat_error_uncertainty_ms,
+    ) = res
 
 
 def _amplitude(
