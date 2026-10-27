@@ -67,9 +67,15 @@ def load_watch_db(csv_path: Path | str | None = None) -> dict[str, tuple[int, fl
                 try:
                     lift_angle = float(row[1].strip())
                     bph = int(float(row[2].strip()))
+                    if not (1000 <= bph <= 120000):
+                        raise ValueError(f"bph fuera de rango válido [1000, 120000]: {bph}")
+                    if not (10.0 <= lift_angle <= 90.0):
+                        raise ValueError(
+                            f"lift_angle fuera de rango válido [10.0, 90.0]: {lift_angle}"
+                        )
                 except ValueError as exc:
                     logger.warning(
-                        "Skipping non-numeric row %d in '%s' (%s): %s",
+                        "Skipping invalid or out-of-range row %d in '%s' (%s): %s",
                         line_num,
                         path.name,
                         row,
