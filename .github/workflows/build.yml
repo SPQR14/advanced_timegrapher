@@ -69,7 +69,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libasound2t64 libegl1 libgl1
+          sudo apt-get install -y libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libasound2t64 libegl1 libgl1 rpm
 
       - name: Install Python Dependencies
         run: |
@@ -112,6 +112,8 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           tar -czvf ${{ matrix.artifact_name }} -C dist adv-tg
+          chmod +x packaging/linux/build_rpm.sh
+          ./packaging/linux/build_rpm.sh
 
       - name: Package Binaries (macOS)
         if: matrix.platform == 'macos'
@@ -129,6 +131,14 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
+          if-no-files-found: error
+
+      - name: Upload Linux RPM Artifact
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: adv-tg-linux-rpm
+          path: dist/*.rpm
           if-no-files-found: error
 
   release:

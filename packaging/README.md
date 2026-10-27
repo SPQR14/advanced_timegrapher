@@ -6,6 +6,9 @@ Este directorio contiene las especificaciones y utilidades para construir los bi
 |---|---|
 | `launcher.py` | Script de entrada: invoca `multiprocessing.freeze_support()` antes de cualquier importación pesada |
 | `adv-tg.spec` | Especificación de PyInstaller validada (carpeta única; `.app` en macOS con inyección de `Info.plist` e icono) |
+| `linux/adv-tg.desktop` | Entrada de escritorio de Linux (menú de aplicaciones, Wayland app-id) |
+| `linux/adv-tg.rpm.spec` | Especificación RPM para distribuciones basadas en RPM (Fedora, RHEL, openSUSE) |
+| `linux/build_rpm.sh` | Script de empaquetado RPM a partir del bundle generado por PyInstaller |
 | `macos/Info.plist` | Configuración del bundle de macOS, incluyendo **`NSMicrophoneUsageDescription`** e icono |
 | `macos/adv-tg.icns` | Icono multi-resolución de macOS (16x16 hasta 1024x1024) |
 | `windows/adv-tg.ico` | Icono estándar para ejecutables de Windows |
@@ -33,6 +36,7 @@ GitHub Actions (.github/workflows/build.yml):
 | `adv-tg-macos-arm64.zip` | macOS Apple Silicon (M1/M2/M3/M4) | Bundle `.app` con Info.plist de micrófono |
 | `adv-tg-windows-x64.zip` | Windows 10/11 x64 | Carpeta standalone con `adv-tg.exe` e icono |
 | `adv-tg-linux-x86_64.tar.gz` | Linux x86_64 | Carpeta standalone con PortAudio integrado |
+| `adv-tg-*-1.x86_64.rpm` | Linux x86_64 (Fedora, RHEL, openSUSE) | Paquete RPM instalable vía `dnf` / `zypper` |
 | `advanced_timegrapher-*-py3-none-any.whl` | Cualquier plataforma (Python ≥ 3.11) | Wheel puro (sin compilador) |
 | `advanced_timegrapher-*.tar.gz` | Código fuente universal | Source distribution (sdist) |
 
@@ -70,6 +74,26 @@ El paquete puede estar instalado en directorios de solo lectura (como `/Applicat
 ### 6. Iconos Multiplataforma
 - `adv-tg.icns`: Creado a partir del vector `adv-tg.svg` y vinculado tanto a `BUNDLE(icon=...)` como a `EXE(icon=...)` en macOS.
 - `adv-tg.ico`: Generado con tamaños estándar (16, 24, 32, 48, 64, 128, 256) y vinculado a `EXE(icon=...)` para Windows.
+- `adv-tg.svg`: Icono vectorial escalable instalado en `/usr/share/icons/hicolor/scalable/apps/adv-tg.svg` y `/usr/share/pixmaps/adv-tg.svg` en Linux.
+
+### 7. Empaquetado RPM para Linux (Fedora, RHEL, openSUSE)
+- **Estructura instalada:**
+  - Binarios y runtime PyInstaller: `/opt/adv-tg/`
+  - Enlace simbólico en el PATH: `/usr/bin/adv-tg` -> `/opt/adv-tg/adv-tg`
+  - Acceso directo de escritorio: `/usr/share/applications/adv-tg.desktop`
+  - Iconos del sistema: `/usr/share/icons/hicolor/scalable/apps/adv-tg.svg` y `/usr/share/pixmaps/adv-tg.svg`
+- **Generación:**
+  ```bash
+  # Requiere el bundle previo de PyInstaller en dist/adv-tg y la herramienta rpmbuild:
+  #   Fedora/RHEL: sudo dnf install rpm-build
+  #   Debian/Ubuntu: sudo apt-get install rpm
+  ./packaging/linux/build_rpm.sh
+  ```
+- **Instalación y prueba:**
+  ```bash
+  sudo dnf install ./dist/adv-tg-*.rpm       # Fedora / RHEL
+  sudo zypper install ./dist/adv-tg-*.rpm    # openSUSE
+  ```
 
 ---
 

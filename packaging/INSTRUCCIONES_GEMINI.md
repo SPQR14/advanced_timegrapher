@@ -35,7 +35,7 @@ Cambios en la copia de trabajo (rama `release/v0.6.1.beta.2`, sin commit):
 - `main.py --smoke-test`: ya no exige la extensión C++; sigue exigiendo que SciPy no esté
   cargado y que una medición sin hardware dé una marcha finita.
 - Workflows: `ci.yml` (tests en 3 SO × Python 3.11/3.12) y `build.yml` (wheel puro + sdist;
-  PyInstaller en Linux x86_64, macOS arm64 y Windows x64; release solo con etiqueta `v*`).
+  PyInstaller en Linux x86_64 [tarball y paquete RPM], macOS arm64 y Windows x64; release solo con etiqueta `v*`).
 
 Verificado por Claude en macOS arm64 (2026-10-27): 569 tests en verde, ruff limpio, wheel
 `py3-none-any` sin binarios, `.app` de PyInstaller pasa `--smoke-test`, análisis a
@@ -91,14 +91,60 @@ and DSP verified successfully` (logs en `~/Library/Logs/adv_tg/adv_tg.log`).
 Abrir también la app a mano una vez (`open "dist/Advanced Timegrapher.app"`): debe pedir
 permiso de micrófono y medir con el reloj o con una muestra de `docs/samples/`.
 
+### A3.bis. Empaquetado RPM para Linux (Fedora, RHEL, openSUSE)
+
+Para generar el instalador RPM a partir del bundle generado por PyInstaller (`dist/adv-tg`):
+
+1. **Archivos de configuración:**
+   - `packaging/linux/adv-tg.desktop`: entrada Freedesktop para el lanzador de aplicaciones y Wayland `app-id`.
+   - `packaging/linux/adv-tg.rpm.spec`: spec de RPM configurado con `AutoReqProv: no` y `%define debug_package %{nil}` (evita dependencias erróneas sobre librerías internas de PyInstaller) y dependencias de sistema explícitas (`portaudio`, `alsa-lib`, `libxkbcommon`).
+   - `packaging/linux/build_rpm.sh`: script que crea el árbol `rpmbuild`, ejecuta la compilación y copia el archivo a `dist/`.
+
+2. **Estructura de instalación en el sistema destino:**
+   - `/opt/adv-tg/`: contiene el ejecutable y librerías completas de PyInstaller.
+   - `/usr/bin/adv-tg`: enlace simbólico a `/opt/adv-tg/adv-tg`.
+   - `/usr/share/applications/adv-tg.desktop`: integración en menús de escritorio (GNOME, KDE, etc.).
+   - `/usr/share/icons/hicolor/scalable/apps/adv-tg.svg` y `/usr/share/pixmaps/adv-tg.svg`: icono oficial.
+
+3. **Compilación local del RPM:**
+   ```bash
+   # En entornos basados en RPM (Fedora, RHEL, AlmaLinux, Rocky Linux):
+   sudo dnf install -y rpm-build
+   ./packaging/linux/build_rpm.sh
+
+   # O en distribuciones Debian/Ubuntu con herramienta rpm:
+   sudo apt-get install -y rpm
+   ./packaging/linux/build_rpm.sh
+   ```
+
+4. **Inspección y verificación del paquete:**
+   ```bash
+   rpm -qip dist/adv-tg-*.rpm          # metadatos, versión y licencia
+   rpm -qlp dist/adv-tg-*.rpm          # lista de ficheros instalados
+   rpm -qp --requires dist/adv-tg-*.rpm # verificación de dependencias de sistema
+   ```
+
+5. **Prueba de instalación en máquina o contenedor RPM:**
+   ```bash
+   # En Fedora / RHEL:
+   sudo dnf install ./dist/adv-tg-*.rpm
+   # En openSUSE:
+   sudo zypper install ./dist/adv-tg-*.rpm
+
+   # Smoke test del binario instalado en el sistema:
+   adv-tg --version
+   QT_QPA_PLATFORM=offscreen adv-tg --smoke-test
+   ```
+
 ### A4. Revisión de los workflows (sin ejecutarlos)
 
 Revisar `.github/workflows/ci.yml` y `build.yml`. Reglas:
 
 - Runners solo `ubuntu-latest`, `macos-latest`, `windows-latest` (sin `macos-13`).
 - Nada de `cibuildwheel`, `wheels.yml`, `setup.py` ni `needs: wheels`.
-- Linux instala `libportaudio2` y `xvfb` y ejecuta con `xvfb-run -a`; macOS/Windows con
+- Linux instala `libportaudio2`, `xvfb` y `rpm` (`sudo apt-get install -y ... rpm`); ejecuta tests con `xvfb-run -a`; macOS/Windows con
   `QT_QPA_PLATFORM=offscreen`.
+- Linux construye tanto el tarball `.tar.gz` como el paquete `.rpm` (`./packaging/linux/build_rpm.sh`) y sube ambos artefactos.
 - Si un binario falla al importar un módulo en un proceso hijo: añadirlo a `hiddenimports`
   en `packaging/adv-tg.spec`.
 
@@ -170,6 +216,7 @@ gh release view v0.6.1.beta.2
 Debe contener exactamente:
 
 - `adv-tg-linux-x86_64.tar.gz`
+- `adv-tg-0.6.1-1.x86_64.rpm` (paquete nativo RPM para Fedora, RHEL, openSUSE)
 - `adv-tg-macos-arm64.zip`
 - `adv-tg-windows-x64.zip`
 - `advanced_timegrapher-0.6.1-py3-none-any.whl`
@@ -186,6 +233,6 @@ Cuando el release esté bien: PR de `release/v0.6.1.beta.2` a `main` (y a `devel
 
 1. CI verde en Linux, macOS y Windows (Python 3.11 y 3.12).
 2. `Build & Package Release` de la etiqueta en verde, incluido `Publish Release`.
-3. Release con los 5 artefactos de la lista, marcado como prerelease, ninguno con `scipy`.
+3. Release con los 6 artefactos de la lista (incluyendo el paquete `.rpm` para Linux), marcado como prerelease, ninguno con `scipy`.
 4. En el repo no hay `.cpp`, `setup.py`, `wheels.yml`, `.so`/`.pyd`, y
    `git grep -nE "import scipy|from scipy" -- src tests` sale vacío.
