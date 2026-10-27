@@ -51,7 +51,7 @@ __all__ = [
     "AudioInfo",
     "AudioWriter",
     "DEFAULT_SUBTYPES",
-    "MAX_IN_MEMORY_FRAMES",
+    "MAX_IN_MEMORY_BYTES",
     "SUPPORTED_EXTENSIONS",
     "audio_info",
     "iter_audio_blocks",
@@ -68,8 +68,9 @@ _dbg = Debugger.get(__name__)
 SUPPORTED_EXTENSIONS: dict[str, str] = {".wav": "WAV", ".flac": "FLAC"}
 DEFAULT_SUBTYPES: dict[str, str] = {"WAV": "FLOAT", "FLAC": "PCM_24"}
 _FLOAT_SUBTYPES = frozenset({"FLOAT", "DOUBLE"})
-#: Límite máximo de muestras para decodificación completa en memoria (2 horas a 48 kHz).
-MAX_IN_MEMORY_FRAMES: int = 48000 * 7200
+#: Memoria máxima (float64 decodificado, todos los canales) de una lectura completa. 8 GiB son
+#: ~6,2 h mono a 48 kHz o ~3,1 h a 96 kHz; para archivos mayores, ``iter_audio_blocks``.
+MAX_IN_MEMORY_BYTES: int = 8 * 1024**3
 
 ChannelMode = Literal["max_energy"] | int
 
@@ -313,12 +314,13 @@ def audio_info(path: Path | str) -> AudioInfo:
     )
 
 
-def read_audio(path: Path | str, max_frames: int | None = MAX_IN_MEMORY_FRAMES) -> AudioData:
+def read_audio(path: Path | str, max_bytes: int | None = MAX_IN_MEMORY_BYTES) -> AudioData:
     """Read a whole audio file (WAV, FLAC or any format libsndfile decodes).
 
     Args:
         path: File path.
-        max_frames: Max sample frames to load in memory (default ``MAX_IN_MEMORY_FRAMES``).
+        max_bytes: Max memory of the decoded float64 samples, all channels (default
+            ``MAX_IN_MEMORY_BYTES``); ``None`` disables the check.
 
     Returns:
         The decoded ``AudioData``.
@@ -331,10 +333,11 @@ def read_audio(path: Path | str, max_frames: int | None = MAX_IN_MEMORY_FRAMES) 
     try:
         _check_readable(p)
         info = audio_info(p)
-        if max_frames is not None and info.frames > max_frames:
+        needed = info.frames * max(info.channels, 1) * 8  # float64
+        if max_bytes is not None and needed > max_bytes:
             raise AudioFileError(
                 f"el archivo '{p.name}' excede el límite de memoria para carga completa "
-                f"({info.frames} muestras > {max_frames}); use iter_audio_blocks"
+                f"({needed / 2**30:.1f} GiB > {max_bytes / 2**30:.1f} GiB); use iter_audio_blocks"
             )
         with sf.SoundFile(str(p)) as f:
             data = f.read(dtype="float64", always_2d=False)

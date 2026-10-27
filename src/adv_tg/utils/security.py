@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -35,24 +36,41 @@ def safe_filename_base(name: str, fallback: str = "watch_test") -> str:
     return safe or fallback
 
 
+def _home_variants() -> list[str]:
+    """Spellings of the home folder that may appear in logs, longest first."""
+    out: set[str] = set()
+    try:
+        home = Path.home()
+        for h in (str(home), str(home.resolve()), home.as_posix(), home.resolve().as_posix()):
+            if len(h) > 1 and h != "/":
+                out.add(h)
+    except Exception:
+        pass
+    return sorted(out, key=len, reverse=True)
+
+
 def anonymize_text(text: str) -> str:
-    """Scrub personal identifying information (PII) such as local username and home path (CWE-200)."""
+    """Scrub personal identifying information (PII) such as local username and home path (CWE-200).
+
+    The home folder becomes ``~``. The username becomes ``<USER>`` when it is a whole path
+    component (``/Users/<USER>/...``, ``C:\\Users\\<USER>``) and, only if it has 4+
+    characters, also as a standalone word; short names like ``al`` would otherwise hit
+    ordinary words (Spanish "al", "del") and parts of words ("calibration").
+    """
     if not text:
         return text
+    for home in _home_variants():
+        text = text.replace(home, "~")
     try:
         import getpass
 
         username = getpass.getuser()
-        if username and len(username) > 1 and username.lower() not in ("root", "nobody"):
-            text = text.replace(username, "<USER>")
     except Exception:
-        pass
-
-    try:
-        home = str(Path.home().resolve())
-        if home and len(home) > 1 and home != "/":
-            text = text.replace(home, "~")
-    except Exception:
-        pass
-
+        return text
+    if not username or len(username) < 2 or username.lower() in ("root", "nobody"):
+        return text
+    u = re.escape(username)
+    text = re.sub(rf"(?<=[/\\]){u}(?![\w.-])", "<USER>", text, flags=re.IGNORECASE)
+    if len(username) >= 4:
+        text = re.sub(rf"(?<![\w.-]){u}(?![\w.-])", "<USER>", text, flags=re.IGNORECASE)
     return text
