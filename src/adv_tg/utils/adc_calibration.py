@@ -225,7 +225,12 @@ class CalibrationStore:
             "calibrations": [r.to_json() for r in records],
         }
         text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if sys.platform != "win32" and self.path.parent.is_dir():
+            try:
+                self.path.parent.chmod(0o700)
+            except OSError:
+                pass
         fd, tmp = tempfile.mkstemp(prefix=".adc_calibration.", suffix=".json", dir=self.path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:

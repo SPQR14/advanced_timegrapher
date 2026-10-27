@@ -247,6 +247,8 @@ def linux_ntp_synchronized() -> bool | None:
         return None
     try:
         libc = ctypes.CDLL(None, use_errno=True)
+        libc.adjtimex.argtypes = [ctypes.c_void_p]
+        libc.adjtimex.restype = ctypes.c_int
         buf = ctypes.create_string_buffer(512)  # struct timex, modes = 0 (read only)
         state = libc.adjtimex(buf)
     except (OSError, AttributeError):

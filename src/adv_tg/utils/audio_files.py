@@ -51,6 +51,7 @@ __all__ = [
     "AudioInfo",
     "AudioWriter",
     "DEFAULT_SUBTYPES",
+    "MAX_IN_MEMORY_FRAMES",
     "SUPPORTED_EXTENSIONS",
     "audio_info",
     "iter_audio_blocks",
@@ -67,6 +68,8 @@ _dbg = Debugger.get(__name__)
 SUPPORTED_EXTENSIONS: dict[str, str] = {".wav": "WAV", ".flac": "FLAC"}
 DEFAULT_SUBTYPES: dict[str, str] = {"WAV": "FLOAT", "FLAC": "PCM_24"}
 _FLOAT_SUBTYPES = frozenset({"FLOAT", "DOUBLE"})
+#: Límite máximo de muestras para decodificación completa en memoria (2 horas a 48 kHz).
+MAX_IN_MEMORY_FRAMES: int = 48000 * 7200
 
 ChannelMode = Literal["max_energy"] | int
 
@@ -161,6 +164,8 @@ def _parse_vorbis(body: bytes) -> tuple[bytes, list[str]]:
     n = u32(0)
     vendor, i = body[4 : 4 + n], 4 + n
     count, i = u32(i), i + 4
+    if count > (len(body) - i) // 4:
+        raise ValueError("el conteo de comentarios Vorbis excede el tamaño del bloque")
     comments = []
     for _ in range(count):
         n, i = u32(i), i + 4
@@ -308,22 +313,29 @@ def audio_info(path: Path | str) -> AudioInfo:
     )
 
 
-def read_audio(path: Path | str) -> AudioData:
+def read_audio(path: Path | str, max_frames: int | None = MAX_IN_MEMORY_FRAMES) -> AudioData:
     """Read a whole audio file (WAV, FLAC or any format libsndfile decodes).
 
     Args:
         path: File path.
+        max_frames: Max sample frames to load in memory (default ``MAX_IN_MEMORY_FRAMES``).
 
     Returns:
         The decoded ``AudioData``.
 
     Raises:
-        AudioFileError: If the file is missing, unsupported or corrupt.
+        AudioFileError: If the file is missing, unsupported, too large or corrupt.
     """
     p = Path(path)
     sf = _sf()
     try:
         _check_readable(p)
+        info = audio_info(p)
+        if max_frames is not None and info.frames > max_frames:
+            raise AudioFileError(
+                f"el archivo '{p.name}' excede el límite de memoria para carga completa "
+                f"({info.frames} muestras > {max_frames}); use iter_audio_blocks"
+            )
         with sf.SoundFile(str(p)) as f:
             data = f.read(dtype="float64", always_2d=False)
             fs, ch, fmt, sub = int(f.samplerate), int(f.channels), f.format, f.subtype

@@ -98,8 +98,13 @@ class LoggerSetup:
             None
         """
 
-        # Defines log directory and creates it if it doesn't exist
-        LoggerSetup.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        # Defines log directory and creates it if it doesn't exist with owner-only permissions (0700)
+        LoggerSetup.LOG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if sys.platform != "win32" and LoggerSetup.LOG_DIR.is_dir():
+            try:
+                LoggerSetup.LOG_DIR.chmod(0o700)
+            except OSError:
+                pass
 
         log_file = LoggerSetup.log_file()
         root_logger = logging.getLogger()

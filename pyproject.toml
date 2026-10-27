@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "advanced-timegrapher"
-version = "0.6.1"
+version = "0.6.3"
 description = "Software timegrapher for mechanical watches (PyQt6 GUI; measurement core under reconstruction)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { text = "GPL-3.0-or-later" }
 authors = [
     { name = "Alberto Pico Lara" }
@@ -19,7 +19,6 @@ dependencies = [
     "PyQt6>=6.6",
     "pyqtgraph>=0.13",
     "PyOpenGL",
-    "PyOpenGL_accelerate",
 ]
 
 [project.optional-dependencies]
@@ -51,7 +50,7 @@ pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 # E = pycodestyle, F = Pyflakes (imports/variables sin usar), I = isort (orden de imports)

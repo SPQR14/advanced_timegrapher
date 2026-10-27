@@ -28,6 +28,7 @@ from adv_tg import __version__
 from adv_tg.utils.adc_calibration import config_dir
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
+from adv_tg.utils.security import anonymize_text
 
 __all__ = [
     "ISSUES_URL",
@@ -151,10 +152,15 @@ def build_report(
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f".{dest.name}.tmp")
     try:
+        report_text = anonymize_text("\n".join(lines) + "\n")
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
-            z.writestr("report.txt", "\n".join(lines) + "\n")
+            z.writestr("report.txt", report_text)
             for p in logs:
-                z.write(p, f"logs/{p.name}")
+                try:
+                    log_text = anonymize_text(p.read_text(encoding="utf-8", errors="replace"))
+                    z.writestr(f"logs/{p.name}", log_text)
+                except Exception:
+                    z.write(p, f"logs/{p.name}")
             if calibrations.is_file():
                 z.write(calibrations, "adc_calibration.json")
             if rec_ok and recording is not None:
