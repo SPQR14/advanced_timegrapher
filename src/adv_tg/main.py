@@ -42,7 +42,12 @@ def _install_excepthook() -> None:
 def _enable_faulthandler() -> None:
     """Dump native crashes (segfaults in Qt/PortAudio) to ``logs/faulthandler.log``."""
     global _FAULT_LOG_FH
-    LoggerSetup.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LoggerSetup.LOG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if sys.platform != "win32" and LoggerSetup.LOG_DIR.is_dir():
+        try:
+            LoggerSetup.LOG_DIR.chmod(0o700)
+        except OSError:
+            pass
     fault_path = LoggerSetup.LOG_DIR / "faulthandler.log"
     _FAULT_LOG_FH = fault_path.open("a", encoding="utf-8")
     faulthandler.enable(file=_FAULT_LOG_FH, all_threads=True)
