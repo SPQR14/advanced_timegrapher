@@ -55,14 +55,14 @@ def test_late_telemetry_after_stop_is_ignored(qtbot) -> None:
     window.start_capture()
     qtbot.wait(600)
     window.stop_capture()
-    n_tape = len(window._tape_times_even)
+    n_tape = len(window._tape_x_even)
     n_hist = len(window._rate_history)
     assert n_tape > 0
 
     # Telemetry that was still queued when the session stopped
     window._on_telemetry_ready(TelemetryResult(9.9, 0.5, 250.0, 0.9))
     qtbot.wait(300)  # also drain anything the worker had queued
-    assert len(window._tape_times_even) == n_tape
+    assert len(window._tape_x_even) == n_tape
     assert len(window._rate_history) == n_hist
     window.close()
 

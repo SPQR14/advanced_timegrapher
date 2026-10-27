@@ -28,6 +28,12 @@ FIXED length for the session (``display_window``: from the longest lift time dow
 ``DISPLAY_MIN_AMPLITUDE_DEG`` plus ``display_pre_ms`` before the reference instant, and
 ``display_post_ms`` after it), so the plot never rescales from one beat to the next.
 
+Paper tape (``SessionSnapshot.tape_*``). For each new beat with a fine instant: its time in
+seconds and its offset in ms against a grid of nominal periods corrected by the applied clock
+drift, ``-(t_fine - t0 - (k - k0) P_nom (1 + ppm 1e-6)) / fs`` (sign: a gaining watch goes
+up). A healthy watch draws two straight rows (tic and tac): the slope is the rate
+(1 s/d = 1/86.4 ms per second) and their distance the tic/tac offset.
+
 Displayed figures (``SessionSnapshot.display``). In live mode a parity template can give a
 wrong P1 onset for one or two refreshes (Miyota: tac amplitude 295° -> 127° -> 295° within
 0.6 s), which moves the amplitude and, through the tic/tac mismatch factor, drops the
@@ -76,6 +82,10 @@ DRIFT_REFIT_S = 1.0
 SNR_BEATS = 16
 #: Updates in the median of the displayed figures (see module docstring).
 DISPLAY_UPDATES = 7
+#: Longer median for the displayed beat error (stable on a healthy watch; 5 s at 4/s): a
+#: step of the P3 timing point inside the 30 s window raised it for many updates (CM18
+#: 4R36: displayed maximum 1.89 -> 1.72 ms, H-50 1.85 -> 1.14 ms). docs/resultados_beta2.md.
+BE_DISPLAY_UPDATES = 20
 #: The oscilloscope window shows P1 for amplitudes down to this value.
 DISPLAY_MIN_AMPLITUDE_DEG = 150.0
 
@@ -151,6 +161,8 @@ class SessionSnapshot:
         audio_s: Seconds of audio processed.
         detector_warnings: Warnings of the detector (e.g. probable wrong BPH).
         display: Figures to show (median of the last updates, see module docstring).
+        tape_time_s, tape_offset_ms, tape_parity: Paper tape points of the new beats (see
+            module docstring): ADC time in s, offset in ms, parity of ``k`` (0 = tic).
     """
 
     metrics: Metrics
@@ -170,6 +182,9 @@ class SessionSnapshot:
     audio_s: float
     detector_warnings: tuple[str, ...] = field(default_factory=tuple)
     display: DisplayFigures = field(default_factory=DisplayFigures)
+    tape_time_s: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
+    tape_offset_ms: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
+    tape_parity: NDArray[np.int8] = field(default_factory=lambda: np.zeros(0, np.int8))
 
 
 class MeasurementSession:
@@ -207,6 +222,8 @@ class MeasurementSession:
         self._recent_snr: list[float] = []
         self._last_beat: Beat | None = None
         self._history: deque[Metrics] = deque(maxlen=DISPLAY_UPDATES)
+        self._be_history: deque[float] = deque(maxlen=BE_DISPLAY_UPDATES)
+        self._tape_origin: tuple[int, float] | None = None  # (k0, t0) of the tape grid
         lo, hi = self._detector.config.band_hz
         self._sos = butter_bandpass_sos(4, (lo, hi), fs)
         self._zi = sosfilt_zi(self._sos)
@@ -291,8 +308,10 @@ class MeasurementSession:
     def _display(self, metrics: Metrics) -> DisplayFigures:
         if not math.isfinite(metrics.rate_s_per_day):
             self._history.clear()  # no figures now: never show stale ones
+            self._be_history.clear()
             return DisplayFigures()
         self._history.append(metrics)
+        self._be_history.append(metrics.beat_error_ms)
         h = list(self._history)
         tic = _nanmedian([m.amplitude_tic_deg for m in h])
         tac = _nanmedian([m.amplitude_tac_deg for m in h])
@@ -305,7 +324,7 @@ class MeasurementSession:
             amp = math.nan
         return DisplayFigures(
             rate_s_per_day=_nanmedian([m.rate_s_per_day for m in h]),
-            beat_error_ms=_nanmedian([m.beat_error_ms for m in h]),
+            beat_error_ms=_nanmedian(list(self._be_history)),
             amplitude_deg=amp,
             amplitude_tic_deg=tic,
             amplitude_tac_deg=tac,
@@ -314,6 +333,21 @@ class MeasurementSession:
                 np.median([timing_confidence(m, self._tracker.config) for m in h])
             ),
         )
+
+    # ------------------------------------------------------------------ paper tape
+    def _tape(self, beats: list[Beat]) -> tuple[NDArray, NDArray, NDArray]:
+        good = [b for b in beats if math.isfinite(b.t_fine)]
+        if not good:
+            return np.zeros(0), np.zeros(0), np.zeros(0, np.int8)
+        if self._tape_origin is None:
+            self._tape_origin = (good[0].k, good[0].t_fine)
+        k0, t0 = self._tape_origin
+        period = self._metrics_config.nominal_period_samples * (1.0 + self._applied[0].ppm * 1e-6)
+        k = np.array([b.k for b in good], dtype=np.float64)
+        t = np.array([b.t_fine for b in good])
+        offset_ms = -(t - t0 - (k - k0) * period) / self._fs * 1e3
+        parity = (np.array([b.k for b in good]) & 1).astype(np.int8)
+        return t / self._fs, offset_ms, parity
 
     # ------------------------------------------------------------------ update
     def update(self, stream: SampleStream) -> SessionSnapshot:
@@ -330,6 +364,7 @@ class MeasurementSession:
                 self._last_beat = b
         del self._recent_snr[:-SNR_BEATS]
         metrics = self._tracker.result()
+        tape = self._tape(beats)
 
         window = self._tracker.beats
         det_ratio = math.nan
@@ -363,6 +398,9 @@ class MeasurementSession:
             audio_s=audio_s,
             detector_warnings=stats.warnings,
             display=self._display(metrics),
+            tape_time_s=tape[0],
+            tape_offset_ms=tape[1],
+            tape_parity=tape[2],
         )
 
     @property

@@ -165,8 +165,10 @@ DURATION_CHOICES_S: tuple[int, ...] = (
     3600,
 )
 DEFAULT_DURATION_S: int = 60
-#: The paper tape draws point symbols up to this many points per curve (1 min at 4/s).
+#: The paper tape draws point symbols up to this many points per curve.
 TAPE_SYMBOL_MAX_POINTS: int = 240
+#: Smallest half height of the paper tape view, in ms.
+TAPE_MIN_HALF_SPAN_MS: float = 1.0
 #: Longest test whose audio is recorded (FLAC of the session; ~66 KB/s with a CM18). Longer
 #: tests are not recorded: the temporary file would grow to hundreds of MB.
 RECORDING_MAX_DURATION_S: int = 240
@@ -328,10 +330,10 @@ class MainWin(QMainWindow):
 
         # Telemetry history for statistics & horizontal paper tape trace
         self._rate_history: list[float] = []
-        self._tape_times_even: list[float] = []
-        self._tape_rate_even: list[float] = []
-        self._tape_times_odd: list[float] = []
-        self._tape_rate_odd: list[float] = []
+        self._tape_x_even: list[float] = []
+        self._tape_ms_even: list[float] = []
+        self._tape_x_odd: list[float] = []
+        self._tape_ms_odd: list[float] = []
         self._last_telemetry: TelemetryResult | None = None
         self._session_records: list[dict[str, float | str | int]] = []
         self._capture_start_monotonic: float | None = None
@@ -347,6 +349,7 @@ class MainWin(QMainWindow):
         self._last_saturated_monotonic: float = -math.inf
         self._last_warning: str = ""
         self._tape_autoscale: bool = True
+        self._tape_y0: float | None = None  # offset of the first tape point (trace starts at 0)
         self._osc_span_ms: float | None = None
         self._silence_since: float | None = None
         self._silence_warned: bool = False
@@ -1155,7 +1158,7 @@ class MainWin(QMainWindow):
         self.paper_tape_plot = pg.PlotWidget()
         self.paper_tape_plot.showGrid(x=True, y=True, alpha=0.25)
         self.paper_tape_plot.setXRange(0.0, 30.0)
-        self.paper_tape_plot.setYRange(-10.0, 12.0)
+        self.paper_tape_plot.setYRange(-TAPE_MIN_HALF_SPAN_MS, TAPE_MIN_HALF_SPAN_MS)
         self.paper_tape_plot.getViewBox().sigRangeChangedManually.connect(
             self._on_paper_tape_manual_range
         )
@@ -1168,26 +1171,21 @@ class MainWin(QMainWindow):
         )
         self.paper_tape_plot.addItem(self.tape_zero_line)
 
-        # Static horizontal translucent green COSC limit lines (-4 and +6) on Y-axis
-        cosc_pen = pg.mkPen(color=(0, 230, 118, 135), width=1.8, style=Qt.PenStyle.DashLine)
-        self.cosc_lower_line = pg.InfiniteLine(
-            pos=self.COSC_MIN_SPD,
-            angle=0,
-            pen=cosc_pen,
-            label="-4",
-            labelOpts={"position": 0.97, "color": (0, 230, 118, 220)},
-        )
-        self.cosc_upper_line = pg.InfiniteLine(
-            pos=self.COSC_MAX_SPD,
-            angle=0,
-            pen=cosc_pen,
-            label="+6",
-            labelOpts={"position": 0.97, "color": (0, 230, 118, 220)},
-        )
-        self.paper_tape_plot.addItem(self.cosc_lower_line)
-        self.paper_tape_plot.addItem(self.cosc_upper_line)
+        # COSC limits (-4 / +6 s/d) as slopes from the origin: on a paper tape the rate is the
+        # slope of the rows (1 s/d = 1/86.4 ms per second); see _update_cosc_slopes
+        cosc_pen = pg.mkPen(color=(0, 230, 118, 135), width=1.0, style=Qt.PenStyle.DashLine)
+        self.cosc_lower_line = self.paper_tape_plot.plot([], [], pen=cosc_pen)
+        self.cosc_upper_line = self.paper_tape_plot.plot([], [], pen=cosc_pen)
+        self.cosc_lower_label = pg.TextItem("-4 s/d", color=(0, 230, 118, 220), anchor=(1, 0))
+        self.cosc_upper_label = pg.TextItem("+6 s/d", color=(0, 230, 118, 220), anchor=(1, 1))
+        self.paper_tape_plot.addItem(self.cosc_lower_label)
+        self.paper_tape_plot.addItem(self.cosc_upper_label)
+        self._update_cosc_slopes(30.0)
 
-        # Two parallel traces (even/odd beats) using circular point symbols ('o')
+        # Paper tape: one point per beat, tic (even k) and tac (odd k) rows timed at the drop
+        # (P3, the point of t_fine): their distance is the tic/tac offset at P3, which differs
+        # from the beat error card (measured at P1)
+        self.paper_tape_plot.addLegend(offset=(10, 10))
         self.tape_curve_even = self.paper_tape_plot.plot(
             [],
             [],
@@ -1196,7 +1194,7 @@ class MainWin(QMainWindow):
             symbolSize=5,
             symbolBrush="#00e5ff",
             symbolPen=None,
-            name="Tick (Even)",
+            name="Tic (P3)",
         )
         self.tape_curve_odd = self.paper_tape_plot.plot(
             [],
@@ -1206,7 +1204,7 @@ class MainWin(QMainWindow):
             symbolSize=5,
             symbolBrush="#ffab00",
             symbolPen=None,
-            name="Tock (Odd)",
+            name="Tac (P3)",
         )
         # Long tests (1 h = 14 400 points per curve): 1-px pens, peak downsampling and view
         # clipping; symbols only while the trace is short (_update_tape_symbols). With symbols
@@ -1694,9 +1692,59 @@ class MainWin(QMainWindow):
         self.btn_global_stats.setText(f"{arrow} {self.translator.tr('btn_global_stats')}")
         logger.debug("Global statistics panel visibility set to %s", checked)
 
+    def _update_cosc_slopes(self, span_s: float) -> None:
+        """Draw the COSC limits as rows of a watch at -4 / +6 s/d over ``span_s`` seconds."""
+        span = max(1.0, float(span_s))
+        for line, label, rate in (
+            (self.cosc_lower_line, self.cosc_lower_label, self.COSC_MIN_SPD),
+            (self.cosc_upper_line, self.cosc_upper_label, self.COSC_MAX_SPD),
+        ):
+            y_end = rate * span / 86.4
+            line.setData([0.0, span], [0.0, y_end])
+            label.setPos(span, y_end)
+
+    def _append_tape(self, telemetry: BeatTelemetry | TelemetryResult, t_meas: float) -> None:
+        """Add the new beats to the paper tape (after the stabilization time).
+
+        Real engine: one point per beat, its offset in ms against the nominal period
+        (``BeatTelemetry.tape_*``). MOCK (no beats): the simulated rate integrated over the
+        test, rows apart by the simulated beat error.
+        """
+        stab_s = self.stabilization_s()
+        times = getattr(telemetry, "tape_time_s", None)
+        if self.dsp_worker is not None and not self.dsp_worker.synthetic_mode:
+            if times is None or len(times) == 0:
+                return
+            x = np.asarray(times, dtype=np.float64) - stab_s
+            y = np.asarray(telemetry.tape_offset_ms, dtype=np.float64)
+            par = np.asarray(telemetry.tape_parity)
+            keep = x >= 0.0
+            if not np.any(keep):
+                return
+            x, y, par = x[keep], y[keep], par[keep]
+            if self._tape_y0 is None:
+                self._tape_y0 = float(y[0])
+            y = y - self._tape_y0
+            even = par == 0
+            self._tape_x_even.extend(x[even].tolist())
+            self._tape_ms_even.extend(y[even].tolist())
+            self._tape_x_odd.extend(x[~even].tolist())
+            self._tape_ms_odd.extend(y[~even].tolist())
+            return
+        rate = float(telemetry.rate_spd)
+        be = float(telemetry.beat_error_ms)
+        if not math.isfinite(rate):
+            return
+        half_be = 0.5 * be if math.isfinite(be) else 0.0
+        y = rate * t_meas / 86.4
+        self._tape_x_even.append(t_meas)
+        self._tape_ms_even.append(y - half_be)
+        self._tape_x_odd.append(t_meas)
+        self._tape_ms_odd.append(y + half_be)
+
     def _update_tape_symbols(self) -> None:
         """Point symbols only while the trace has at most ``TAPE_SYMBOL_MAX_POINTS`` points."""
-        want = len(self._tape_times_even) <= TAPE_SYMBOL_MAX_POINTS
+        want = len(self._tape_x_even) <= TAPE_SYMBOL_MAX_POINTS
         if want == self._tape_symbols:
             return
         self._tape_symbols = want
@@ -1711,13 +1759,13 @@ class MainWin(QMainWindow):
 
     def _paper_tape_target_range(self) -> tuple[float, float] | None:
         """Y range that centres the trace (None when there is no data)."""
-        all_y = self._tape_rate_even + self._tape_rate_odd
+        all_y = self._tape_ms_even + self._tape_ms_odd
         if not all_y:
             return None
         y_min = float(min(all_y))
         y_max = float(max(all_y))
         y_center = 0.5 * (y_min + y_max)
-        half_span = max(3.5, 0.75 * (y_max - y_min) + 2.0)
+        half_span = max(TAPE_MIN_HALF_SPAN_MS, 0.6 * (y_max - y_min) + 0.2)
         return y_center - half_span, y_center + half_span
 
     def _on_paper_tape_manual_range(self, *_args: object) -> None:
@@ -1737,7 +1785,7 @@ class MainWin(QMainWindow):
         if target is None:
             return
         (lo, hi) = self.paper_tape_plot.getViewBox().viewRange()[1]
-        all_y = self._tape_rate_even + self._tape_rate_odd
+        all_y = self._tape_ms_even + self._tape_ms_odd
         margin = 0.05 * (hi - lo)
         outside = min(all_y) < lo + margin or max(all_y) > hi - margin
         too_wide = (hi - lo) > 3.0 * (target[1] - target[0])
@@ -1747,23 +1795,11 @@ class MainWin(QMainWindow):
     def center_paper_tape_trace(self) -> None:
         """Auto-adjust the Paper Tape Y-axis range to center on current trace values."""
         self._tape_autoscale = True
-        all_y = self._tape_rate_even + self._tape_rate_odd
-        if not all_y:
-            self.paper_tape_plot.setYRange(-10.0, 12.0)
-            logger.debug("Paper tape trace centered to default range [-10.0, 12.0]")
-            return
-
-        y_min = float(min(all_y))
-        y_max = float(max(all_y))
-        y_center = 0.5 * (y_min + y_max)
-        half_span = max(3.5, 0.75 * (y_max - y_min) + 2.0)
-        self.paper_tape_plot.setYRange(y_center - half_span, y_center + half_span)
-        logger.info(
-            "Paper tape trace centered around %.2f s/d (range [%.2f, %.2f])",
-            y_center,
-            y_center - half_span,
-            y_center + half_span,
-        )
+        target = self._paper_tape_target_range()
+        if target is None:
+            target = (-TAPE_MIN_HALF_SPAN_MS, TAPE_MIN_HALF_SPAN_MS)
+        self.paper_tape_plot.setYRange(*target, padding=0.0)
+        logger.info("Paper tape centered on [%.3f, %.3f] ms", *target)
 
     def save_current_position(self) -> None:
         """Save current telemetry linked to the selected position (DU, DD, CU, CD, CL, CR)."""
@@ -2175,8 +2211,9 @@ class MainWin(QMainWindow):
 
         try:
             if ext == ".csv":
-                x_even, y_even = self.tape_curve_even.getData()
-                x_odd, y_odd = self.tape_curve_odd.getData()
+                # the stored points, not the curves (which may be downsampled for display)
+                x_even, y_even = self._tape_x_even, self._tape_ms_even
+                x_odd, y_odd = self._tape_x_odd, self._tape_ms_odd
                 x_osc, y_osc = self.osc_wave_curve.getData()
                 x_wav, y_wav = self.audio_waveform_curve.getData()
 
@@ -2573,10 +2610,10 @@ class MainWin(QMainWindow):
         logger.info("Starting telemetry capture session")
         self._rate_history.clear()
         self._session_records.clear()
-        self._tape_times_even.clear()
-        self._tape_rate_even.clear()
-        self._tape_times_odd.clear()
-        self._tape_rate_odd.clear()
+        self._tape_x_even.clear()
+        self._tape_ms_even.clear()
+        self._tape_x_odd.clear()
+        self._tape_ms_odd.clear()
         self._recorded_audio = None
         self._capture_start_monotonic = time.monotonic()
 
@@ -2614,6 +2651,9 @@ class MainWin(QMainWindow):
 
         duration_s = self.duration_s()
         self.paper_tape_plot.setXRange(0.0, max(10.0, duration_s))
+        self._tape_y0 = None
+        self._update_cosc_slopes(max(10.0, duration_s))
+        self.paper_tape_plot.setYRange(-TAPE_MIN_HALF_SPAN_MS, TAPE_MIN_HALF_SPAN_MS)
 
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -2903,15 +2943,11 @@ class MainWin(QMainWindow):
             self.lbl_stat_delta_val.setText(f"{r_delta:.2f} s/d")
             self.lbl_stat_mean_val.setText(f"{r_mean:+.2f} s/d")
 
-            half_be_offset = 0.5 * beat_error_ms if math.isfinite(beat_error_ms) else 0.0
-            self._tape_times_even.append(t_meas)
-            self._tape_rate_even.append(rate_spd - half_be_offset)
-            self._tape_times_odd.append(t_meas)
-            self._tape_rate_odd.append(rate_spd + half_be_offset)
-
+        if self._capture_start_monotonic is None or elapsed_s >= stab_s:
+            self._append_tape(telemetry, t_meas)
             self._update_tape_symbols()
-            self.tape_curve_even.setData(self._tape_times_even, self._tape_rate_even)
-            self.tape_curve_odd.setData(self._tape_times_odd, self._tape_rate_odd)
+            self.tape_curve_even.setData(self._tape_x_even, self._tape_ms_even)
+            self.tape_curve_odd.setData(self._tape_x_odd, self._tape_ms_odd)
             self._autoscale_paper_tape()
 
         if isinstance(telemetry, BeatTelemetry):

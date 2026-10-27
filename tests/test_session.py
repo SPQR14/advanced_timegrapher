@@ -151,3 +151,24 @@ def test_display_rejects_short_glitches() -> None:
     nan.rate_s_per_day = math.nan
     d = s._display(nan)
     assert math.isnan(d.rate_s_per_day) and d.confidence == 0.0
+
+
+def test_paper_tape_slope_is_the_rate_and_rows_the_beat_error() -> None:
+    x, _ = synth_watch(bph=28800, rate_s_per_day=6.0, beat_error_ms=0.5, amplitude_deg=270,
+                       lift_angle_deg=52, seconds=20, seed=12)  # fmt: skip
+    s = MeasurementSession(SessionConfig(sample_rate=FS, bph=28800, lift_angle_deg=52))
+    snaps = feed(s, x, wall=False)
+    t = np.concatenate([sn.tape_time_s for sn in snaps])
+    y = np.concatenate([sn.tape_offset_ms for sn in snaps])
+    par = np.concatenate([sn.tape_parity for sn in snaps])
+    assert t.size > 100 and np.all(np.diff(t) > 0)
+    slopes, intercepts = [], []
+    for p in (0, 1):
+        m = par == p
+        a, b = np.polyfit(t[m], y[m], 1)
+        slopes.append(a)
+        intercepts.append(b)
+    # +6 s/d gains 6/86400 s per second = 0.0694 ms/s (a gaining watch goes up)
+    assert slopes[0] == pytest.approx(6.0 / 86.4, rel=0.05)
+    assert slopes[1] == pytest.approx(6.0 / 86.4, rel=0.05)
+    assert abs(intercepts[0] - intercepts[1]) == pytest.approx(0.5, abs=0.05)

@@ -275,13 +275,13 @@ def test_paper_tape_symbols_only_for_short_traces(window) -> None:
         window.tape_curve_even.opts["autoDownsample"] and window.tape_curve_even.opts["clipToView"]
     )
     assert window.tape_curve_even.opts["pen"].widthF() == 1.0
-    window._tape_times_even[:] = list(range(mw.TAPE_SYMBOL_MAX_POINTS))
+    window._tape_x_even[:] = list(range(mw.TAPE_SYMBOL_MAX_POINTS))
     window._update_tape_symbols()
     assert window.tape_curve_even.opts["symbol"] == "o"
-    window._tape_times_even.append(1e6)
+    window._tape_x_even.append(1e6)
     window._update_tape_symbols()
     assert window.tape_curve_even.opts["symbol"] is None
     assert window.tape_curve_odd.opts["symbol"] is None
-    window._tape_times_even.clear()
+    window._tape_x_even.clear()
     window._update_tape_symbols()
     assert window.tape_curve_odd.opts["symbol"] == "o"
