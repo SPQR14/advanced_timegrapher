@@ -64,8 +64,7 @@ class FileReplay:
     @property
     def max_callback_us(self) -> float:
         """Longest simulated callback (one ``write``), in microseconds."""
-        st_write = self._stream.stats().max_write_us
-        return st_write if st_write > 0 else self._max_callback_ns / 1e3
+        return self._max_callback_ns / 1e3
 
     @property
     def is_active(self) -> bool:

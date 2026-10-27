@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import types
 from pathlib import Path
@@ -10,7 +11,7 @@ import numpy as np
 import pytest
 
 from adv_tg.tools import capture_check
-from adv_tg.tools.capture_check import EXIT_ERROR, EXIT_OK, main, read_wav_mono
+from adv_tg.tools.capture_check import EXIT_ERROR, EXIT_FAIL, EXIT_OK, main, read_wav_mono
 from adv_tg.utils.audio_files import read_audio, write_audio
 
 FS = 48_000
@@ -25,6 +26,17 @@ def _synthetic_wav(path: Path, secs: float = 2.0) -> np.ndarray:
         x[i : i + 200] += 0.5 * np.exp(-np.arange(200) / 30.0)
     write_audio(path, x, FS, subtype="PCM_16")
     return read_audio(path).samples.astype(np.float32)
+
+
+@pytest.fixture
+def no_callback_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable the longest-callback criterion (wall-clock µs) for end-to-end runs.
+
+    Shared CI runners pause the process for 5-15 ms at random, which fails that criterion
+    with 100 % ingest and no gaps. These tests check replay, saving and tags; the criterion
+    itself is covered by ``test_callback_criterion_fails_the_verdict``.
+    """
+    monkeypatch.setattr(capture_check, "MAX_CALLBACK_US", math.inf)
 
 
 def test_read_wav_mono_formats(tmp_path: Path) -> None:
@@ -42,6 +54,7 @@ def test_read_wav_mono_formats(tmp_path: Path) -> None:
     np.testing.assert_allclose(xf, ref, atol=1.0 / 32768.0)
 
 
+@pytest.mark.usefixtures("no_callback_limit")
 def test_file_replay_ok(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     wav = tmp_path / "tick.wav"
     _synthetic_wav(wav)
@@ -55,6 +68,7 @@ def test_file_replay_ok(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> N
     assert saved.sample_rate == FS and saved.subtype == "FLOAT" and saved.frames == 2 * FS
 
 
+@pytest.mark.usefixtures("no_callback_limit")
 def test_file_replay_saves_flac_with_out_alias(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -127,6 +141,7 @@ def test_list_with_fake_devices(
     assert "CM18 USB" in out and "predeterminado" in out and "Speakers" not in out
 
 
+@pytest.mark.usefixtures("no_callback_limit")
 def test_isolated_fake_source_ok(capsys: pytest.CaptureFixture[str]) -> None:
     import multiprocessing as mp
 
@@ -136,6 +151,18 @@ def test_isolated_fake_source_ok(capsys: pytest.CaptureFixture[str]) -> None:
     assert "proceso aparte" in out and "VEREDICTO: OK" in out
     assert "Tramas perdidas    : 0" in out
     assert mp.active_children() == []
+
+
+def test_callback_criterion_fails_the_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wav = tmp_path / "tick.wav"
+    _synthetic_wav(wav, secs=1.0)
+    monkeypatch.setattr(capture_check, "MAX_CALLBACK_US", 0.0)  # any callback exceeds it
+    code = main(["--file", str(wav), "--secs", "1"])
+    out = capsys.readouterr().out
+    assert code == EXIT_FAIL, out
+    assert "VEREDICTO: NO CUMPLE" in out and "callback máximo" in out
 
 
 @pytest.mark.parametrize("argv", [["--fake-source"], ["--isolated", "--file", "x.wav"]])
