@@ -59,7 +59,7 @@ def _check(m, rate: float, be: float, amp: float, tol: tuple[float, float, float
     assert m.rate_s_per_day == pytest.approx(rate, abs=tol[0])
     assert m.beat_error_ms == pytest.approx(be, abs=tol[1])
     assert m.amplitude_deg == pytest.approx(amp, rel=tol[2] / 100.0)
-    assert m.beat_error_point == "p1"
+    assert m.beat_error_point in ("p1", "p1_beat")
     assert not m.rate_trend_flag  # constant rate: no trend warning
 
 
@@ -196,3 +196,53 @@ def test_declared_rate_uncertainty_covers_the_error() -> None:
         m = compute_metrics(beats, det.templates(), _cfg(28800))
         inside += abs(m.rate_s_per_day - 5.0) <= 2.0 * m.rate_sigma_s_per_day
     assert inside >= 45
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_beat_error_when_the_drop_of_one_parity_wanders(seed: int, monkeypatch) -> None:
+    """Seiko 4R34: a clean P1 in tic and tac, but the tac drop arrives 0-3 ms late, beat by beat.
+
+    The template P1 inherits the drop alignment (the old method read 0.3-1.0 ms for a true
+    0.2 ms); each beat's own P1 is exact, and its far lower uncertainty selects it.
+    """
+    from adv_tg.core import metrics
+
+    x, _ = synth_watch(
+        bph=21600,
+        rate_s_per_day=7.0,
+        beat_error_ms=0.2,
+        amplitude_deg=246,
+        lift_angle_deg=53,
+        seconds=90,
+        snr_db=25,
+        seed=seed,
+        odd_drop_wander_ms=3.0,
+        **REALISM,
+    )
+    det = BeatDetector(BeatDetectorConfig(sample_rate=FS, bph=21600, lift_angle_deg=53))
+    beats = []
+    for i in range(0, x.size, 4096):
+        beats += det.process(x[i : i + 4096], i)
+    beats += det.flush()
+    cfg = MetricsConfig(sample_rate=FS, bph=21600, lift_angle_deg=53)
+    m = compute_metrics(beats, det.templates(), cfg)
+    assert m.beat_error_point == "p1_beat"
+    assert m.beat_error_ms == pytest.approx(0.2, abs=0.05)
+    assert m.rate_s_per_day == pytest.approx(7.0, abs=0.5)
+    # the template P1 alone (the previous method) misses
+    monkeypatch.setattr(metrics, "_BE_SWITCH_RATIO", 0.0)
+    old = compute_metrics(beats, det.templates(), cfg)
+    assert old.beat_error_point == "p1"
+    assert abs(old.beat_error_ms - 0.2) > 0.08
+
+
+def test_beat_error_keeps_the_template_p1_on_a_near_tie(monkeypatch) -> None:
+    """A per-beat P1 only slightly more precise does not replace the validated template P1."""
+    from adv_tg.core import metrics
+
+    m = _measure(28800, seed=11, **REALISM)
+    assert m.beat_error_point in ("p1", "p1_beat")
+    monkeypatch.setattr(metrics, "_BE_SWITCH_RATIO", 1e-9)  # never switch
+    ref = _measure(28800, seed=11, **REALISM)
+    assert ref.beat_error_point == "p1"
+    assert m.beat_error_ms == pytest.approx(ref.beat_error_ms, abs=0.05)

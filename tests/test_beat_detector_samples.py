@@ -59,7 +59,11 @@ def test_real_mechanical_recording(path: Path | None) -> None:
     assert s.parity_ok is not False
     assert result.invariant
     assert s.fine_pct >= 80.0
-    assert s.fine_beat_offset_ms < 0.5
+    # Tic/tac P1 offset of the templates. Seiko 4R34 (nh34): the tic drop wanders ~3 ms after
+    # a clean unlock and the drop-aligned templates misplace P1 (3 ms); the metrics measure its
+    # beat error on each beat's own P1 instead (test_metrics_samples.test_seiko_4r34_gmt_*).
+    if "nh34" not in path.name and "4r34" not in path.name:
+        assert s.fine_beat_offset_ms < 0.5
     if s.p1_pct >= 50.0:
         assert math.isfinite(s.t_lift_median_ms)
         assert result.verdict == "OK", result.reasons
