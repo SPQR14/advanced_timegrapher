@@ -100,14 +100,19 @@ En Linux y macOS, nombres como `"libsndfile.so"` o `"libsndfile.dylib"` presenta
 # Corrección propuesta:
 import sys
 
+
 def _load_libsndfile() -> ctypes.CDLL | None:
     # 1. soundfile ya incluye libsndfile compilado en la mayoría de plataformas
     # 2. Si se busca en el sistema, verificar rutas absolutas estrictas:
     candidates: list[Path] = []
     if sys.platform == "darwin":
-        candidates.extend([Path("/opt/homebrew/lib/libsndfile.dylib"), Path("/usr/local/lib/libsndfile.dylib")])
+        candidates.extend(
+            [Path("/opt/homebrew/lib/libsndfile.dylib"), Path("/usr/local/lib/libsndfile.dylib")]
+        )
     elif sys.platform == "linux":
-        candidates.extend([Path("/usr/lib/x86_64-linux-gnu/libsndfile.so.1"), Path("/usr/lib/libsndfile.so.1")])
+        candidates.extend(
+            [Path("/usr/lib/x86_64-linux-gnu/libsndfile.so.1"), Path("/usr/lib/libsndfile.so.1")]
+        )
     elif sys.platform == "win32":
         # Nunca cargar "sndfile.dll" de forma relativa. Usar solo System32 o ruta de instalación segura.
         sys32 = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "sndfile.dll"
@@ -192,7 +197,7 @@ En el módulo `audio_files.py`, la función `read_audio(path)` lee archivos de a
 ```python
 # src/adv_tg/utils/audio_files.py: líneas 181-192
 with sf.SoundFile(str(p)) as f:
-    data = f.read(dtype="float64", always_2d=False) # <--- Asignación masiva directa
+    data = f.read(dtype="float64", always_2d=False)  # <--- Asignación masiva directa
 ...
 samples = np.ascontiguousarray(data, dtype=np.float64)
 ```
@@ -214,6 +219,7 @@ No existe ninguna validación previa de:
 
 ```python
 MAX_AUDIO_FRAMES_IN_MEMORY = 48000 * 3600  # Máximo 1 hora a 48 kHz (~1.3 GB float64)
+
 
 def read_audio(path: Path | str, max_frames: int = MAX_AUDIO_FRAMES_IN_MEMORY) -> AudioData:
     p = Path(path)
@@ -240,7 +246,7 @@ La función `_write_via_cli()` se utiliza como codificador alternativo llamando 
 
 ```python
 # src/adv_tg/utils/audio_io.py: líneas 465, 471, 488
-res = subprocess.run(cmd, capture_output=True, check=False) # <--- Sin timeout
+res = subprocess.run(cmd, capture_output=True, check=False)  # <--- Sin timeout
 ```
 
 A diferencia de `gil_probe.py` (que define `timeout=args.secs + 2 * SAFETY_MARGIN_S`), en `audio_io.py` **no se establece el parámetro `timeout`**.
@@ -404,7 +410,9 @@ Si el texto contiene secuencias de salto de directorio (`../`, `..\`) o caracter
 Filtrar caracteres no alfanuméricos en el nombre base sugerido:
 
 ```python
-safe_name = "".join(c for c in test_name if c.isalnum() or c in ("-", "_", " ")).strip() or "watch_test"
+safe_name = (
+    "".join(c for c in test_name if c.isalnum() or c in ("-", "_", " ")).strip() or "watch_test"
+)
 default_name = f"{safe_name}_results.csv"
 ```
 

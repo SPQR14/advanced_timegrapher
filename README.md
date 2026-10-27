@@ -78,10 +78,16 @@ the first time your system will warn you. This is expected; follow the steps bel
    your distribution's equivalent.
 2. Download the Linux file, make it executable (`chmod +x <file>`) and run it.
 
-### Option B: from the source code (for technical users)
+### Option B: using pip (precompiled wheel or from source)
 
-Requires **Python 3.11 or later** and Git.
+**1. Without a C++ compiler (recommended):**
+Download and install the precompiled wheel from the [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest) page, or point pip directly to the release:
+```bash
+pip install --find-links https://github.com/SPQR14/advanced_timegrapher/releases/latest advanced-timegrapher
+```
 
+**2. From the source code (git checkout):**
+Requires **Python 3.11 or later** and Git:
 ```bash
 git clone https://github.com/SPQR14/advanced_timegrapher.git
 cd advanced_timegrapher
@@ -92,6 +98,10 @@ python -m venv .venv
 # Windows (PowerShell)
 .venv\Scripts\python.exe -m pip install -e .
 .venv\Scripts\adv-tg.exe
+```
+If you have a C++ compiler installed (Xcode Tools on macOS, MSVC Build Tools on Windows, `build-essential` on Linux), the native C++ DSP core is built automatically. If you do not have a C++ compiler, you can install the pure-Python SciPy fallback instead:
+```bash
+pip install -e ".[fallback]"
 ```
 
 On Linux you may also need `sudo apt install libportaudio2`. On macOS, the first time, the
@@ -113,7 +123,7 @@ Terminal app (or your IDE) will ask for microphone access.
      beat error are not affected, but the **amplitude will only be indicative**.
 4. Choose the **Stabilization** time (10, 15 or 20 s): the app listens but does not record
    figures yet, so the watch can settle after you put it on the microphone.
-5. Choose the **Test Duration** (30 s to 1 h). 60 s is a good start; for comparing positions use
+5. Choose the **Test Duration** (12 s to 24 h). 60 s is a good start; for comparing positions use
    2 minutes or more.
 6. Optionally type a **Test Name** (it is used in the exported files).
 7. Press **START**. The status bar shows *STABILIZING…* and then *MEASURING*. The first figures
@@ -177,7 +187,8 @@ shows the history and lets you delete it.
 
 - **Record Audio**: saves the test's sound as a FLAC file, with the microphone, date and clock
   calibration stored inside the file. Press it during the test and it will ask where to save
-  when the test ends; press it after the test to save the last one.
+  when the test ends; press it after the test to save the last one. Only available for tests
+  of up to **240 s** (longer recordings would take hundreds of MB).
 - **Save Position**: adds the current result to the positions table; **Global Statistics
   (Positional Delta)** shows the differences between positions.
 - **Export Results to CSV**, **Export Test Results**, **Export Traces**, **Print Traces**: the
@@ -322,10 +333,16 @@ así que la primera vez el sistema avisa. Es normal; sigue estos pasos.
    equivalente de tu distribución.
 2. Descarga el archivo de Linux, dale permiso de ejecución (`chmod +x <archivo>`) y ábrelo.
 
-### Opción B: desde el código fuente (usuarios técnicos)
+### Opción B: mediante pip (wheel precompilado o desde código fuente)
 
-Requiere **Python 3.11 o posterior** y Git.
+**1. Sin compilador de C++ (recomendado):**
+Descarga e instala el wheel precompilado desde la página de [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest), o instala directamente apuntando pip al release:
+```bash
+pip install --find-links https://github.com/SPQR14/advanced_timegrapher/releases/latest advanced-timegrapher
+```
 
+**2. Desde el código fuente (git):**
+Requiere **Python 3.11 o posterior** y Git:
 ```bash
 git clone https://github.com/SPQR14/advanced_timegrapher.git
 cd advanced_timegrapher
@@ -336,6 +353,10 @@ python -m venv .venv
 # Windows (PowerShell)
 .venv\Scripts\python.exe -m pip install -e .
 .venv\Scripts\adv-tg.exe
+```
+Si tienes un compilador de C++ instalado (Xcode Tools en macOS, MSVC Build Tools en Windows, `build-essential` en Linux), la extensión C++ se compila automáticamente. Si no dispones de compilador, puedes instalar el respaldo en Python puro con SciPy:
+```bash
+pip install -e ".[fallback]"
 ```
 
 En Linux puede hacer falta `sudo apt install libportaudio2`. En macOS, la primera vez, la
@@ -359,7 +380,7 @@ aplicación Terminal (o tu editor) pedirá acceso al micrófono.
      orientativa**.
 4. Elige la **Estabilización** (10, 15 o 20 s): la aplicación escucha pero aún no registra
    cifras, para que el reloj se asiente después de colocarlo.
-5. Elige la **Duración Test** (de 30 s a 1 h). 60 s está bien para empezar; para comparar
+5. Elige la **Duración Test** (de 12 s a 24 h). 60 s está bien para empezar; para comparar
    posiciones usa 2 minutos o más.
 6. Si quieres, escribe un **Nombre de la prueba** (se usa en los archivos exportados).
 7. Pulsa **INICIAR**. La barra de estado muestra *ESTABILIZANDO…* y después *MIDIENDO*. Las
@@ -426,7 +447,8 @@ ventana muestra el historial y permite borrarlo.
 
 - **Grabar Sonido**: guarda el sonido de la prueba en un archivo FLAC, con el micrófono, la
   fecha y la calibración del reloj dentro del archivo. Pulsado durante la prueba, pregunta dónde
-  guardarlo al terminar; pulsado después, guarda la última prueba.
+  guardarlo al terminar; pulsado después, guarda la última prueba. Solo está disponible en
+  pruebas de hasta **240 s** (las grabaciones más largas ocuparían cientos de MB).
 - **Guardar Posición**: añade el resultado actual a la tabla de posiciones; **Estadísticas
   Globales (Delta Posicional)** muestra las diferencias entre posiciones.
 - **Exportar resultados a CSV**, **Exportar resultados de la prueba**, **Exportar Trazas** e

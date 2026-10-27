@@ -113,7 +113,7 @@ En [`capture_process.py`](file:///Users/sqpr14/Desarrollo/advanced_timegrapher/s
   old.shutdown()
   if isinstance(old, MockStreamWorker):
       old.drift_detail.disconnect()
-  for sig in (...):
+  for sig in ...:
       sig.disconnect()
   old.deleteLater()
   ```

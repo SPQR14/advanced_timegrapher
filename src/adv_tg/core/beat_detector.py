@@ -106,7 +106,6 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
-from scipy import signal
 
 from adv_tg.core.beat_types import (
     Beat,
@@ -117,6 +116,8 @@ from adv_tg.core.beat_types import (
     lift_time_window_s,
 )
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
+from adv_tg.dsp.engine import compute_cell_envelope, detect_cell_candidates, sosfilt
+from adv_tg.dsp.filters import butter_bandpass_sos, sosfilt_zi, sosfiltfilt_padlen
 from adv_tg.utils.debugger import Debugger
 
 __all__ = [
@@ -557,16 +558,17 @@ class BeatDetector:
         self.fs = fs
         ms = fs / 1000.0
         self.S = max(1, int(round(c.grid_step_s * fs)))
-        self.sos = signal.butter(c.filter_order, c.band_hz, btype="bandpass", fs=fs, output="sos")
+        self.sos = butter_bandpass_sos(c.filter_order, c.band_hz, fs)
+        self._zi = sosfilt_zi(self.sos)
         self._hk = _hilbert_fir(int(math.ceil(1.5 * fs / c.band_hz[0])))
         sm = max(1, int(round(c.envelope_smooth_ms * ms)))
         sm += 1 - sm % 2  # odd -> centred
         self._smooth = np.full(sm, 1.0 / sm)
-        imp = signal.sosfilt(self.sos, np.r_[1.0, np.zeros(int(0.2 * fs))])
+        imp = sosfilt(self.sos, np.r_[1.0, np.zeros(int(0.2 * fs))])
         big = np.flatnonzero(np.abs(imp) > 1e-6 * np.max(np.abs(imp)))
         self.filter_memory = int(big[-1]) + 1 if big.size else 1
         self.margin = 3 * self.filter_memory + self._hk.size // 2 + sm // 2 + 1
-        self._padlen = 3 * (2 * len(self.sos) + 1)
+        self._padlen = sosfiltfilt_padlen(self.sos)
         self.OV = int(round(0.04 * fs))
         self.period_nom = beat_period_s(c.bph) * fs
         tmin, tmax = lift_time_window_s(c.bph, c.lift_angle_deg, c.amplitude_range_deg)
@@ -907,14 +909,17 @@ class BeatDetector:
         c0 = max(m * S, self._run_start)
         c1 = min((m + 1) * S, self._raw.end)
         x = self._raw.get(a, b)
-        if x.size > self._padlen + 1:
-            y = signal.sosfiltfilt(self.sos, x)
-            h = signal.oaconvolve(y, self._hk, mode="same")
-            e = np.sqrt(y * y + h * h)
-            e = np.convolve(e, self._smooth, mode="same")
-        else:
-            e = np.zeros(x.size)
-        self._env.append(e[c0 - a : c1 - a])
+        e = compute_cell_envelope(
+            x,
+            self.sos,
+            self._zi,
+            self._hk,
+            self._smooth,
+            c0 - a,
+            c1 - a,
+            self._padlen,
+        )
+        self._env.append(e)
         self._scan_zeros(c0, self._raw.get(c0, c1))
 
     def _after_cell(self, final: bool) -> list[Beat]:
@@ -997,76 +1002,22 @@ class BeatDetector:
         idx = (np.arange(lo, hi) // S) - cells[0]
         F = fl[idx, 0]
         D = fl[idx, 1]
-        thr_hi = F + c.threshold_hi * D
-        thr_lo = F + c.threshold_lo * D
-        starts, ends = _runs(e > thr_lo)
-        if starts.size == 0:
-            return
-        if starts.size > 1:  # merge runs separated by less than ripple_merge_ms
-            keep = np.r_[True, (starts[1:] - ends[:-1]) >= self.merge]
-            ends = np.maximum.reduceat(ends, np.flatnonzero(keep))
-            starts = starts[keep]
-        on_l: list[float] = []
-        pk_l: list[float] = []
-        fl_l: list[float] = []
-        sp_l: list[float] = []
-        cell_a, cell_b = cell * S, (cell + 1) * S
-        for s, t in zip(starts, ends, strict=True):
-            if not np.any(e[s:t] > thr_hi[s:t]):  # hysteresis: must reach the high threshold
-                continue
-            for onset, peak, pidx in self._split(e, s, t, F, D, thr_hi):
-                o_abs = lo + onset
-                if cell_a <= o_abs < cell_b and o_abs >= self._run_start:
-                    on_l.append(o_abs)
-                    pk_l.append(peak)
-                    fl_l.append(float(F[pidx]))
-                    sp_l.append(float(D[pidx]))
+        on_l, pk_l, fl_l, sp_l = detect_cell_candidates(
+            e,
+            F,
+            D,
+            c.threshold_hi,
+            c.threshold_lo,
+            self.merge,
+            c.split_ratio,
+            self.min_sp,
+            c.onset_fraction,
+            cell * S,
+            (cell + 1) * S,
+            lo,
+            self._run_start,
+        )
         self._cands.extend(on_l, pk_l, fl_l, sp_l)
-
-    def _split(
-        self, e: NDArray, s: int, t: int, F: NDArray, D: NDArray, thr_hi: NDArray
-    ) -> list[tuple[float, float, int]]:
-        """Sub-events of the run ``e[s:t]``: list of (onset, peak value, peak index)."""
-        c = self.config
-        seg = e[s:t]
-        peaks, _ = signal.find_peaks(seg)
-        if peaks.size == 0:
-            peaks = np.array([int(np.argmax(seg))])
-        peaks = peaks[seg[peaks] > thr_hi[s + peaks]]
-        if peaks.size == 0:
-            return []
-        groups: list[list[int]] = []  # [peak index (rel to seg), baseline-valley index or -1]
-        for p in peaks:
-            p = int(p)
-            if not groups:
-                groups.append([p, -1])
-                continue
-            cur = groups[-1]
-            v_rel = cur[0] + int(np.argmin(seg[cur[0] : p + 1]))
-            valley = max(float(seg[v_rel]), float(F[s + p]))
-            if seg[p] >= c.split_ratio * valley and (p - cur[0]) >= self.min_sp:
-                groups.append([p, v_rel])
-            elif seg[p] > seg[cur[0]]:
-                cur[0] = p
-        out = []
-        for p, v_rel in groups:
-            i = s + p
-            # baseline 0 for an isolated sub-event (so the crossing does not move with the noise
-            # floor), the preceding valley for one riding on the tail of another
-            base = 0.0 if v_rel < 0 else max(float(seg[v_rel]), float(F[i]))
-            level = base + c.onset_fraction * (float(e[i]) - base)
-            level = max(level, float(F[i] + c.threshold_lo * D[i]))
-            # search back from the peak to the preceding valley (or 1 ms before the run)
-            j0 = s + v_rel if v_rel >= 0 else max(0, s - int(self.min_sp))
-            below = np.flatnonzero(e[j0:i] < level)
-            if below.size == 0:
-                onset = float(j0)
-            else:
-                j = j0 + int(below[-1])
-                d = e[j + 1] - e[j]
-                onset = j + ((level - e[j]) / d if d > 0 else 0.0)
-            out.append((onset, float(e[i]), i))
-        return out
 
     # ------------------------------------------------------------------ acquisition
     def _try_acquire(self) -> None:

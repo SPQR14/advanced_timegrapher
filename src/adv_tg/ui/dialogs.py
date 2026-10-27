@@ -52,12 +52,33 @@ from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
 from adv_tg.utils.report import ISSUES_URL, build_report, default_report_name
 
-__all__ = ["REPO_URL", "AboutDialog", "CalibrationDialog", "LiveDrift", "ReportDialog"]
+__all__ = [
+    "REPO_URL",
+    "AboutDialog",
+    "CalibrationDialog",
+    "LiveDrift",
+    "ReportDialog",
+    "open_folder",
+]
 
 _dbg = Debugger.get(__name__)
 logger = _dbg.logger
 
 REPO_URL = "https://github.com/SPQR14/advanced_timegrapher"
+
+
+def open_folder(path: Path) -> bool:
+    """Open a folder in the system's file manager (created if missing). True on success."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning("No se pudo crear la carpeta %s: %s", path, exc)
+    ok = bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve()))))
+    if ok:
+        logger.info("Carpeta abierta: %s", path)
+    else:
+        logger.warning("No se pudo abrir la carpeta: %s", path)
+    return ok
 
 
 class LiveDrift:
@@ -293,6 +314,16 @@ class AboutDialog(QDialog):
         body.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         layout.addWidget(body)
         self.version_label = title
+
+        folder_layout = QHBoxLayout()
+        btn_open_logs = QPushButton(tr("open_logs_folder"))
+        btn_open_logs.clicked.connect(lambda: open_folder(LoggerSetup.LOG_DIR))
+        btn_open_config = QPushButton(tr("open_calibration_folder"))
+        btn_open_config.clicked.connect(lambda: open_folder(config_dir()))
+        folder_layout.addWidget(btn_open_logs)
+        folder_layout.addWidget(btn_open_config)
+        layout.addLayout(folder_layout)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)

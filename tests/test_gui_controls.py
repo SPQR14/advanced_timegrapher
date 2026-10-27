@@ -54,6 +54,8 @@ def window(qtbot, monkeypatch: pytest.MonkeyPatch):
 def test_duration_and_stabilization_choices(window) -> None:
     durations = [window.cmb_duration.itemText(i) for i in range(window.cmb_duration.count())]
     assert durations == [
+        "12 s",
+        "24 s",
         "30 s",
         "45 s",
         "60 s",
@@ -71,7 +73,7 @@ def test_duration_and_stabilization_choices(window) -> None:
     ]
     assert window.duration_s() == 60.0 and window.stabilization_s() == 10.0
     window.cmb_duration.setCurrentIndex(window.cmb_duration.count() - 1)
-    assert window.duration_s() == 3600.0
+    assert window.duration_s() == 3600.0  # longest choice: 1 h
     window.set_session_timing(stabilization_s=15, duration_s=300)
     assert window.stabilization_s() == 15.0 and window.cmb_duration.currentText() == "5 min"
     n = window.cmb_stab.count()
@@ -163,6 +165,34 @@ def test_calibration_button_and_about(window) -> None:
     about.close()
 
 
+def test_open_folders_actions(window, monkeypatch) -> None:
+    from adv_tg.ui import dialogs as dialogs_mod
+    from adv_tg.utils.adc_calibration import config_dir
+    from adv_tg.utils.logger_setup import LoggerSetup
+
+    opened_urls: list[str] = []
+
+    def fake_open(url):
+        opened_urls.append(url.toLocalFile())
+        return True
+
+    monkeypatch.setattr(dialogs_mod.QDesktopServices, "openUrl", fake_open)
+
+    assert window.open_logs_folder() is True
+    assert len(opened_urls) == 1
+    assert opened_urls[0] == str(LoggerSetup.LOG_DIR.resolve())
+
+    assert window.open_calibration_folder() is True
+    assert len(opened_urls) == 2
+    assert opened_urls[1] == str(config_dir().resolve())
+
+    # The Tools menu triggers the same actions (the top bar has no folder buttons any more)
+    window.action_open_logs.trigger()
+    window.action_open_calibration.trigger()
+    assert len(opened_urls) == 4
+    assert not hasattr(window, "btn_open_logs")
+
+
 def test_report_dialog_from_window(window, tmp_path) -> None:
     import zipfile
 
@@ -209,3 +239,48 @@ def test_digital_silence_hint(window, monkeypatch) -> None:
     assert window._silence_since is None
     window._set_capture_state("INACTIVO")
     assert _time is not None
+
+
+def test_recording_blocked_for_long_tests(window) -> None:
+    assert [window.cmb_duration.itemData(i) for i in range(window.cmb_duration.count())][-1] == 3600
+    window.set_session_timing(duration_s=240)
+    assert window.recording_allowed() and window.btn_record.isEnabled()
+    window.set_session_timing(duration_s=300)
+    assert not window.recording_allowed() and not window.btn_record.isEnabled()
+    assert "240" in window.btn_record.toolTip()
+    assert window.record_audio() is None
+    assert "240" in window.statusBar().currentMessage()
+    window.btn_mock.setChecked(True)
+    assert window.save_recorded_audio() is None  # never synthesizes a long MOCK train
+
+
+def test_long_test_session_is_not_recorded(qtbot, monkeypatch) -> None:
+    monkeypatch.setattr(mwk, "device_name", lambda device_id: None)
+    x = np.zeros(FS // 2, dtype=np.float32)
+    worker = MeasureStreamWorker(WatchConfig(sample_rate=FS), capture_factory=Factory(x))
+    worker.set_recording_enabled(False)
+    with qtbot.waitSignal(worker.session_finished, timeout=10000):
+        worker.start_stream()
+    assert not worker.has_recording
+    worker.set_recording_enabled(True)
+    with qtbot.waitSignal(worker.session_finished, timeout=10000):
+        worker.start_stream()
+    assert worker.has_recording
+    worker.shutdown()
+
+
+def test_paper_tape_symbols_only_for_short_traces(window) -> None:
+    assert (
+        window.tape_curve_even.opts["autoDownsample"] and window.tape_curve_even.opts["clipToView"]
+    )
+    assert window.tape_curve_even.opts["pen"].widthF() == 1.0
+    window._tape_times_even[:] = list(range(mw.TAPE_SYMBOL_MAX_POINTS))
+    window._update_tape_symbols()
+    assert window.tape_curve_even.opts["symbol"] == "o"
+    window._tape_times_even.append(1e6)
+    window._update_tape_symbols()
+    assert window.tape_curve_even.opts["symbol"] is None
+    assert window.tape_curve_odd.opts["symbol"] is None
+    window._tape_times_even.clear()
+    window._update_tape_symbols()
+    assert window.tape_curve_odd.opts["symbol"] == "o"

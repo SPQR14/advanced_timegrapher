@@ -8,6 +8,7 @@ import os
 import platform
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from types import TracebackType
 from typing import TextIO
 
@@ -62,6 +63,36 @@ def _log_environment() -> None:
         QT_VERSION_STR,
         numpy.__version__,
     )
+
+
+def _find_sample_file(name: str = "miyota_9015.flac") -> Path | None:
+    """Locate sample audio in development or frozen PyInstaller bundle."""
+    candidates = []
+    if getattr(sys, "frozen", False):
+        if hasattr(sys, "_MEIPASS"):
+            meipass = Path(sys._MEIPASS)
+            candidates.extend(
+                [
+                    meipass / "docs" / "samples" / name,
+                    meipass / "samples" / name,
+                    meipass / "Resources" / "docs" / "samples" / name,
+                ]
+            )
+        exe = Path(sys.executable).resolve()
+        candidates.extend(
+            [
+                exe.parent / "docs" / "samples" / name,
+                exe.parent.parent / "Resources" / "docs" / "samples" / name,
+                exe.parent / "_internal" / "docs" / "samples" / name,
+            ]
+        )
+    else:
+        root = Path(__file__).resolve().parents[2]
+        candidates.append(root / "docs" / "samples" / name)
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -120,7 +151,76 @@ def main(argv: Sequence[str] | None = None) -> int:
         window.show()
 
         if smoke_test:
-            logger.info("Smoke test passed: application initialized successfully")
+            from adv_tg.dsp.engine import is_native_dsp_available
+
+            # 1. Native extension must be available
+            if not is_native_dsp_available():
+                logger.critical("Smoke test failed: Native C++ DSP extension is NOT available")
+                window.close()
+                return 1
+
+            # 2. SciPy must NOT be loaded in sys.modules
+            if "scipy" in sys.modules:
+                logger.critical(
+                    "Smoke test failed: 'scipy' is loaded in sys.modules: %s",
+                    [m for m in sys.modules if "scipy" in m],
+                )
+                window.close()
+                return 1
+
+            # 3. Short measurement test without audio hardware (real sample or synthetic)
+            try:
+                import math
+
+                import numpy as np
+                import soundfile as sf
+
+                from adv_tg.core.sample_stream import SampleStream
+                from adv_tg.core.session import MeasurementSession, SessionConfig
+
+                sample_file = _find_sample_file("miyota_9015.flac")
+                if sample_file is not None:
+                    x, fs = sf.read(sample_file)
+                    bph = 28800.0
+                else:
+                    # Synthetic ticks fallback
+                    fs = 48000.0
+                    bph = 21600.0
+                    period_s = 3600.0 / bph
+                    n_samples = int(fs * 4.0)
+                    x = np.zeros(n_samples, dtype=np.float32)
+                    tick = (
+                        np.sin(2 * np.pi * 4000 * np.arange(200) / fs)
+                        * np.exp(-np.arange(200) / 30.0)
+                    ).astype(np.float32)
+                    for k in range(int(4.0 / period_s)):
+                        pos = int(k * period_s * fs)
+                        if pos + len(tick) <= len(x):
+                            x[pos : pos + len(tick)] += tick
+
+                cfg = SessionConfig(sample_rate=float(fs), bph=bph)
+                session = MeasurementSession(cfg)
+                stream = SampleStream(len(x), float(fs))
+                stream.write(x.astype(np.float32), host_ns=1000)
+                snap = session.update(stream)
+                rate = snap.metrics.rate_s_per_day
+
+                if not math.isfinite(rate):
+                    logger.critical("Smoke test failed: measured rate is not finite (%s)", rate)
+                    window.close()
+                    return 1
+
+                logger.info(
+                    "Smoke test DSP verified: beats=%d, rate=%.2f s/d (no hardware, no scipy)",
+                    snap.beats_total,
+                    rate,
+                )
+            except Exception as exc:
+                logger.critical("Smoke test failed during DSP verification: %s", exc, exc_info=True)
+                window.close()
+                return 1
+
+            logger.info("Smoke test passed: application initialized and DSP verified successfully")
             window.close()
             return 0
 
