@@ -143,6 +143,17 @@ def test_missing_and_corrupt_files(tmp_path: Path) -> None:
         audio_info(tmp_path / "nope.flac")
 
 
+def test_read_audio_max_frames_limit(tmp_path: Path) -> None:
+    p = write_audio(tmp_path / "large.wav", np.zeros(1000), 48000)
+    # Exceeding the specified max_frames raises AudioFileError
+    with pytest.raises(AudioFileError, match="excede el límite de memoria"):
+        read_audio(p, max_frames=500)
+    # Specifying max_frames greater than frames succeeds
+    assert len(read_audio(p, max_frames=2000).samples) == 1000
+    # Specifying None disables the limit
+    assert len(read_audio(p, max_frames=None).samples) == 1000
+
+
 def test_unsupported_extension_or_subtype(tmp_path: Path) -> None:
     with pytest.raises(AudioFileError, match="extensión"):
         write_audio(tmp_path / "x.mp3", np.zeros(10), 48000)
