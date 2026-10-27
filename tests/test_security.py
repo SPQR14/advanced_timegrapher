@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from adv_tg.utils import security
 from adv_tg.utils.security import anonymize_text, safe_filename_base, sanitize_csv_cell
 
 
@@ -43,10 +44,11 @@ def test_anonymize_text() -> None:
 
 def test_anonymize_short_username_keeps_words(monkeypatch) -> None:
     import getpass
-    from pathlib import Path
 
     monkeypatch.setattr(getpass, "getuser", lambda: "al")
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/Users/al")))
+    # No home replacement: isolates the username rule on every OS (on Windows a fake POSIX
+    # home becomes "\\Users\\al", which would also match inside "C:\\Users\\al").
+    monkeypatch.setattr(security, "_home_variants", lambda: [])
     text = "Error al abrir /home/al/x.flac; calibration ok; C:\\Users\\al\\logs"
     out = anonymize_text(text)
     assert "Error al abrir" in out and "calibration" in out
