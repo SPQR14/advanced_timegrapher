@@ -72,11 +72,19 @@ def test_real_engine_in_the_gui(window, qtbot, tmp_path, monkeypatch) -> None:
     assert _number(window.card_amplitude.value_label.text()) == pytest.approx(280, rel=0.05)
     # Quality bar now reflects detection (SNR and share of usable beats).
     assert "SNR" in window.lbl_snr_value.text() and window.prg_snr.value() > 50
-    # Paper tape has points and the view contains them (autoscale).
-    ys = window._tape_rate_even + window._tape_rate_odd
-    assert ys and all(math.isfinite(y) for y in ys)
+    # Paper tape: one point per beat (tic and tac rows), slope = rate (+4 s/d = 4/86.4 ms/s),
+    # rows apart by the tic/tac offset; the view contains them (autoscale).
+    xe, ye = np.array(window._tape_x_even), np.array(window._tape_ms_even)
+    xo, yo = np.array(window._tape_x_odd), np.array(window._tape_ms_odd)
+    assert xe.size > 20 and xo.size > 20 and abs(xe.size - xo.size) <= 3
+    assert np.all(np.isfinite(ye)) and np.all(np.diff(xe) > 0)
+    for x_, y_ in ((xe, ye), (xo, yo)):
+        assert np.polyfit(x_, y_, 1)[0] == pytest.approx(4.0 / 86.4, rel=0.25)
     lo, hi = window.paper_tape_plot.getViewBox().viewRange()[1]
-    assert lo <= min(ys) and max(ys) <= hi
+    assert lo <= min(ye.min(), yo.min()) and max(ye.max(), yo.max()) <= hi
+    # COSC limits drawn as slopes over the test duration (60 s)
+    cx, cy = window.cosc_upper_line.getData()
+    assert cx[-1] == pytest.approx(60.0) and cy[-1] == pytest.approx(6.0 * 60.0 / 86.4)
     # Oscilloscope markers at the real instants, inside the drawn beat.
     t, y = window.osc_wave_curve.getData()
     assert t is not None and len(t) > 0
@@ -143,8 +151,8 @@ def test_clock_info_label(window) -> None:
 
 
 def test_manual_pan_pauses_autoscale(window) -> None:
-    window._tape_rate_even[:] = [100.0]
-    window._tape_rate_odd[:] = [101.0]
+    window._tape_ms_even[:] = [100.0]
+    window._tape_ms_odd[:] = [101.0]
     window._on_paper_tape_manual_range()
     window._autoscale_paper_tape()
     lo, hi = window.paper_tape_plot.getViewBox().viewRange()[1]

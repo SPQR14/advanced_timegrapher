@@ -3,13 +3,13 @@
 Only what the application needs: Butterworth band-pass filters as second-order sections
 (``butter_bandpass_sos``), their steady-state initial conditions (``sosfilt_zi``) and the
 default padding of a zero-phase filter (``sosfiltfilt_padlen``). The filtering itself is done
-in C++ (``adv_tg.dsp.engine``).
+in vectorised numpy (``adv_tg.dsp.engine``).
 
 Each function is a line-by-line port of SciPy 1.18 (``buttap``, ``lp2bp_zpk``,
 ``bilinear_zpk``, ``zpk2sos`` with the default ``"nearest"`` pairing, ``_cplxreal``,
 ``sosfilt_zi``/``lfilter_zi``, the ``ntaps`` rule of ``sosfiltfilt``), so the coefficients are
-the same as SciPy's to machine precision; ``tests/test_dsp_filters.py`` checks it against SciPy
-(a development dependency only).
+the same as SciPy's to machine precision; ``tests/test_dsp.py`` checks the frequency response
+and the filtering against plain-Python reference recursions (SciPy is not used anywhere).
 """
 
 from __future__ import annotations

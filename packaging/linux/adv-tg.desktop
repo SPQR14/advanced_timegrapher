@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Advanced Timegrapher
+GenericName=Watch Timing Machine
+Comment=Horological acoustic timing, rate, beat error and amplitude measurement
+Exec=adv-tg %F
+Icon=adv-tg
+Terminal=false
+Categories=Utility;AudioVideo;Audio;Engineering;
+Keywords=horology;watch;timing;timegrapher;bph;rate;beat error;amplitude;
+StartupWMClass=adv-tg
+MimeType=audio/wav;audio/x-wav;audio/flac;

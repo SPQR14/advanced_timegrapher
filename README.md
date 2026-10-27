@@ -78,10 +78,10 @@ the first time your system will warn you. This is expected; follow the steps bel
    your distribution's equivalent.
 2. Download the Linux file, make it executable (`chmod +x <file>`) and run it.
 
-### Option B: using pip (precompiled wheel or from source)
+### Option B: using pip (wheel or from source)
 
-**1. Without a C++ compiler (recommended):**
-Download and install the precompiled wheel from the [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest) page, or point pip directly to the release:
+**1. From the release wheel (recommended):**
+The project is pure Python (no compiler needed). Download and install the wheel from the [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest) page, or point pip directly to the release:
 ```bash
 pip install --find-links https://github.com/SPQR14/advanced_timegrapher/releases/latest advanced-timegrapher
 ```
@@ -99,10 +99,8 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 .venv\Scripts\adv-tg.exe
 ```
-If you have a C++ compiler installed (Xcode Tools on macOS, MSVC Build Tools on Windows, `build-essential` on Linux), the native C++ DSP core is built automatically. If you do not have a C++ compiler, you can install the pure-Python SciPy fallback instead:
-```bash
-pip install -e ".[fallback]"
-```
+No compiler is needed: the whole analysis (filters, envelope, beat detection) is pure Python
+on top of numpy; SciPy is not used.
 
 On Linux you may also need `sudo apt install libportaudio2`. On macOS, the first time, the
 Terminal app (or your IDE) will ask for microphone access.
@@ -137,7 +135,7 @@ Terminal app (or your IDE) will ask for microphone access.
 | **Rate, Beat error, Amplitude** cards (left) | `---.-` = not enough data yet, or confidence too low to show a figure. **Grey** figure = doubtful, use with caution. |
 | **Signal Quality / SNR** bar | Before the watch is detected it shows the microphone level (dBFS). Then it shows the detection quality: signal-to-noise ratio and % of usable beats. **Green** = good; **amber** = could be better; **red with ⚠** = the signal is clipping: lower the microphone gain. |
 | Statistics panel | Maximum, minimum, spread and mean rate of the test, elapsed time and **Clock Drift** (see [calibration](#sound-card-clock-calibration)). |
-| **Paper Tape Trace** (centre) | The rate along the test, one line for the tick and one for the tock (they are apart by the beat error). The green dashed lines are the COSC limits (−4 / +6 s/d). It rescales by itself; if you pan or zoom it, press **Center Trace** to go back. |
+| **Paper Tape** (centre) | Like the paper strip of a mechanical timegrapher: **one dot for every tic (cyan) and every tac (orange)**, showing how early or late it arrives (ms) against the nominal beat. A healthy watch draws **two straight rows**: rising = gaining, falling = losing; the steeper, the larger the rate (the green dashed lines are the COSC limits, −4 and +6 s/d). The rows are timed at the drop (P3), so their distance is the tic/tac offset at that sound, not exactly the beat error card (measured at P1). Scattered dots = noise or an irregular escapement; a row that jumps up or down = the sound of that beat changed. It rescales by itself; if you pan or zoom it, press **Center Trace** to go back. |
 | **Escapement Oscilloscope** (bottom left) | The last beat, with its three sounds: **P1** unlocking, **P2** impulse and **P3** drop. |
 | **Audio Waveform** (bottom right) | The microphone signal in real time. |
 | Status bar (bottom) | Session state, percentage of audio received, clock drift and warnings (e.g. *"tic and tac amplitude differ"*). |
@@ -333,10 +331,10 @@ así que la primera vez el sistema avisa. Es normal; sigue estos pasos.
    equivalente de tu distribución.
 2. Descarga el archivo de Linux, dale permiso de ejecución (`chmod +x <archivo>`) y ábrelo.
 
-### Opción B: mediante pip (wheel precompilado o desde código fuente)
+### Opción B: mediante pip (wheel o desde código fuente)
 
-**1. Sin compilador de C++ (recomendado):**
-Descarga e instala el wheel precompilado desde la página de [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest), o instala directamente apuntando pip al release:
+**1. Desde el wheel del release (recomendado):**
+El proyecto es Python puro (no hace falta compilador). Descarga e instala el wheel desde la página de [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest), o instala directamente apuntando pip al release:
 ```bash
 pip install --find-links https://github.com/SPQR14/advanced_timegrapher/releases/latest advanced-timegrapher
 ```
@@ -354,10 +352,8 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 .venv\Scripts\adv-tg.exe
 ```
-Si tienes un compilador de C++ instalado (Xcode Tools en macOS, MSVC Build Tools en Windows, `build-essential` en Linux), la extensión C++ se compila automáticamente. Si no dispones de compilador, puedes instalar el respaldo en Python puro con SciPy:
-```bash
-pip install -e ".[fallback]"
-```
+No hace falta compilador: todo el análisis (filtros, envolvente, detección de batimientos) es
+Python puro sobre numpy; no se usa SciPy.
 
 En Linux puede hacer falta `sudo apt install libportaudio2`. En macOS, la primera vez, la
 aplicación Terminal (o tu editor) pedirá acceso al micrófono.
@@ -395,7 +391,7 @@ aplicación Terminal (o tu editor) pedirá acceso al micrófono.
 | Tarjetas de **marcha, error de batimiento y amplitud** (izquierda) | `---.-` = todavía no hay datos suficientes o la confianza es demasiado baja para mostrar una cifra. Cifra **en gris** = dudosa, tómala con cautela. |
 | Barra **Calidad de Señal / SNR** | Antes de detectar el reloj muestra el nivel del micrófono (dBFS). Después, la calidad de la detección: relación señal/ruido y % de batimientos útiles. **Verde** = bien; **ámbar** = mejorable; **rojo con ⚠** = la señal satura: baja la ganancia del micrófono. |
 | Panel de estadísticas | Marcha máxima, mínima, diferencia y media de la prueba, tiempo transcurrido y **Deriva de Reloj** (ver [calibración](#calibración-del-reloj-de-la-tarjeta)). |
-| **Trazo de Cinta de Papel** (centro) | La marcha a lo largo de la prueba, una línea para el tic y otra para el tac (separadas por el error de batimiento). Las líneas verdes discontinuas son los límites COSC (−4 / +6 s/d). Se reajusta sola; si la mueves o amplías, pulsa **Centrar Trazo** para volver. |
+| **Cinta de papel** (centro) | Como la tira de papel de un cronocomparador mecánico: **un punto por cada tic (cian) y cada tac (naranja)**, que indica cuánto se adelanta o atrasa (ms) respecto al batimiento nominal. Un reloj sano dibuja **dos hileras rectas**: si suben, adelanta; si bajan, atrasa; cuanto más inclinadas, mayor la marcha (las líneas verdes discontinuas son los límites COSC, −4 y +6 s/d). Las hileras se miden en la caída (P3), así que su separación es el desfase tic/tac en ese sonido, no exactamente la tarjeta de error de batimiento (medido en P1). Puntos dispersos = ruido o un escape irregular; una hilera que salta hacia arriba o abajo = cambió el sonido de ese batimiento. Se reajusta sola; si la mueves o amplías, pulsa **Centrar Trazo** para volver. |
 | **Osciloscopio de Escape** (abajo a la izquierda) | El último batimiento con sus tres sonidos: **P1** desbloqueo, **P2** impulso y **P3** caída. |
 | **Onda de Audio** (abajo a la derecha) | La señal del micrófono en tiempo real. |
 | Barra de estado (abajo) | Estado de la sesión, porcentaje de audio recibido, deriva del reloj y avisos (p. ej. *"amplitud de tic y tac distinta"*). |

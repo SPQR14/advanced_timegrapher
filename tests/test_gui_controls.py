@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -180,11 +181,11 @@ def test_open_folders_actions(window, monkeypatch) -> None:
 
     assert window.open_logs_folder() is True
     assert len(opened_urls) == 1
-    assert opened_urls[0] == str(LoggerSetup.LOG_DIR.resolve())
+    assert Path(opened_urls[0]) == LoggerSetup.LOG_DIR.resolve()
 
     assert window.open_calibration_folder() is True
     assert len(opened_urls) == 2
-    assert opened_urls[1] == str(config_dir().resolve())
+    assert Path(opened_urls[1]) == config_dir().resolve()
 
     # The Tools menu triggers the same actions (the top bar has no folder buttons any more)
     window.action_open_logs.trigger()
@@ -274,13 +275,13 @@ def test_paper_tape_symbols_only_for_short_traces(window) -> None:
         window.tape_curve_even.opts["autoDownsample"] and window.tape_curve_even.opts["clipToView"]
     )
     assert window.tape_curve_even.opts["pen"].widthF() == 1.0
-    window._tape_times_even[:] = list(range(mw.TAPE_SYMBOL_MAX_POINTS))
+    window._tape_x_even[:] = list(range(mw.TAPE_SYMBOL_MAX_POINTS))
     window._update_tape_symbols()
     assert window.tape_curve_even.opts["symbol"] == "o"
-    window._tape_times_even.append(1e6)
+    window._tape_x_even.append(1e6)
     window._update_tape_symbols()
     assert window.tape_curve_even.opts["symbol"] is None
     assert window.tape_curve_odd.opts["symbol"] is None
-    window._tape_times_even.clear()
+    window._tape_x_even.clear()
     window._update_tape_symbols()
     assert window.tape_curve_odd.opts["symbol"] == "o"

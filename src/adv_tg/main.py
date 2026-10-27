@@ -151,11 +151,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         window.show()
 
         if smoke_test:
-            from adv_tg.dsp.engine import is_native_dsp_available
-
-            # 1. Native extension must be available
-            if not is_native_dsp_available():
-                logger.critical("Smoke test failed: Native C++ DSP extension is NOT available")
+            # 1. The pure-numpy DSP engine must import (it is all the analysis needs)
+            try:
+                import adv_tg.dsp.engine  # noqa: F401
+            except Exception as exc:
+                logger.critical(
+                    "Smoke test failed: DSP engine import error: %s", exc, exc_info=True
+                )
                 window.close()
                 return 1
 
