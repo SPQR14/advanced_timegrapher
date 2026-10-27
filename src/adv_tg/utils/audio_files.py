@@ -164,6 +164,8 @@ def _parse_vorbis(body: bytes) -> tuple[bytes, list[str]]:
     n = u32(0)
     vendor, i = body[4 : 4 + n], 4 + n
     count, i = u32(i), i + 4
+    if count > (len(body) - i) // 4:
+        raise ValueError("el conteo de comentarios Vorbis excede el tamaño del bloque")
     comments = []
     for _ in range(count):
         n, i = u32(i), i + 4

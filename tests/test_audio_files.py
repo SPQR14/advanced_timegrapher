@@ -323,3 +323,12 @@ def test_read_tags_errors(tmp_path: Path) -> None:
     bad.write_bytes(b"not audio")
     with pytest.raises(AudioFileError):
         read_tags(bad)
+
+
+def test_parse_vorbis_oversized_count() -> None:
+    from adv_tg.utils.audio_files import _parse_vorbis
+
+    # vendor length 0 + count 1000000 with a tiny 12-byte body
+    body = (0).to_bytes(4, "little") + (1_000_000).to_bytes(4, "little") + b"extra"
+    with pytest.raises(ValueError, match="excede el tamaño del bloque"):
+        _parse_vorbis(body)
