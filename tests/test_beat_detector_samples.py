@@ -62,8 +62,10 @@ def test_real_mechanical_recording(path: Path | None) -> None:
     # Tic/tac P1 offset of the templates. Seiko 4R34 (nh34): the tic drop wanders ~3 ms after
     # a clean unlock and the drop-aligned templates misplace P1 (3 ms); the metrics measure its
     # beat error on each beat's own P1 instead (test_metrics_samples.test_seiko_4r34_gmt_*).
+    # Seagull ST1901: 0.52 ms at P1 for any lift angle (tic/tac lift times 8.69 / 8.37 ms; 0.20
+    # at the drop, the Weishi figure), see test_metrics_samples.test_seagull_st1901_*.
     if "nh34" not in path.name and "4r34" not in path.name:
-        assert s.fine_beat_offset_ms < 0.5
+        assert s.fine_beat_offset_ms < (0.6 if "seagull" in path.name.lower() else 0.5)
     if s.p1_pct >= 50.0:
         assert math.isfinite(s.t_lift_median_ms)
         assert result.verdict == "OK", result.reasons

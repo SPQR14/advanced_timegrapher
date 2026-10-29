@@ -96,6 +96,7 @@ class DisplayFigures:
 
     rate_s_per_day: float = math.nan
     beat_error_ms: float = math.nan
+    beat_error_p3_ms: float = math.nan  # at the drop, for comparison (same median as P1)
     amplitude_deg: float = math.nan
     amplitude_tic_deg: float = math.nan
     amplitude_tac_deg: float = math.nan
@@ -160,6 +161,9 @@ class SessionSnapshot:
         live_drift: Live estimate from the block stamps (level 0 while too short).
         audio_s: Seconds of audio processed.
         detector_warnings: Warnings of the detector (e.g. probable wrong BPH).
+        real_bph: Observed beats per hour, ``BPH * (1 + rate / 86400)`` from the displayed
+            rate (ADC drift included); from the detector period when the rate is not
+            available yet; NaN before the lock.
         display: Figures to show (median of the last updates, see module docstring).
         tape_time_s, tape_offset_ms, tape_parity: Paper tape points of the new beats (see
             module docstring): ADC time in s, offset in ms, parity of ``k`` (0 = tic).
@@ -181,6 +185,7 @@ class SessionSnapshot:
     live_drift: AdcDrift
     audio_s: float
     detector_warnings: tuple[str, ...] = field(default_factory=tuple)
+    real_bph: float = math.nan
     display: DisplayFigures = field(default_factory=DisplayFigures)
     tape_time_s: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
     tape_offset_ms: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
@@ -223,6 +228,7 @@ class MeasurementSession:
         self._last_beat: Beat | None = None
         self._history: deque[Metrics] = deque(maxlen=DISPLAY_UPDATES)
         self._be_history: deque[float] = deque(maxlen=BE_DISPLAY_UPDATES)
+        self._be_p3_history: deque[float] = deque(maxlen=BE_DISPLAY_UPDATES)
         self._tape_origin: tuple[int, float] | None = None  # (k0, t0) of the tape grid
         lo, hi = self._detector.config.band_hz
         self._sos = butter_bandpass_sos(4, (lo, hi), fs)
@@ -309,9 +315,11 @@ class MeasurementSession:
         if not math.isfinite(metrics.rate_s_per_day):
             self._history.clear()  # no figures now: never show stale ones
             self._be_history.clear()
+            self._be_p3_history.clear()
             return DisplayFigures()
         self._history.append(metrics)
         self._be_history.append(metrics.beat_error_ms)
+        self._be_p3_history.append(metrics.beat_error_p3_ms)
         h = list(self._history)
         tic = _nanmedian([m.amplitude_tic_deg for m in h])
         tac = _nanmedian([m.amplitude_tac_deg for m in h])
@@ -325,6 +333,7 @@ class MeasurementSession:
         return DisplayFigures(
             rate_s_per_day=_nanmedian([m.rate_s_per_day for m in h]),
             beat_error_ms=_nanmedian(list(self._be_history)),
+            beat_error_p3_ms=_nanmedian(list(self._be_p3_history)),
             amplitude_deg=amp,
             amplitude_tic_deg=tic,
             amplitude_tac_deg=tac,
@@ -380,6 +389,15 @@ class MeasurementSession:
             wave, w0 = self._waveform(stream, self._last_beat)
         stats = self._detector.stats
         drift, source = self._applied
+        display = self._display(metrics)
+        bph = float(self.config.bph)
+        if math.isfinite(display.rate_s_per_day):
+            real_bph = bph * (1.0 + display.rate_s_per_day / 86400.0)
+        elif self._detector.locked and math.isfinite(stats.period_samples):
+            # same relation as the rate: true period = samples / (fs (1 + ppm))
+            real_bph = bph / (1.0 + stats.period_deviation) * (1.0 + drift.ppm * 1e-6)
+        else:
+            real_bph = math.nan
         return SessionSnapshot(
             metrics=metrics,
             new_beats=len(beats),
@@ -397,7 +415,8 @@ class MeasurementSession:
             live_drift=self._live,
             audio_s=audio_s,
             detector_warnings=stats.warnings,
-            display=self._display(metrics),
+            real_bph=real_bph,
+            display=display,
             tape_time_s=tape[0],
             tape_offset_ms=tape[1],
             tape_parity=tape[2],

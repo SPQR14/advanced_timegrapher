@@ -17,7 +17,7 @@ if [ -z "$VERSION" ]; then
     VERSION=$(grep -E '^__version__\s*=' src/adv_tg/__init__.py | cut -d'"' -f2 2>/dev/null || true)
 fi
 if [ -z "$VERSION" ]; then
-    VERSION="0.6.3"
+    VERSION="0.7.0"
 fi
 
 echo "=========================================================="

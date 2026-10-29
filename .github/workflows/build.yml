@@ -119,6 +119,9 @@ jobs:
         if: matrix.platform == 'macos'
         run: |
           cd dist && zip -r -y ../${{ matrix.artifact_name }} "Advanced Timegrapher.app"
+          cd ..
+          chmod +x packaging/macos/build_dmg.sh
+          ./packaging/macos/build_dmg.sh "dist/Advanced Timegrapher.app" "dist/adv-tg-macos-arm64.dmg"
 
       - name: Package Binaries (Windows)
         if: matrix.platform == 'windows'
@@ -126,11 +129,41 @@ jobs:
         run: |
           Compress-Archive -Path dist\adv-tg -DestinationPath ${{ matrix.artifact_name }}
 
+      - name: Build Windows Installer (Inno Setup)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress
+          $version = python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])"
+          if (Get-Command iscc -ErrorAction SilentlyContinue) {
+              iscc "/DMyAppVersion=$version" packaging\windows\installer.iss
+          } elseif (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
+              & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging\windows\installer.iss
+          } else {
+              throw "Inno Setup compiler (ISCC) not found"
+          }
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
+          if-no-files-found: error
+
+      - name: Upload macOS DMG Artifact
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: adv-tg-macos-arm64-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+
+      - name: Upload Windows Installer Artifact
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: adv-tg-windows-x64-installer
+          path: dist/*setup.exe
           if-no-files-found: error
 
       - name: Upload Linux RPM Artifact

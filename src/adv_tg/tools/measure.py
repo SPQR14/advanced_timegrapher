@@ -281,6 +281,10 @@ def print_report(r: MeasureResult) -> None:
             f"({_f(m.beat_error_ms, '.2f')} ± {_f(m.beat_error_uncertainty_ms, '.2f')} ms, "
             f"medido en {m.beat_error_point})"
         )
+        print(
+            f"  en la caída (P3) : {_f(m.beat_error_p3_ms, '.2f')} ms (referencia de "
+            "aparatos que miden el golpe más fuerte, p. ej. Weishi)"
+        )
         ind = " (orientativa)" if m.amplitude_indicative else ""
         print(
             f"Amplitud           : {_f(m.amplitude_deg, '.0f')}°{ind} "
