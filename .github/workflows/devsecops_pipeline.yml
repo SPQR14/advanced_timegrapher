@@ -110,7 +110,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup GitHub Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Verify CNAME and Web Assets
         run: |
