@@ -1,13 +1,15 @@
 version: 2
 updates:
-  # Monitoreo de dependencias de Python (PyQt6, NumPy, soundfile, sounddevice, PyOpenGL, etc.)
+  # Monitoreo de dependencias de Python (PyQt6, NumPy, soundfile, sounddevice, etc.)
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "04:00"
-    open-pull-requests-limit: 10
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
     labels:
       - "dependencies"
       - "security"
@@ -16,14 +18,16 @@ updates:
       prefix: "deps(python)"
       include: "scope"
 
-  # Monitoreo de GitHub Actions workflows
+  # Monitoreo de dependencias de GitHub Actions workflows
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "04:30"
-    open-pull-requests-limit: 10
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      actions-dependencies:
+        patterns:
+          - "*"
     labels:
       - "dependencies"
       - "security"

@@ -19,6 +19,7 @@ concurrency:
 jobs:
   devsecops-audit:
     name: DevSecOps SAST & Audio Buffer Security
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: src
@@ -100,7 +101,7 @@ jobs:
   deploy-pages:
     name: Deploy to GitHub Pages (sqpr14-software.org)
     needs: devsecops-audit
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/deploy/web'
+    if: github.actor != 'dependabot[bot]' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/deploy/web')
     runs-on: ubuntu-latest
     environment:
       name: github-pages
