@@ -156,6 +156,13 @@ class Translator:
             "mock_mode": "MOCK",
             "mock_tooltip": "Simulated data to test the GUI (no real measurement)",
             "coffee_tooltip": "Support the project: {url}",
+            "beat_error_p3": "at the drop (P3): {value}",
+            "real_bph": "Real BPH: {value}",
+            "beat_error_tooltip": (
+                "Measured at P1 (unlocking), as Witschi does. The P3 (drop) figure is for "
+                "comparison with timegraphers that time the loudest sound; the two differ by "
+                "the tic/tac lift-time difference."
+            ),
             "coffee_open_failed": "Could not open the browser. Visit {url}",
             "mock_badge": "MOCK · SIMULATED DATA",
             "mock_no_hardware": "No hardware input device available: MOCK stays on",
@@ -310,6 +317,13 @@ class Translator:
             "mock_mode": "MOCK",
             "mock_tooltip": "Datos simulados para probar la GUI (sin medición real)",
             "coffee_tooltip": "Apoya el proyecto: {url}",
+            "beat_error_p3": "en la caída (P3): {value}",
+            "real_bph": "A/h reales: {value}",
+            "beat_error_tooltip": (
+                "Medido en P1 (desbloqueo), como Witschi. La cifra en P3 (caída) sirve para "
+                "comparar con cronocomparadores que miden el golpe más fuerte; las dos difieren "
+                "en la diferencia de alzado entre tic y tac."
+            ),
             "coffee_open_failed": "No se pudo abrir el navegador. Visita {url}",
             "mock_badge": "MOCK · DATOS SIMULADOS",
             "mock_no_hardware": "No hay dispositivos de entrada de hardware: el MOCK sigue activo",

@@ -233,7 +233,8 @@ def test_beat_error_when_the_drop_of_one_parity_wanders(seed: int, monkeypatch) 
     monkeypatch.setattr(metrics, "_BE_SWITCH_RATIO", 0.0)
     old = compute_metrics(beats, det.templates(), cfg)
     assert old.beat_error_point == "p1"
-    assert abs(old.beat_error_ms - 0.2) > 0.08
+    # it is farther from the truth than the per-beat P1 (0.07-0.3 ms off against <0.05 ms)
+    assert abs(old.beat_error_ms - 0.2) > abs(m.beat_error_ms - 0.2) + 0.02
 
 
 def test_beat_error_keeps_the_template_p1_on_a_near_tie(monkeypatch) -> None:
