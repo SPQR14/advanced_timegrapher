@@ -128,7 +128,7 @@ jobs:
           echo "Archivos estáticos verificados exitosamente."
 
       - name: Upload Pages Artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: "."
 
