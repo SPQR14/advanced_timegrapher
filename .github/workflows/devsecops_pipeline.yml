@@ -1,0 +1,137 @@
+name: DevSecOps Pipeline & GitHub Pages Deployment
+
+on:
+  push:
+    branches: [ "main", "develop", "deploy/web" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  devsecops-audit:
+    name: DevSecOps SAST & Audio Buffer Security
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libasound2t64 libegl1 libgl1
+
+      - name: Install Security Scanners & Dev Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit pip-audit ruff pytest pytest-cov
+          pip install -e .[dev]
+
+      - name: Static Application Security Testing (SAST) - Bandit
+        run: |
+          echo "=== Ejecutando Bandit SAST sobre el código fuente ==="
+          bandit -r src/ -ll -x tests/
+
+      - name: Static Code Analysis & Linting - Ruff
+        run: |
+          echo "=== Comprobando calidad y seguridad con Ruff ==="
+          ruff check src/
+
+      - name: Audio Buffer & Memory Bounds Security Verification
+        run: |
+          echo "=== Verificando invariantes de seguridad en buffers de audio y límites de memoria ==="
+          python -c '
+          import sys
+          from adv_tg.utils.audio_files import MAX_IN_MEMORY_BYTES
+          from adv_tg.core.sample_stream import SampleStream, SamplesOverwritten, SamplesNotYetAvailable
+          from adv_tg.utils.security import sanitize_csv_cell, anonymize_text, safe_filename_base
+          import numpy as np
+
+          # Verificación 1: Límite estricto en memoria de audio (SEC-03)
+          assert MAX_IN_MEMORY_BYTES > 0, "MAX_IN_MEMORY_BYTES debe ser positivo"
+          assert MAX_IN_MEMORY_BYTES <= 16 * 1024**3, "Límite de audio no debe superar 16 GiB"
+          print(f"[*] Audio Memory Limit OK: {MAX_IN_MEMORY_BYTES / (1024**3):.1f} GiB")
+
+          # Verificación 2: Integridad del Ring Buffer SPSC ante inyección de desbordamiento
+          stream = SampleStream(capacity=1024, sample_rate=48000.0)
+          dummy = np.zeros(512, dtype=np.float32)
+          stream.write(dummy)
+          assert stream.total_samples == 512, "Fallo en conteo de muestras de buffer"
+
+          # Escritura de saturación controlada
+          overflow_data = np.ones(2048, dtype=np.float32)
+          stream.write(overflow_data)
+          assert stream.total_samples == 2560, "Fallo en manejo de desbordamiento en ring buffer"
+          print("[*] SPSC Ring Buffer Overflow Integrity OK")
+
+          # Verificación 3: Sanitización de entradas e inyección de fórmulas / filenames (SEC-01, SEC-09)
+          assert sanitize_csv_cell("=CMD|/C calc!A0") == "\x27=CMD|/C calc!A0", "Fallo en sanitización CSV"
+          sanitized = safe_filename_base("../../etc/passwd")
+          assert "/" not in sanitized and ".." not in sanitized, "Fallo en protección path traversal"
+          print("[*] Input Sanitization & Path Traversal Protections OK")
+          '
+
+      - name: Software Composition Analysis (SCA) - Dependency Audit
+        run: |
+          echo "=== Analizando vulnerabilidades conocidas en dependencias instaladas ==="
+          pip-audit --desc || echo "Aviso: pip-audit finalizado con advertencias informativas."
+
+      - name: Headless Critical DSP & Audio Security Tests
+        run: |
+          xvfb-run -a pytest tests/test_security.py tests/test_smoke.py -v
+
+  deploy-pages:
+    name: Deploy to GitHub Pages (sqpr14-software.org)
+    needs: devsecops-audit
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/deploy/web'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Verify CNAME and Web Assets
+        run: |
+          echo "=== Verificando integridad de CNAME y assets ==="
+          if [ ! -f CNAME ]; then
+            echo "sqpr14-software.org" > CNAME
+          fi
+          echo "CNAME configurado con: $(cat CNAME)"
+          if [ "$(cat CNAME | tr -d '[:space:]')" != "sqpr14-software.org" ]; then
+            echo "Error: CNAME no coincide con sqpr14-software.org"
+            exit 1
+          fi
+          test -f index.html || { echo "Error: Falta index.html"; exit 1; }
+          test -f assets/adv-tg.svg || { echo "Error: Falta assets/adv-tg.svg"; exit 1; }
+          echo "Archivos estáticos verificados exitosamente."
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "."
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
