@@ -273,8 +273,15 @@ class HudCard(QFrame):
         self.dimmed = False
         self._apply_value_style()
 
+        # Optional secondary line under the value (e.g. the beat error at P3); hidden if empty
+        self.sub_label = QLabel("")
+        self.sub_label.setObjectName("HudCardSub")
+        self.sub_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.sub_label.setVisible(False)
+
         layout.addLayout(header_layout)
         layout.addWidget(self.value_label)
+        layout.addWidget(self.sub_label)
 
     def set_title(self, title: str) -> None:
         """Update localized title text."""
@@ -298,6 +305,11 @@ class HudCard(QFrame):
         if dimmed != self.dimmed:
             self.dimmed = dimmed
             self._apply_value_style()
+
+    def set_sub(self, text: str) -> None:
+        """Secondary line under the value; an empty text hides it."""
+        self.sub_label.setText(text)
+        self.sub_label.setVisible(bool(text))
 
 
 class MainWin(QMainWindow):
@@ -452,6 +464,20 @@ class MainWin(QMainWindow):
             QLabel#HudCardUnit {{
                 color: #6b778d;
                 font-size: 11px;
+                font-weight: 600;
+            }}
+            QLabel#RealBphLabel {{
+                color: #00e676;
+                border: 1px solid #00e676;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+            QLabel#HudCardSub {{
+                color: #8b96a8;
+                font-size: 12px;
                 font-weight: 600;
             }}
             QLabel#SectionHeader {{
@@ -1237,6 +1263,11 @@ class MainWin(QMainWindow):
         tape_footer_layout = QHBoxLayout()
         tape_footer_layout.setContentsMargins(2, 0, 2, 0)
         tape_footer_layout.setSpacing(6)
+        # Observed BPH and its difference from the declared one (left of the buttons)
+        self.lbl_real_bph = QLabel()
+        self.lbl_real_bph.setObjectName("RealBphLabel")
+        tape_footer_layout.addWidget(self.lbl_real_bph)
+        self._set_real_bph(math.nan, math.nan)
         tape_footer_layout.addStretch()
 
         self.btn_export_traces = QPushButton()
@@ -2528,6 +2559,8 @@ class MainWin(QMainWindow):
 
     def retranslate_ui(self) -> None:
         """Apply localized strings from `self.translator` to all widgets."""
+        if hasattr(self, "lbl_real_bph"):
+            self._set_real_bph(*self._real_bph_shown)
         tr = self.translator.tr
         self.setWindowTitle(tr("app_title"))
         self.btn_mock.setText(tr("mock_mode"))
@@ -2556,6 +2589,7 @@ class MainWin(QMainWindow):
 
         self.card_rate.set_title(tr("rate"))
         self.card_beat_error.set_title(tr("beat_error"))
+        self.card_beat_error.setToolTip(tr("beat_error_tooltip"))
         self.card_amplitude.set_title(tr("amplitude"))
 
         self.lbl_signal_quality.setText(tr("signal_quality").upper())
@@ -2731,6 +2765,8 @@ class MainWin(QMainWindow):
         if isinstance(self.dsp_worker, CaptureStreamWorker):
             for card in (self.card_rate, self.card_beat_error, self.card_amplitude):
                 card.set_value(self.EMPTY_VALUE)
+            self.card_beat_error.set_sub("")
+            self._set_real_bph(math.nan, math.nan)
             self.lbl_drift_status.setText("")
             self.lbl_stat_drift_val.setText("")
             self._clear_oscilloscope_markers()
@@ -2826,6 +2862,17 @@ class MainWin(QMainWindow):
             self.cmb_duration,
         ):
             widget.setEnabled(enabled)
+
+    def _set_real_bph(self, real_bph: float, declared_bph: float) -> None:
+        """Observed BPH box: value and difference from the declared BPH, in percent."""
+        self._real_bph_shown = (real_bph, declared_bph)
+        if math.isfinite(real_bph) and math.isfinite(declared_bph) and declared_bph > 0:
+            diff = (real_bph / declared_bph - 1.0) * 100.0
+            value = f"{real_bph:,.1f}".replace(",", " ")
+            text = f"{value} ({diff:+.3f} %)"
+        else:
+            text = "—"
+        self.lbl_real_bph.setText(self.translator.tr("real_bph").format(value=text))
 
     def _figure_text(
         self, value: float, fmt: str, confidence: float, real: bool
@@ -2985,6 +3032,18 @@ class MainWin(QMainWindow):
         self.card_rate.set_value(text, dim)
         text, dim = self._figure_text(beat_error_ms, ".2f", timing_conf, real)
         self.card_beat_error.set_value(text, dim)
+        # The P1 figure is the reference (Witschi); the drop (P3) is shown under it, only for
+        # comparison with instruments that time the loudest sound (docs, section 13)
+        p3_text = self.EMPTY_VALUE
+        if text != self.EMPTY_VALUE:
+            p3_text, _ = self._figure_text(
+                float(getattr(telemetry, "beat_error_p3_ms", math.nan)), ".2f", timing_conf, real
+            )
+        self.card_beat_error.set_sub(
+            ""
+            if p3_text == self.EMPTY_VALUE
+            else self.translator.tr("beat_error_p3").format(value=p3_text)
+        )
         # Amplitude: hidden like the rate; a tic/tac mismatch (low overall confidence) only
         # greys it out, so it does not blink on calibres whose live templates disagree.
         text, dim = self._figure_text(amplitude_deg, ".0f", timing_conf, real)
@@ -2993,6 +3052,10 @@ class MainWin(QMainWindow):
 
         # Engine copy of the active config (avoids building a WatchConfig 4x/s)
         cfg_now = self._active_watch_config or self.current_watch_config()
+        real_bph = float(getattr(telemetry, "real_bph", math.nan))
+        if not math.isfinite(real_bph) and math.isfinite(rate_spd):
+            real_bph = cfg_now.bph * (1.0 + rate_spd / 86400.0)  # MOCK: from its rate
+        self._set_real_bph(real_bph, float(cfg_now.bph))
         _dbg.throttled(
             "telemetry_ready",
             "telemetry rate=%+.2f s/d be=%.2f ms amp=%.0f deg conf=%.2f snr=%.1f dB",

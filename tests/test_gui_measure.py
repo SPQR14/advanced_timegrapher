@@ -70,6 +70,17 @@ def test_real_engine_in_the_gui(window, qtbot, tmp_path, monkeypatch) -> None:
     assert _number(window.card_rate.value_label.text()) == pytest.approx(4.0, abs=1.0)
     assert _number(window.card_beat_error.value_label.text()) == pytest.approx(0.3, abs=0.1)
     assert _number(window.card_amplitude.value_label.text()) == pytest.approx(280, rel=0.05)
+    # Beat error at the drop under the P1 figure (synthetic: same lift time for tic and tac,
+    # so P1 and P3 agree)
+    sub = window.card_beat_error.sub_label
+    assert sub.isVisible() and "P3" in sub.text()
+    assert _number(sub.text().split(":")[-1]) == pytest.approx(0.3, abs=0.1)
+    # Observed BPH box: +4 s/d at 28800 A/h -> 28801.3 A/h, +0.005 %
+    real = window.lbl_real_bph.text()
+    m = re.search(r"([\d ]+\.\d) \(([-+]\d+\.\d+) %\)", real)
+    assert m, real
+    assert float(m.group(1).replace(" ", "")) == pytest.approx(28801.3, abs=0.5)
+    assert float(m.group(2)) == pytest.approx(0.005, abs=0.002)
     # Quality bar now reflects detection (SNR and share of usable beats).
     assert "SNR" in window.lbl_snr_value.text() and window.prg_snr.value() > 50
     # Paper tape: one point per beat (tic and tac rows), slope = rate (+4 s/d = 4/86.4 ms/s),

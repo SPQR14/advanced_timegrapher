@@ -130,6 +130,10 @@ class BeatTelemetry:
         warnings: Human-readable warnings (Spanish).
         timing_confidence: Confidence of the rate and beat error (``confidence`` without the
             tic/tac amplitude factor); NaN = use ``confidence``.
+        beat_error_p3_ms: Beat error at the drop (P3), shown next to the P1 figure for
+            comparison with instruments that time the loudest sound (Weishi, WAM).
+        real_bph: Observed beats per hour (NaN = unknown; the GUI then derives it from
+            ``rate_spd``).
         tape_time_s, tape_offset_ms, tape_parity: Paper tape points of the beats detected
             since the previous telemetry (time in s, offset in ms against the nominal period,
             a gaining watch goes up; parity 0 = tic). Empty for engines without beats.
@@ -160,6 +164,8 @@ class BeatTelemetry:
     span_s: float = float("nan")
     warnings: list[str] = field(default_factory=list)
     timing_confidence: float = float("nan")
+    beat_error_p3_ms: float = float("nan")
+    real_bph: float = float("nan")
     tape_time_s: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
     tape_offset_ms: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
     tape_parity: NDArray[np.int8] = field(default_factory=lambda: np.zeros(0, np.int8))

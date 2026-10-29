@@ -19,6 +19,7 @@ c07 / h50 / hamilton  21600     50°    weak P1 (ETA C07)
 9015 / miyota       28800       51°    "normal" case
 4r34 / nh34         21600       53°    tic drop wanders ~3 ms after a clean unlock
 4r36 / seiko        21600       53°    slow ramp before the tac drop
+seagull / st19      21600       47°    weak P1; tic/tac lift times differ by 0.3 ms
 nm10 / bulova       57600       —      quartz 16/s, informational only
 vh31 / tmi          14400       —      quartz 4/s, informational only
 h874 / citizen      3600        —      quartz 1/s, informational only
@@ -84,6 +85,7 @@ BUILTIN_TABLE: tuple[tuple[tuple[str, ...], CalibreConfig], ...] = (
     (("9015", "miyota"), CalibreConfig(28800, 51.0, False, "tabla: Miyota 9015")),
     (("4r34", "nh34"), CalibreConfig(21600, 53.0, False, "tabla: Seiko 4R34 (GMT)")),
     (("4r36", "seiko"), CalibreConfig(21600, 53.0, False, "tabla: Seiko 4R36")),
+    (("seagull", "st19"), CalibreConfig(21600, 47.0, False, "tabla: Seagull ST19 (ST1901)")),
     (("nm10", "bulova"), CalibreConfig(57600, None, True, "tabla: Bulova cuarzo (informativo)")),
     (("vh31", "tmi"), CalibreConfig(14400, None, True, "tabla: TMI VH31 cuarzo 4/s (informativo)")),
     (
