@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="es" class="scroll-smooth">
+<html lang="en" class="scroll-smooth">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Advanced Timegrapher | Modern Watch Escape Analyzer · sqpr14 software</title>
 
   <!-- SEO Meta Tags -->
-  <meta name="description" content="Cronocomparador y analizador de escape horológico moderno por software. Medición en tiempo real de marcha (Rate, s/d), error de batimiento (Beat Error, ms) y amplitud (°) mediante DSP acústico multi-proceso de alta precisión.">
+  <meta name="description" content="Modern watch escape analyzer and open-source software timegrapher. Real-time acoustic metrology for Rate (s/d), Beat Error (ms), and Amplitude (°) via high-precision decoupled DSP.">
   <meta name="keywords" content="timegrapher, cronocomparador, watch accuracy meter, witschi, horology, escape analyzer, rate, beat error, amplitude, mechanical watch, DSP, python, pyqt6, portaudio, sqpr14">
   <meta name="author" content="Alberto Pico Lara / sqpr14 software">
   <meta name="robots" content="index, follow">
@@ -16,13 +16,13 @@
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://sqpr14-software.org/">
   <meta property="og:title" content="Advanced Timegrapher - Modern Watch Escape Analyzer">
-  <meta property="og:description" content="Instrumentación horológica digital de laboratorio. Análisis acústico no invasivo de movimientos mecánicos y de cuarzo en tiempo real con compensación de deriva de reloj del ADC.">
+  <meta property="og:description" content="Digital laboratory horological test bench. Non-invasive real-time acoustic analysis of mechanical and quartz movements with ADC clock drift calibration.">
   <meta property="og:image" content="https://sqpr14-software.org/assets/adv-tg.svg">
 
   <!-- Twitter Meta Tags -->
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Advanced Timegrapher - Modern Watch Escape Analyzer">
-  <meta name="twitter:description" content="Analizador acústico DSP para relojes mecánicos y de cuarzo. Rate, Beat Error, Amplitud y cinta de papel virtual estilo Witschi.">
+  <meta name="twitter:description" content="Acoustic DSP timegrapher for mechanical and quartz watches. Rate, Beat Error, Amplitude, and Witschi-style virtual paper tape.">
   <meta name="twitter:image" content="https://sqpr14-software.org/assets/adv-tg.svg">
 
   <!-- Favicon -->
@@ -43,15 +43,16 @@
        ========================================================================== */
     :root {
       --bg-darkest: #070a12;
-      --bg-card: rgba(13, 20, 36, 0.85);
-      --bg-card-hover: rgba(19, 30, 53, 0.95);
-      --border-card: rgba(56, 189, 248, 0.15);
-      --border-card-hover: rgba(0, 255, 102, 0.4);
+      --bg-gui-window: #0f1217;
+      --bg-gui-bar: #161b22;
+      --bg-gui-card: #11161d;
+      --border-gui: #28303d;
+      --border-gui-card: #2b3545;
       --phosphor-green: #00FF66;
-      --phosphor-green-glow: rgba(0, 255, 102, 0.35);
-      --phosphor-amber: #FFB800;
-      --phosphor-amber-glow: rgba(255, 184, 0, 0.3);
-      --cyan-pulse: #00E5FF;
+      --gui-green: #00e676;
+      --gui-cyan: #00e5ff;
+      --gui-amber: #ffab00;
+      --gui-orange: #ff6d00;
       --text-main: #F1F5F9;
       --text-muted: #94A3B8;
       --text-dim: #64748B;
@@ -83,38 +84,8 @@
       font-family: var(--font-mono);
     }
 
-    /* Oscilloscope CRT Scanline effect */
-    .crt-grid {
-      position: relative;
-    }
-    .crt-grid::after {
-      content: " ";
-      position: absolute;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%);
-      background-size: 100% 4px;
-      pointer-events: none;
-      opacity: 0.6;
-      border-radius: inherit;
-    }
-
-    /* Glows & Badges */
-    .glow-green {
-      text-shadow: 0 0 12px var(--phosphor-green-glow), 0 0 24px rgba(0, 255, 102, 0.2);
-    }
-    .glow-amber {
-      text-shadow: 0 0 12px var(--phosphor-amber-glow);
-    }
-    .box-glow {
-      box-shadow: 0 0 20px -5px var(--phosphor-green-glow);
-    }
-    .box-glow-cyan {
-      box-shadow: 0 0 25px -5px rgba(0, 229, 255, 0.25);
-    }
-
-    /* Containers */
     .container {
-      max-width: 1200px;
+      max-width: 1240px;
       margin: 0 auto;
       padding: 0 1.5rem;
     }
@@ -124,7 +95,7 @@
       position: sticky;
       top: 0;
       z-index: 50;
-      background: rgba(7, 10, 18, 0.85);
+      background: rgba(7, 10, 18, 0.88);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
       border-bottom: 1px solid rgba(56, 189, 248, 0.12);
@@ -146,13 +117,13 @@
       width: 40px;
       height: 40px;
       border-radius: 8px;
-      filter: drop-shadow(0 0 8px rgba(0, 255, 102, 0.4));
+      filter: drop-shadow(0 0 8px rgba(0, 229, 255, 0.4));
     }
     .brand-text-corp {
       font-size: 0.72rem;
       text-transform: uppercase;
       letter-spacing: 0.15em;
-      color: var(--cyan-pulse);
+      color: var(--gui-cyan);
       font-family: var(--font-mono);
       font-weight: 700;
     }
@@ -165,44 +136,86 @@
     .nav-links {
       display: flex;
       align-items: center;
-      gap: 1.75rem;
+      gap: 1.5rem;
       list-style: none;
     }
     .nav-links a {
       color: var(--text-muted);
       text-decoration: none;
-      font-size: 0.92rem;
+      font-size: 0.9rem;
       font-weight: 500;
       transition: color 0.2s, text-shadow 0.2s;
     }
     .nav-links a:hover {
-      color: var(--phosphor-green);
-      text-shadow: 0 0 8px var(--phosphor-green-glow);
+      color: var(--gui-cyan);
+      text-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
     }
-    .nav-cta {
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    /* Language Switcher */
+    .lang-switcher {
       display: inline-flex;
       align-items: center;
-      gap: 0.5rem;
-      padding: 0.55rem 1.1rem;
+      background: #11161d;
+      border: 1px solid #28303d;
       border-radius: 6px;
-      background: rgba(0, 255, 102, 0.1);
-      border: 1px solid var(--phosphor-green);
-      color: var(--phosphor-green);
-      font-size: 0.88rem;
-      font-weight: 600;
+      padding: 2px;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+    }
+    .lang-btn {
+      background: transparent;
+      border: none;
+      color: #8b96a8;
+      padding: 4px 9px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 700;
+      font-family: inherit;
+      font-size: inherit;
+      transition: all 0.2s;
+    }
+    .lang-btn.active {
+      background: #1e354d;
+      color: var(--gui-cyan);
+      box-shadow: 0 0 8px rgba(0, 229, 255, 0.3);
+    }
+    .lang-btn:hover:not(.active) {
+      color: #FFFFFF;
+    }
+
+    /* Buy me a coffee button */
+    .coffee-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      background: #261e14;
+      border: 1px solid #785a28;
+      color: #ffd740;
+      font-size: 0.85rem;
+      font-weight: 700;
       text-decoration: none;
       transition: all 0.25s ease;
       font-family: var(--font-mono);
     }
-    .nav-cta:hover {
-      background: var(--phosphor-green);
-      color: #000000;
-      box-shadow: 0 0 18px var(--phosphor-green-glow);
+    .coffee-btn:hover {
+      background: #3d2f18;
+      border-color: #ffd740;
+      color: #ffe066;
+      box-shadow: 0 0 16px rgba(255, 215, 64, 0.3);
+      transform: translateY(-1px);
     }
 
     /* Hero Section */
     .hero {
-      padding: 4.5rem 0 3.5rem;
+      padding: 4rem 0 3rem;
       position: relative;
     }
     .badge-status {
@@ -213,7 +226,7 @@
       border-radius: 9999px;
       background: rgba(0, 229, 255, 0.08);
       border: 1px solid rgba(0, 229, 255, 0.3);
-      color: var(--cyan-pulse);
+      color: var(--gui-cyan);
       font-family: var(--font-mono);
       font-size: 0.78rem;
       font-weight: 600;
@@ -224,8 +237,8 @@
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: var(--phosphor-green);
-      box-shadow: 0 0 10px var(--phosphor-green);
+      background: var(--gui-green);
+      box-shadow: 0 0 10px var(--gui-green);
       animation: pulse 1.8s infinite;
     }
     @keyframes pulse {
@@ -237,7 +250,7 @@
       font-weight: 800;
       line-height: 1.15;
       letter-spacing: -0.03em;
-      margin-bottom: 1rem;
+      margin-bottom: 0.75rem;
       background: linear-gradient(180deg, #FFFFFF 30%, #94A3B8 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
@@ -245,14 +258,14 @@
     .hero-subtitle {
       font-size: 1.35rem;
       font-weight: 600;
-      color: var(--phosphor-green);
+      color: var(--gui-cyan);
       margin-bottom: 1.25rem;
       font-family: var(--font-mono);
     }
     .hero-desc {
       font-size: 1.12rem;
       color: var(--text-muted);
-      max-width: 780px;
+      max-width: 800px;
       line-height: 1.7;
       margin-bottom: 2rem;
     }
@@ -277,7 +290,7 @@
       color: #CBD5E1;
     }
     .specs-pill span.highlight {
-      color: var(--phosphor-green);
+      color: var(--gui-green);
       font-weight: 700;
     }
 
@@ -291,24 +304,30 @@
     }
     .btn-primary {
       display: inline-flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 0.75rem;
-      padding: 0.95rem 1.85rem;
+      padding: 0.85rem 1.85rem;
       border-radius: 8px;
-      background: var(--phosphor-green);
+      background: var(--gui-cyan);
       color: #060B13;
-      font-weight: 700;
-      font-size: 1.02rem;
+      font-weight: 800;
+      font-size: 1.05rem;
       text-decoration: none;
-      box-shadow: 0 0 25px var(--phosphor-green-glow);
+      box-shadow: 0 0 25px rgba(0, 229, 255, 0.35);
       transition: all 0.25s ease;
       font-family: var(--font-mono);
+      line-height: 1.3;
     }
     .btn-primary:hover {
       transform: translateY(-2px);
-      box-shadow: 0 0 35px rgba(0, 255, 102, 0.55);
-      background: #1aff75;
+      box-shadow: 0 0 35px rgba(0, 229, 255, 0.6);
+      background: #33ecff;
+    }
+    .btn-primary .btn-sub {
+      font-size: 0.72rem;
+      font-weight: 500;
+      opacity: 0.85;
     }
     .btn-secondary {
       display: inline-flex;
@@ -317,7 +336,7 @@
       gap: 0.7rem;
       padding: 0.95rem 1.65rem;
       border-radius: 8px;
-      background: rgba(15, 23, 42, 0.8);
+      background: rgba(15, 23, 42, 0.85);
       border: 1px solid rgba(148, 163, 184, 0.3);
       color: #F8FAFC;
       font-weight: 600;
@@ -327,173 +346,304 @@
     }
     .btn-secondary:hover {
       background: rgba(30, 41, 59, 0.9);
-      border-color: var(--cyan-pulse);
-      color: var(--cyan-pulse);
+      border-color: var(--gui-cyan);
+      color: var(--gui-cyan);
       transform: translateY(-2px);
     }
 
     /* ==========================================================================
-       HOROLOGICAL INSTRUMENTATION CONSOLE (WITSCHI / OSCILLOSCOPE SIMULATOR)
+       AUTHENTIC ADVANCED TIMEGRAPHER GUI RECREATION
        ========================================================================== */
-    .instrument-console {
-      background: #090e1a;
-      border: 1px solid rgba(0, 229, 255, 0.3);
-      border-radius: 12px;
-      padding: 1.5rem;
-      position: relative;
-      box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.7), 0 0 30px -10px rgba(0, 229, 255, 0.15);
+    .app-window-frame {
+      background: var(--bg-gui-window);
+      border: 1px solid var(--border-gui);
+      border-radius: 10px;
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.85), 0 0 35px -10px rgba(0, 229, 255, 0.2);
+      overflow: hidden;
       margin-bottom: 4rem;
     }
-    .console-header {
+
+    /* Window Title Bar */
+    .window-titlebar {
+      background: #13171e;
+      border-bottom: 1px solid var(--border-gui);
+      padding: 0.6rem 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+    }
+    .window-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .win-circle {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+    }
+    .win-close { background: #ff5f56; }
+    .win-min { background: #ffbd2e; }
+    .win-max { background: #27c93f; }
+    .window-title-text {
+      font-size: 0.78rem;
+      color: #8b96a8;
+      font-family: var(--font-mono);
+      font-weight: 600;
+    }
+
+    /* App Top Bar */
+    .app-topbar {
+      background: var(--bg-gui-bar);
+      border-bottom: 1px solid var(--border-gui);
+      padding: 0.65rem 1rem;
       display: flex;
       flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
-      padding-bottom: 1rem;
-      border-bottom: 1px solid rgba(56, 189, 248, 0.15);
-      margin-bottom: 1.25rem;
-      gap: 1rem;
-    }
-    .console-title-group {
-      display: flex;
-      align-items: center;
       gap: 0.75rem;
+      font-size: 0.8rem;
     }
-    .console-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--phosphor-green);
-      box-shadow: 0 0 10px var(--phosphor-green);
-    }
-    .console-title {
-      font-family: var(--font-mono);
-      font-size: 0.9rem;
-      letter-spacing: 0.1em;
-      color: #E2E8F0;
-      text-transform: uppercase;
-      font-weight: 700;
-    }
-    .caliber-select-group {
+    .topbar-group {
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
     }
-    .caliber-btn {
-      background: rgba(30, 41, 59, 0.8);
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      color: #94A3B8;
-      padding: 0.35rem 0.75rem;
+    .topbar-label {
+      color: #8b96a8;
+      font-weight: 600;
+      font-size: 0.75rem;
+    }
+    .topbar-select {
+      background: #0d1117;
+      border: 1px solid #303947;
+      color: #e5e9f0;
       border-radius: 4px;
-      cursor: pointer;
+      padding: 4px 8px;
       font-family: var(--font-mono);
-      font-size: 0.76rem;
-      transition: all 0.2s;
+      font-size: 0.78rem;
+      cursor: pointer;
+      outline: none;
     }
-    .caliber-btn.active, .caliber-btn:hover {
-      background: rgba(0, 255, 102, 0.15);
-      border-color: var(--phosphor-green);
-      color: var(--phosphor-green);
+    .topbar-select:focus {
+      border-color: var(--gui-cyan);
+    }
+    .mock-badge {
+      background: var(--gui-orange);
+      color: #120800;
+      font-weight: 800;
+      font-size: 0.72rem;
+      padding: 2px 7px;
+      border-radius: 3px;
+      font-family: var(--font-mono);
+    }
+
+    /* Main Window Layout: Left Panel & Right Graphs */
+    .app-body {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      min-height: 540px;
+    }
+    @media (max-width: 980px) {
+      .app-body { grid-template-columns: 1fr; }
+    }
+
+    /* Left Control Panel */
+    .gui-left-panel {
+      background: #11151c;
+      border-right: 1px solid var(--border-gui);
+      padding: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    /* HUD Cards */
+    .hud-card {
+      background: var(--bg-gui-card);
+      border: 1px solid var(--border-gui-card);
+      border-radius: 5px;
+      padding: 0.65rem 0.85rem;
+      position: relative;
+    }
+    .hud-card.card-rate { border-left: 4px solid var(--gui-cyan); }
+    .hud-card.card-be { border-left: 4px solid var(--gui-green); }
+    .hud-card.card-amp { border-left: 4px solid var(--gui-amber); }
+
+    .hud-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2px;
+    }
+    .hud-card-title {
+      color: #8b96a8;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      font-family: var(--font-mono);
+    }
+    .hud-card-unit {
+      color: #6b778d;
+      font-size: 0.75rem;
+      font-weight: 600;
+      font-family: var(--font-mono);
+    }
+    .hud-card-value {
+      font-family: var(--font-mono);
+      font-size: 2.25rem;
+      font-weight: 800;
+      text-align: right;
+      line-height: 1.15;
+    }
+    .hud-card-sub {
+      color: #8b96a8;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-align: right;
+      font-family: var(--font-mono);
+      margin-top: 2px;
+    }
+
+    /* Sub-panels (SNR & Stats) */
+    .gui-subpanel {
+      background: var(--bg-gui-card);
+      border: 1px solid #262f3d;
+      border-radius: 5px;
+      padding: 0.65rem 0.85rem;
+      font-size: 0.75rem;
+    }
+    .gui-subpanel-header {
+      color: #9aa5b4;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      margin-bottom: 0.4rem;
+      display: flex;
+      justify-content: space-between;
+    }
+    .snr-progress-bg {
+      background: #090d14;
+      border: 1px solid #202836;
+      border-radius: 3px;
+      height: 10px;
+      overflow: hidden;
+      margin-top: 4px;
+    }
+    .snr-progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #00e676, #00FF66);
+      width: 86%;
+      box-shadow: 0 0 8px rgba(0, 230, 118, 0.4);
+    }
+    .stats-table-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.25rem 0.5rem;
+      font-family: var(--font-mono);
+      color: #8b96a8;
+    }
+    .stats-table-grid .val {
+      text-align: right;
+      color: #eceff4;
       font-weight: 700;
     }
 
-    /* Digital Metrology Displays */
-    .metrics-grid {
+    /* GUI Action Buttons */
+    .gui-btn-row {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 1rem;
-      margin-bottom: 1.25rem;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+      margin-top: auto;
     }
-    .metric-card {
-      background: rgba(5, 10, 20, 0.9);
-      border: 1px solid rgba(51, 65, 85, 0.5);
-      border-radius: 8px;
-      padding: 1rem;
-      position: relative;
-    }
-    .metric-card.accent-green {
-      border-left: 3px solid var(--phosphor-green);
-    }
-    .metric-card.accent-amber {
-      border-left: 3px solid var(--phosphor-amber);
-    }
-    .metric-card.accent-cyan {
-      border-left: 3px solid var(--cyan-pulse);
-    }
-    .metric-label {
-      font-size: 0.72rem;
+    .gui-btn-start {
+      background: #00e676;
+      color: #05160c;
+      border: none;
+      border-radius: 5px;
+      padding: 0.55rem;
       font-family: var(--font-mono);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--text-muted);
-      margin-bottom: 0.35rem;
-      display: flex;
-      justify-content: space-between;
-    }
-    .metric-value {
-      font-size: 2.1rem;
       font-weight: 800;
-      font-family: var(--font-mono);
-      line-height: 1.1;
+      font-size: 0.8rem;
+      cursor: pointer;
+      text-align: center;
     }
-    .metric-unit {
-      font-size: 0.85rem;
-      font-weight: 500;
-      color: var(--text-dim);
-      margin-left: 0.2rem;
-    }
-    .metric-sub {
-      font-size: 0.75rem;
+    .gui-btn-stop {
+      background: #1c2430;
+      color: #4a5768;
+      border: 1px solid #28303d;
+      border-radius: 5px;
+      padding: 0.55rem;
       font-family: var(--font-mono);
-      color: var(--text-dim);
-      margin-top: 0.35rem;
+      font-weight: 800;
+      font-size: 0.8rem;
+      cursor: not-allowed;
+      text-align: center;
     }
 
-    /* Canvas Screen */
-    .screen-container {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 1rem;
-      background: #020610;
-      border: 1px solid rgba(56, 189, 248, 0.2);
-      border-radius: 8px;
-      padding: 1rem;
+    /* Right Graphs Area */
+    .gui-right-area {
+      background: #0d1117;
+      padding: 0.85rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+    }
+    .graph-box {
+      background: #080c13;
+      border: 1px solid #202836;
+      border-radius: 6px;
+      padding: 0.65rem;
+      display: flex;
+      flex-direction: column;
       position: relative;
     }
-    canvas {
+    .graph-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.4rem;
+      font-size: 0.74rem;
+      font-family: var(--font-mono);
+      color: #8b96a8;
+    }
+    .graph-header-title {
+      color: #d8dee9;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .real-bph-badge {
+      color: var(--gui-green);
+      border: 1px solid var(--gui-green);
+      border-radius: 4px;
+      padding: 1px 7px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+    }
+
+    canvas#paperTapeCanvas {
       width: 100%;
       height: 220px;
       display: block;
+      background: #070b12;
       border-radius: 4px;
-      background-color: #030814;
     }
-    .screen-legend {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 0.75rem;
-      font-family: var(--font-mono);
-      color: var(--text-dim);
-      padding-top: 0.5rem;
-      border-top: 1px dashed rgba(51, 65, 85, 0.5);
-    }
-    .legend-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
-    .legend-badge {
-      display: inline-block;
-      width: 8px;
-      height: 8px;
-      border-radius: 2px;
+    canvas#oscilloscopeCanvas {
+      width: 100%;
+      height: 180px;
+      display: block;
+      background: #070b12;
+      border-radius: 4px;
     }
 
     /* ==========================================================================
-       TECHNICAL SPECIFICATIONS & ARCHITECTURE (CARDS GRID)
+       TECHNICAL SPECIFICATIONS & ROADMAP (CARDS GRID)
        ========================================================================== */
     .section {
       padding: 5rem 0;
@@ -505,7 +655,7 @@
       margin: 0 auto 3.5rem;
     }
     .section-eyebrow {
-      color: var(--cyan-pulse);
+      color: var(--gui-cyan);
       font-family: var(--font-mono);
       font-size: 0.82rem;
       text-transform: uppercase;
@@ -531,24 +681,20 @@
       gap: 1.75rem;
     }
     .spec-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border-card);
+      background: rgba(13, 20, 36, 0.85);
+      border: 1px solid rgba(56, 189, 248, 0.15);
       border-radius: 10px;
       padding: 1.75rem;
       transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-      position: relative;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
     }
     .spec-card:hover {
-      background: var(--bg-card-hover);
-      border-color: var(--border-card-hover);
+      background: rgba(19, 30, 53, 0.95);
+      border-color: rgba(0, 229, 255, 0.4);
       transform: translateY(-4px);
-      box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.6), 0 0 20px -5px var(--phosphor-green-glow);
-    }
-    .card-top {
-      margin-bottom: 1.25rem;
+      box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.6), 0 0 20px -5px rgba(0, 229, 255, 0.25);
     }
     .card-layer-tag {
       display: inline-flex;
@@ -562,7 +708,7 @@
       border-radius: 4px;
       background: rgba(0, 229, 255, 0.08);
       border: 1px solid rgba(0, 229, 255, 0.25);
-      color: var(--cyan-pulse);
+      color: var(--gui-cyan);
       font-weight: 700;
       margin-bottom: 1rem;
     }
@@ -571,9 +717,6 @@
       font-weight: 700;
       color: #FFFFFF;
       margin-bottom: 0.65rem;
-      display: flex;
-      align-items: center;
-      gap: 0.6rem;
     }
     .card-desc {
       font-size: 0.92rem;
@@ -588,7 +731,7 @@
       padding: 0.75rem 1rem;
       font-family: var(--font-mono);
       font-size: 0.8rem;
-      color: var(--phosphor-green);
+      color: var(--gui-green);
       margin-bottom: 1rem;
       overflow-x: auto;
     }
@@ -607,13 +750,11 @@
       content: "▹";
       position: absolute;
       left: 0;
-      color: var(--phosphor-green);
+      color: var(--gui-cyan);
       font-weight: 800;
     }
 
-    /* ==========================================================================
-       THREE-STAGE ESCAPE MECHANISM BREAKDOWN (P1, P2, P3)
-       ========================================================================== */
+    /* Escape Breakdown Diagram */
     .pulse-diagram-box {
       background: rgba(10, 16, 30, 0.95);
       border: 1px solid rgba(0, 229, 255, 0.25);
@@ -634,31 +775,60 @@
       padding: 1.25rem;
       border-top: 3px solid var(--text-dim);
     }
-    .pulse-col.p1-col { border-top-color: var(--cyan-pulse); }
-    .pulse-col.p2-col { border-top-color: var(--phosphor-amber); }
-    .pulse-col.p3-col { border-top-color: var(--phosphor-green); }
+    .pulse-col.p1-col { border-top-color: var(--gui-cyan); }
+    .pulse-col.p2-col { border-top-color: var(--gui-amber); }
+    .pulse-col.p3-col { border-top-color: var(--gui-green); }
 
-    .pulse-badge {
-      font-family: var(--font-mono);
-      font-size: 1.1rem;
-      font-weight: 800;
-      margin-bottom: 0.35rem;
+    /* ==========================================================================
+       ROADMAP SECTION (REPLACES OLD BUFFER SECURITY BOX)
+       ========================================================================== */
+    .roadmap-card {
+      background: linear-gradient(135deg, rgba(16, 24, 40, 0.9) 0%, rgba(10, 15, 28, 0.95) 100%);
+      border: 1px solid rgba(0, 229, 255, 0.3);
+      border-radius: 12px;
+      padding: 2.25rem;
+      box-shadow: 0 20px 45px -10px rgba(0, 0, 0, 0.7);
     }
-    .pulse-name {
-      font-size: 0.95rem;
+    .roadmap-timeline {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1.5rem;
+      margin-top: 2rem;
+    }
+    .roadmap-item {
+      background: #070c17;
+      border: 1px solid #202d42;
+      border-radius: 8px;
+      padding: 1.25rem;
+      position: relative;
+    }
+    .roadmap-status {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-family: var(--font-mono);
+      font-weight: 800;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 3px;
+      margin-bottom: 0.65rem;
+    }
+    .status-active { background: rgba(0, 230, 118, 0.15); color: var(--gui-green); border: 1px solid var(--gui-green); }
+    .status-upcoming { background: rgba(0, 229, 255, 0.15); color: var(--gui-cyan); border: 1px solid var(--gui-cyan); }
+    .status-future { background: rgba(255, 171, 0, 0.15); color: var(--gui-amber); border: 1px solid var(--gui-amber); }
+
+    .roadmap-title {
+      font-size: 1.05rem;
       font-weight: 700;
       color: #FFFFFF;
-      margin-bottom: 0.5rem;
+      margin-bottom: 0.45rem;
     }
-    .pulse-text {
-      font-size: 0.84rem;
+    .roadmap-desc {
+      font-size: 0.85rem;
       color: var(--text-muted);
       line-height: 1.55;
     }
 
-    /* ==========================================================================
-       INSTALLATION & PIPELINE SECTION
-       ========================================================================== */
+    /* Terminal Boxes */
     .terminal-box {
       background: #030712;
       border: 1px solid rgba(51, 65, 85, 0.6);
@@ -667,8 +837,7 @@
       font-family: var(--font-mono);
       font-size: 0.86rem;
       color: #E2E8F0;
-      position: relative;
-      margin: 1.5rem 0;
+      margin: 1.25rem 0;
     }
     .terminal-header {
       display: flex;
@@ -678,55 +847,15 @@
       padding-bottom: 0.5rem;
       border-bottom: 1px solid rgba(255, 255, 255, 0.08);
     }
-    .term-btn {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      display: inline-block;
-    }
+    .term-btn { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
     .term-red { background: #EF4444; }
     .term-yellow { background: #F59E0B; }
     .term-green { background: #10B981; }
-    .terminal-code {
-      white-space: pre-wrap;
-      word-break: break-all;
-    }
+    .terminal-code { white-space: pre-wrap; word-break: break-all; }
     .terminal-code .comment { color: var(--text-dim); }
-    .terminal-code .cmd { color: var(--phosphor-green); }
+    .terminal-code .cmd { color: var(--gui-cyan); }
 
-    /* ==========================================================================
-       DEVSECOPS & AUDIT COMPLIANCE BAR
-       ========================================================================== */
-    .devsecops-card {
-      background: linear-gradient(135deg, rgba(16, 24, 40, 0.9) 0%, rgba(10, 15, 28, 0.95) 100%);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      border-radius: 12px;
-      padding: 2rem;
-      margin: 3.5rem 0;
-    }
-    .sec-checks-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 1.25rem;
-      margin-top: 1.25rem;
-    }
-    .sec-check-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.75rem;
-      font-size: 0.85rem;
-      color: #CBD5E1;
-    }
-    .sec-check-icon {
-      color: var(--phosphor-green);
-      font-weight: 800;
-      font-size: 1rem;
-      line-height: 1.2;
-    }
-
-    /* ==========================================================================
-       FOOTER
-       ========================================================================== */
+    /* Footer */
     footer {
       border-top: 1px solid rgba(56, 189, 248, 0.15);
       background: #040711;
@@ -740,27 +869,37 @@
       gap: 3rem;
       margin-bottom: 3rem;
     }
+    @media (max-width: 900px) {
+      .footer-grid { grid-template-columns: 1fr; gap: 2rem; }
+      .nav-links { display: none; }
+      .hero-title { font-size: 2.35rem; }
+    }
+
     .footer-col h4 {
       color: #FFFFFF;
       font-size: 0.95rem;
       font-weight: 700;
       margin-bottom: 1.25rem;
-      letter-spacing: -0.01em;
     }
-    .footer-links {
-      list-style: none;
+    .footer-links { list-style: none; }
+    .footer-links li { margin-bottom: 0.65rem; }
+    .footer-links a { color: var(--text-muted); text-decoration: none; transition: color 0.2s; }
+    .footer-links a:hover { color: var(--gui-cyan); }
+
+    .footer-simplified-notice {
+      background: rgba(17, 22, 29, 0.9);
+      border-left: 3px solid var(--gui-cyan);
+      padding: 1rem 1.35rem;
+      border-radius: 4px;
+      margin: 1.5rem 0;
+      font-size: 0.85rem;
+      color: #CBD5E1;
+      line-height: 1.6;
     }
-    .footer-links li {
-      margin-bottom: 0.65rem;
+    .footer-simplified-notice strong {
+      color: #FFFFFF;
     }
-    .footer-links a {
-      color: var(--text-muted);
-      text-decoration: none;
-      transition: color 0.2s;
-    }
-    .footer-links a:hover {
-      color: var(--phosphor-green);
-    }
+
     .footer-bottom {
       padding-top: 2rem;
       border-top: 1px solid rgba(255, 255, 255, 0.06);
@@ -768,26 +907,9 @@
       flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
-      gap: 1rem;
-      font-size: 0.8rem;
+      gap: 1.25rem;
+      font-size: 0.82rem;
       color: var(--text-dim);
-    }
-    .security-notice {
-      background: rgba(15, 23, 42, 0.8);
-      border-left: 3px solid var(--phosphor-amber);
-      padding: 0.85rem 1.25rem;
-      border-radius: 4px;
-      margin-top: 1.5rem;
-      font-size: 0.8rem;
-      color: #CBD5E1;
-      line-height: 1.5;
-    }
-
-    /* Responsive */
-    @media (max-width: 900px) {
-      .hero-title { font-size: 2.35rem; }
-      .footer-grid { grid-template-columns: 1fr; gap: 2rem; }
-      .nav-links { display: none; }
     }
   </style>
 </head>
@@ -808,18 +930,28 @@
 
       <nav>
         <ul class="nav-links">
-          <li><a href="#console">Instrumentación</a></li>
-          <li><a href="#features">Especificaciones</a></li>
-          <li><a href="#tri-pulse">Escape P1/P2/P3</a></li>
-          <li><a href="#install">Descargas</a></li>
-          <li><a href="#security">DevSecOps</a></li>
+          <li><a href="#gui-demo" data-i18n="nav_demo">Interface Demo</a></li>
+          <li><a href="#features" data-i18n="nav_features">Specifications</a></li>
+          <li><a href="#tri-pulse" data-i18n="nav_pulse">P1/P2/P3 Physics</a></li>
+          <li><a href="#roadmap" data-i18n="nav_roadmap">Roadmap</a></li>
+          <li><a href="#install" data-i18n="nav_downloads">Downloads</a></li>
           <li><a href="https://github.com/SPQR14/advanced_timegrapher" target="_blank" rel="noopener noreferrer">GitHub</a></li>
         </ul>
       </nav>
 
-      <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="nav-cta" target="_blank" rel="noopener noreferrer">
-        <span>⚡</span> v0.7.0 MVP
-      </a>
+      <div class="nav-actions">
+        <!-- Support the project button -->
+        <a href="https://buymeacoffee.com/sqpr14" target="_blank" rel="noopener noreferrer" class="coffee-btn">
+          <span>☕</span>
+          <span data-i18n="btn_support_coffee">Support the project</span>
+        </a>
+
+        <!-- Bilingual Selector (EN by default) -->
+        <div class="lang-switcher">
+          <button id="btn-lang-en" class="lang-btn active" onclick="setLanguage('en')">EN</button>
+          <button id="btn-lang-es" class="lang-btn" onclick="setLanguage('es')">ES</button>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -832,145 +964,211 @@
 
         <div class="badge-status">
           <span class="pulse-dot"></span>
-          <span>ESTADO: V0.7.0 MVP · DSP 100% PYTHON/NUMPY PURO · ZERO-SCIPY</span>
+          <span data-i18n="hero_status_badge">STATUS: V0.7.0 MVP · PURE NUMPY DSP · ZERO-SCIPY RUNTIME</span>
         </div>
 
         <h1 class="hero-title">
           Advanced Timegrapher
         </h1>
-        <div class="hero-subtitle">
+        <div class="hero-subtitle" data-i18n="hero_subtitle">
           Modern Watch Escape Analyzer
         </div>
 
-        <p class="hero-desc">
-          Analizador acústico y cronocomparador de alta precisión para relojes mecánicos y de cuarzo.
-          Mide en tiempo real la <strong>marcha</strong> (Rate en s/d), el <strong>error de batimiento</strong> (Beat Error en ms)
-          y la <strong>amplitud</strong> (°) mediante procesamiento digital de señales (DSP) desacoplado,
-          con calibración dinámica de la deriva del reloj de la tarjeta de sonido.
+        <p class="hero-desc" data-i18n="hero_desc">
+          Non-invasive acoustic analyzer and modern software timegrapher for mechanical and quartz watches.
+          Measures Rate (s/d), Beat Error (ms), and Amplitude (°) in real time through decoupled digital signal processing (DSP),
+          with dynamic sound card clock drift calibration.
         </p>
 
         <!-- Technical Badges -->
         <div class="specs-pill-container">
           <div class="specs-pill"><span class="highlight">OS:</span> macOS · Windows · Linux</div>
           <div class="specs-pill"><span class="highlight">Python:</span> ≥ 3.12 (Pure NumPy)</div>
-          <div class="specs-pill"><span class="highlight">Licencia:</span> GPL-3.0-or-later</div>
+          <div class="specs-pill"><span class="highlight" data-i18n="badge_license">License:</span> GPL-3.0-or-later</div>
           <div class="specs-pill"><span class="highlight">Audio:</span> SPSC Lock-Free Ring Buffer</div>
-          <div class="specs-pill"><span class="highlight">Precisión:</span> Regresión Ponderada Theil-Sen</div>
-          <div class="specs-pill"><span class="highlight">Resolución:</span> Sub-muestra en P1 / P3</div>
+          <div class="specs-pill"><span class="highlight" data-i18n="badge_precision">Precision:</span> Theil-Sen Robust Fit</div>
+          <div class="specs-pill"><span class="highlight" data-i18n="badge_resolution">Resolution:</span> Sub-sample P1 / P3</div>
         </div>
 
         <!-- Call to Actions -->
         <div class="cta-group">
+          <!-- Primary Download button (No version text as requested) -->
           <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-primary" target="_blank" rel="noopener noreferrer">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-            <span>Descargar Última Release (v0.1-alpha / MVP)</span>
+            <span data-i18n="btn_download_latest">Download latest version</span>
+            <span class="btn-sub" data-i18n="btn_download_sub">macOS (.dmg) · Windows (.exe) · Linux · pip</span>
+          </a>
+
+          <!-- Support Project Button in Hero -->
+          <a href="https://buymeacoffee.com/sqpr14" target="_blank" rel="noopener noreferrer" class="coffee-btn" style="padding: 0.95rem 1.4rem; font-size: 0.95rem;">
+            <span style="font-size: 1.2rem;">☕</span>
+            <span data-i18n="btn_support_coffee">Support the project</span>
           </a>
 
           <a href="https://github.com/SPQR14/advanced_timegrapher" class="btn-secondary" target="_blank" rel="noopener noreferrer">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-            <span>Ver Código en GitHub</span>
-          </a>
-
-          <a href="#install" class="btn-secondary">
-            <span>Guía de Instalación</span>
+            <span data-i18n="btn_view_github">View Code on GitHub</span>
           </a>
         </div>
 
         <!-- ====================================================================
-             INTERACTIVE CONSOLE: VIRTUAL WITSCHI & OSCILLOSCOPE
+             RECREACIÓN EXACTA DE LA GUI DE ADVANCED TIMEGRAPHER
              ==================================================================== -->
-        <div id="console" class="instrument-console crt-grid">
+        <div id="gui-demo" class="app-window-frame">
 
-          <div class="console-header">
-            <div class="console-title-group">
-              <span class="console-dot"></span>
-              <span class="console-title">Horological Metrology Console · Real-Time Telemetry</span>
+          <!-- Window Title Bar -->
+          <div class="window-titlebar">
+            <div class="window-controls">
+              <span class="win-circle win-close"></span>
+              <span class="win-circle win-min"></span>
+              <span class="win-circle win-max"></span>
+            </div>
+            <div class="window-title-text" data-i18n="gui_window_title">Advanced Timegrapher — Horological DSP Test Bench</div>
+            <div style="width: 50px;"></div>
+          </div>
+
+          <!-- App Top Bar -->
+          <div class="app-topbar">
+            <div class="topbar-group">
+              <span class="topbar-label" data-i18n="gui_lbl_caliber">Caliber:</span>
+              <select id="gui-caliber-select" class="topbar-select" onchange="setCaliberPreset(this.value)">
+                <option value="miyota">Miyota 9015 (28800 A/h · LA 51°)</option>
+                <option value="hamilton">Hamilton H-50 (21600 A/h · LA 50°)</option>
+                <option value="seiko">Seiko 4R36 (21600 A/h · LA 53°)</option>
+                <option value="seagull">Seagull ST1901 (21600 A/h · LA 47°)</option>
+                <option value="quartz">Quartz (1 step/s · 7200 A/h)</option>
+              </select>
             </div>
 
-            <!-- Caliber selection tabs -->
-            <div class="caliber-select-group">
-              <span style="color: var(--text-dim);">Calibre:</span>
-              <button class="caliber-btn active" onclick="setCaliber('miyota')">Miyota 9015 (28.8k)</button>
-              <button class="caliber-btn" onclick="setCaliber('hamilton')">Hamilton H-50 (21.6k)</button>
-              <button class="caliber-btn" onclick="setCaliber('seiko')">Seiko 4R36 (21.6k)</button>
-              <button class="caliber-btn" onclick="setCaliber('seagull')">Seagull ST19 (47°)</button>
-              <button class="caliber-btn" onclick="setCaliber('quartz')">Cuarzo (1 Hz)</button>
+            <div class="topbar-group">
+              <span class="topbar-label" data-i18n="gui_lbl_bph">BPH:</span>
+              <span id="top-bph-val" class="font-mono" style="color: #e5e9f0; font-weight: 700;">28800</span>
+              <span class="topbar-label" style="margin-left: 0.5rem;" data-i18n="gui_lbl_lift">Lift:</span>
+              <span id="top-lift-val" class="font-mono" style="color: #e5e9f0; font-weight: 700;">51.0°</span>
+              <span class="topbar-label" style="margin-left: 0.5rem;" data-i18n="gui_lbl_fs">Fs:</span>
+              <span class="font-mono" style="color: #e5e9f0; font-weight: 700;">48000 Hz</span>
+            </div>
+
+            <div class="topbar-group">
+              <a href="https://buymeacoffee.com/sqpr14" target="_blank" rel="noopener noreferrer" class="coffee-btn" style="padding: 3px 8px; font-size: 0.74rem;">
+                <span>☕</span>
+                <span data-i18n="btn_buy_coffee">Buy me a coffee</span>
+              </a>
+              <span class="mock-badge">MOCK</span>
             </div>
           </div>
 
-          <!-- Digital Readouts (LED Nixie / Monospace) -->
-          <div class="metrics-grid">
-            <div class="metric-card accent-green">
-              <div class="metric-label">
-                <span>Marcha (Rate)</span>
-                <span style="color: var(--phosphor-green);">[OK]</span>
+          <!-- App Window Body (Splitter Layout) -->
+          <div class="app-body">
+
+            <!-- Left Control Panel & HUD Cards -->
+            <div class="gui-left-panel">
+
+              <!-- Card 1: RATE -->
+              <div class="hud-card card-rate">
+                <div class="hud-card-header">
+                  <span class="hud-card-title" data-i18n="hud_rate">RATE</span>
+                  <span class="hud-card-unit">s/d</span>
+                </div>
+                <div class="hud-card-value font-mono" id="gui-val-rate" style="color: var(--gui-cyan);">+1.2</div>
+                <div class="hud-card-sub" id="gui-sub-rate" data-i18n="hud_rate_trend">Trend: stable (±0.2 s/d)</div>
               </div>
-              <div class="metric-value font-mono" id="disp-rate" style="color: var(--phosphor-green);">+1.2<span class="metric-unit">s/d</span></div>
-              <div class="metric-sub" id="disp-rate-sub">Tendencia: estable (±0.2 s/d)</div>
+
+              <!-- Card 2: BEAT ERROR -->
+              <div class="hud-card card-be">
+                <div class="hud-card-header">
+                  <span class="hud-card-title" data-i18n="hud_beat_error">BEAT ERROR</span>
+                  <span class="hud-card-unit">ms</span>
+                </div>
+                <div class="hud-card-value font-mono" id="gui-val-be" style="color: var(--gui-green);">0.1</div>
+                <div class="hud-card-sub" id="gui-sub-be" data-i18n="hud_be_drop">at the drop (P3): 0.20 ms</div>
+              </div>
+
+              <!-- Card 3: AMPLITUDE -->
+              <div class="hud-card card-amp">
+                <div class="hud-card-header">
+                  <span class="hud-card-title" data-i18n="hud_amplitude">AMPLITUDE</span>
+                  <span class="hud-card-unit">deg (°)</span>
+                </div>
+                <div class="hud-card-value font-mono" id="gui-val-amp" style="color: var(--gui-amber);">295°</div>
+                <div class="hud-card-sub" id="gui-sub-amp">tic: 294° · tac: 296°</div>
+              </div>
+
+              <!-- Signal Quality / SNR -->
+              <div class="gui-subpanel">
+                <div class="gui-subpanel-header">
+                  <span data-i18n="gui_signal_quality">SIGNAL QUALITY / SNR</span>
+                  <span class="font-mono" style="color: var(--gui-green);" id="gui-val-snr">34.8 dB</span>
+                </div>
+                <div class="snr-progress-bg">
+                  <div class="snr-progress-bar"></div>
+                </div>
+              </div>
+
+              <!-- Telemetry Statistics -->
+              <div class="gui-subpanel">
+                <div class="gui-subpanel-header">
+                  <span data-i18n="gui_stats_title">TELEMETRY STATISTICS</span>
+                </div>
+                <div class="stats-table-grid">
+                  <span data-i18n="stat_max">Max:</span>
+                  <span class="val" id="stat-max">+1.8 s/d</span>
+                  <span data-i18n="stat_min">Min:</span>
+                  <span class="val" id="stat-min">+0.6 s/d</span>
+                  <span data-i18n="stat_delta">Delta:</span>
+                  <span class="val" id="stat-delta">1.2 s/d</span>
+                  <span data-i18n="stat_mean">Mean:</span>
+                  <span class="val" id="stat-mean">+1.2 s/d</span>
+                  <span data-i18n="stat_elapsed">Elapsed:</span>
+                  <span class="val">00:42</span>
+                  <span data-i18n="stat_drift">Clock Drift:</span>
+                  <span class="val" style="color: var(--gui-cyan);">+0.00 ppm</span>
+                </div>
+              </div>
+
+              <!-- Buttons -->
+              <div class="gui-btn-row">
+                <button class="gui-btn-start" data-i18n="btn_start">START</button>
+                <button class="gui-btn-stop" data-i18n="btn_stop">STOP</button>
+              </div>
+
             </div>
 
-            <div class="metric-card accent-amber">
-              <div class="metric-label">
-                <span>Error Batimiento (Beat Error)</span>
-                <span style="color: var(--phosphor-amber);">[P1]</span>
+            <!-- Right Graphs Area: Paper Tape + Oscilloscope -->
+            <div class="gui-right-area">
+
+              <!-- Paper Tape Graph -->
+              <div class="graph-box">
+                <div class="graph-header">
+                  <div class="graph-header-title">
+                    <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--gui-cyan);"></span>
+                    <span data-i18n="gui_tape_title">Paper Tape (timing of every tic and tac; slope = rate)</span>
+                  </div>
+                  <div style="display:flex; align-items:center; gap:0.5rem;">
+                    <span class="real-bph-badge" id="real-bph-val">28,800 bph (0.0%)</span>
+                    <span style="font-size: 0.72rem; color: #6b778d;">COSC [-4 / +6 s/d]</span>
+                  </div>
+                </div>
+                <canvas id="paperTapeCanvas" width="800" height="220"></canvas>
               </div>
-              <div class="metric-value font-mono" id="disp-be" style="color: var(--phosphor-amber);">0.1<span class="metric-unit">ms</span></div>
-              <div class="metric-sub" id="disp-be-sub">Calculado en P1 (Mediana)</div>
+
+              <!-- Oscilloscope Graph -->
+              <div class="graph-box">
+                <div class="graph-header">
+                  <div class="graph-header-title">
+                    <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--gui-green);"></span>
+                    <span data-i18n="gui_scope_title">Real-Time Escapement Oscilloscope (P1 / P2 / P3)</span>
+                  </div>
+                  <div style="font-size: 0.72rem; color: #8b96a8;">
+                    <span style="color: var(--gui-green);">■ P1 (Unlock)</span> &nbsp;
+                    <span style="color: var(--gui-amber);">■ P2 (Impulse)</span> &nbsp;
+                    <span style="color: var(--gui-cyan);">■ P3 (Drop)</span>
+                  </div>
+                </div>
+                <canvas id="oscilloscopeCanvas" width="800" height="180"></canvas>
+              </div>
+
             </div>
 
-            <div class="metric-card accent-cyan">
-              <div class="metric-label">
-                <span>Amplitud (Amplitude)</span>
-                <span style="color: var(--cyan-pulse);">[LA: <span id="disp-la">51°</span>]</span>
-              </div>
-              <div class="metric-value font-mono" id="disp-amp" style="color: var(--cyan-pulse);">295<span class="metric-unit">°</span></div>
-              <div class="metric-sub" id="disp-amp-sub">Tic: 294° · Tac: 296°</div>
-            </div>
-
-            <div class="metric-card">
-              <div class="metric-label">
-                <span>Frecuencia Nom.</span>
-                <span>DSP</span>
-              </div>
-              <div class="metric-value font-mono" id="disp-freq" style="color: #FFFFFF;">28,800<span class="metric-unit">bph</span></div>
-              <div class="metric-sub" id="disp-freq-hz">4.0 Hz · P: 125.0 ms</div>
-            </div>
-
-            <div class="metric-card">
-              <div class="metric-label">
-                <span>Deriva Reloj ADC</span>
-                <span style="color: var(--phosphor-green);">Nivel 3</span>
-              </div>
-              <div class="metric-value font-mono" id="disp-adc" style="color: #38BDF8;">+0.00<span class="metric-unit">ppm</span></div>
-              <div class="metric-sub">Compensación Host Activa</div>
-            </div>
-          </div>
-
-          <!-- Oscilloscope & Paper Tape Canvas Screen -->
-          <div class="screen-container">
-            <canvas id="scopeCanvas" width="1120" height="240"></canvas>
-
-            <div class="screen-legend">
-              <div class="legend-item">
-                <span class="legend-badge" style="background: var(--cyan-pulse);"></span>
-                <span>P1: Desbloqueo (Unlocking)</span>
-              </div>
-              <div class="legend-item">
-                <span class="legend-badge" style="background: var(--phosphor-amber);"></span>
-                <span>P2: Impulso (Impulse)</span>
-              </div>
-              <div class="legend-item">
-                <span class="legend-badge" style="background: var(--phosphor-green);"></span>
-                <span>P3: Caída/Toque (Drop & Lock)</span>
-              </div>
-              <div class="legend-item">
-                <span class="legend-badge" style="background: #38BDF8;"></span>
-                <span>Cinta Continua Witschi (Paper Tape ms)</span>
-              </div>
-              <div>
-                <span>VENTANA: 30s · SNR: +34.8 dB · MUESTRAS: 48 kHz / 24-bit</span>
-              </div>
-            </div>
           </div>
 
         </div>
@@ -979,17 +1177,17 @@
     </section>
 
     <!-- ========================================================================
-       GRID DE ESPECIFICACIONES TÉCNICAS (BASADO EN DOCS Y README)
+       GRID DE ESPECIFICACIONES TÉCNICAS (CARDS)
        ======================================================================== -->
     <section id="features" class="section">
       <div class="container">
 
         <div class="section-header">
-          <div class="section-eyebrow">Arquitectura por Capas · Docs v0.7.0</div>
-          <h2 class="section-title">Ingeniería Horológica de Máxima Fidelidad</h2>
-          <p class="section-desc">
-            Diseñado desde cero con separación estricta de responsabilidades: captura sin bloqueos,
-            motor DSP en Python puro y trazabilidad matemática total sin cajas negras.
+          <div class="section-eyebrow" data-i18n="feat_eyebrow">Layered Architecture · Metrology Core</div>
+          <h2 class="section-title" data-i18n="feat_title">High-Fidelity Horological Engineering</h2>
+          <p class="section-desc" data-i18n="feat_desc">
+            Engineered from first principles with strict separation of concerns: lock-free audio capture,
+            pure NumPy mathematical core, and total algorithmic transparency without black boxes.
           </p>
         </div>
 
@@ -997,197 +1195,254 @@
 
           <!-- Card 1: DSP Engine -->
           <div class="spec-card">
-            <div class="card-top">
-              <div class="card-layer-tag">Capa 1 & 2 · Audio & DSP</div>
-              <h3 class="card-title">
-                <span>Motor Acústico DSP NumPy Puro</span>
-              </h3>
-              <p class="card-desc">
-                Procesamiento digital de señales 100% en Python/NumPy sin dependencias de SciPy ni extensiones C++ en tiempo de ejecución.
-                Buffer circular lock-free SPSC (Single-Producer Single-Consumer) con indexación absoluta referenciada al reloj del convertidor ADC.
+            <div>
+              <div class="card-layer-tag" data-i18n="c1_tag">Layer 1 & 2 · Audio & DSP</div>
+              <h3 class="card-title" data-i18n="c1_title">Pure NumPy Acoustic DSP Core</h3>
+              <p class="card-desc" data-i18n="c1_desc">
+                Digital signal processing 100% written in Python/NumPy without runtime dependencies on SciPy or C++ extensions.
+                Lock-free SPSC (Single-Producer Single-Consumer) ring buffer with absolute sample indexing synchronized to the ADC hardware clock.
               </p>
               <div class="formula-box">
-                // SPSC Ring Buffer: cero pérdida de audio<br>
+                // SPSC Ring Buffer: Zero Audio Loss<br>
                 index_abs = total_samples + write_head<br>
-                residuos = t_host - (n / f_s)
+                residuals = t_host - (n / f_s)
               </div>
             </div>
             <ul class="feature-list">
-              <li>Captura desacoplada en proceso hijo dedicado (PortAudio nativo).</li>
-              <li>La interfaz GUI jamás bloquea ni retrasa la ingesta de audio.</li>
-              <li>Detección de sobrescritura de muestras (`SamplesOverwritten`).</li>
+              <li data-i18n="c1_f1">Dedicated child process for audio capture (native PortAudio).</li>
+              <li data-i18n="c1_f2">GUI operations never delay or block audio sample ingestion.</li>
+              <li data-i18n="c1_f3">Automated buffer overwrite detection (`SamplesOverwritten`).</li>
             </ul>
           </div>
 
           <!-- Card 2: Escape Tri-Pulse -->
           <div class="spec-card">
-            <div class="card-top">
-              <div class="card-layer-tag">Capa 2 · Beat Detector</div>
-              <h3 class="card-title">
-                <span>Análisis Tri-Pulsante del Escape</span>
-              </h3>
-              <p class="card-desc">
-                Identificación de los tres sub-eventos acústicos generados en cada alternancia por el volante,
-                el áncora y la rueda de escape. Resolución temporal sub-muestra con discriminación automática de ruido.
+            <div>
+              <div class="card-layer-tag" data-i18n="c2_tag">Layer 2 · Beat Detector</div>
+              <h3 class="card-title" data-i18n="c2_title">Swiss Lever Tri-Pulse Analysis</h3>
+              <p class="card-desc" data-i18n="c2_desc">
+                Precise acoustic identification of the three discrete physical events produced during each alternation by the balance wheel,
+                pallet fork, and escape wheel. Sub-sample temporal resolution with automatic noise floor rejection.
               </p>
               <div class="formula-box">
-                t_lift = P3 - P1  (Tiempo de alzado)<br>
+                t_lift = P3 - P1  (Lift Duration)<br>
                 A = LA / (2 · sin(π · f · t_lift))
               </div>
             </div>
             <ul class="feature-list">
-              <li><strong>P1 (Desbloqueo):</strong> La elipse entra en la horquilla.</li>
-              <li><strong>P2 (Impulso):</strong> El diente empuja la paleta de alzado.</li>
-              <li><strong>P3 (Caída):</strong> El diente choca en la bocallave y tope.</li>
+              <li><strong data-i18n="c2_f1_k">P1 (Unlocking):</strong> <span data-i18n="c2_f1_v">Impulse pin enters the fork notch.</span></li>
+              <li><strong data-i18n="c2_f2_k">P2 (Impulse):</strong> <span data-i18n="c2_f2_v">Escape tooth slides over pallet impulse face.</span></li>
+              <li><strong data-i18n="c2_f3_k">P3 (Drop & Lock):</strong> <span data-i18n="c2_f3_v">Tooth hits locking face and fork hits banking pin.</span></li>
             </ul>
           </div>
 
           <!-- Card 3: Metrics & Theil-Sen -->
           <div class="spec-card">
-            <div class="card-top">
-              <div class="card-layer-tag">Capa 3 · Metrics Engine</div>
-              <h3 class="card-title">
-                <span>Métricas con Regresión Ponderada</span>
-              </h3>
-              <p class="card-desc">
-                Cálculo de marcha y error de batimiento mediante regresión lineal robusta ponderada por paridad tic/tac
-                con recorte a 5σ (MAD), eliminando los valores atípicos causados por ruidos mecánicos externos.
+            <div>
+              <div class="card-layer-tag" data-i18n="c3_tag">Layer 3 · Metrics Engine</div>
+              <h3 class="card-title" data-i18n="c3_title">Weighted Parity Regression</h3>
+              <p class="card-desc" data-i18n="c3_desc">
+                Rate and beat error calculation using robust linear regression weighted by tic/tac parity
+                with 5σ trimming (MAD outlier filter), eliminating false deviations from external ambient shocks.
               </p>
               <div class="formula-box">
                 t_k = a + P·k + c·(-1)^k<br>
                 Rate = (P_nom / P - 1) · 86400  [s/d]<br>
-                Beat Error = 2·|c|  [medido en P1]
+                Beat Error = 2·|c|  [strictly evaluated at P1]
               </div>
             </div>
             <ul class="feature-list">
-              <li>Error de batimiento medido en P1 para fidelidad horológica absoluta.</li>
-              <li>Estimación de amplitud media, amplitud tic y amplitud tac independientes.</li>
-              <li>Ventana deslizante configurable de 10 s a 60 s con refresco a 4 Hz.</li>
+              <li data-i18n="c3_f1">Beat error measured at P1 for pure balance symmetry isolation.</li>
+              <li data-i18n="c3_f2">Independent tracking of mean amplitude, tic amplitude, and tac amplitude.</li>
+              <li data-i18n="c3_f3">Sliding measurement windows from 10 s to 60 s with 4 Hz telemetry refresh.</li>
             </ul>
           </div>
 
           <!-- Card 4: ADC Clock Calibration -->
           <div class="spec-card">
-            <div class="card-top">
-              <div class="card-layer-tag">Capa 4 · Hardware Clock</div>
-              <h3 class="card-title">
-                <span>Calibración de Deriva del ADC</span>
-              </h3>
-              <p class="card-desc">
-                Los cristales de las tarjetas de sonido USB tienen tolerancias de ±30 a ±100 ppm (1 ppm = 0.0864 s/d).
-                Advanced Timegrapher mide y compensa esta desviación respecto al reloj del sistema o referencias externas.
+            <div>
+              <div class="card-layer-tag" data-i18n="c4_tag">Layer 4 · Hardware Clock</div>
+              <h3 class="card-title" data-i18n="c4_title">ADC Clock Drift Compensation</h3>
+              <p class="card-desc" data-i18n="c4_desc">
+                Consumer USB sound card crystal oscillators carry tolerances of ±30 to ±100 ppm (where 1 ppm = 0.0864 s/d).
+                Advanced Timegrapher measures and eliminates this systematic hardware bias.
               </p>
               <div class="formula-box">
                 1 ppm = 0.0864 s/d<br>
-                +35 ppm sin corregir = error de +3.02 s/d<br>
-                Calibración Theil-Sen con niveles 0 a 3
+                +35 ppm uncorrected = +3.02 s/d false reading<br>
+                Theil-Sen lower envelope estimator (Confidence 0-3)
               </div>
             </div>
             <ul class="feature-list">
-              <li>Soporte de pulsos de sincronización PPS por GPS (NEO-6M a 4 kHz).</li>
-              <li>Calibración automática o manual por dispositivo de audio.</li>
-              <li>Cero distorsión sistemática en la marcha calculada.</li>
+              <li data-i18n="c4_f1">Support for external GPS PPS reference (NEO-6M at 4 kHz).</li>
+              <li data-i18n="c4_f2">Automatic device-specific calibration persistence.</li>
+              <li data-i18n="c4_f3">Zero systematic drift distortion in reported watch daily rate.</li>
             </ul>
           </div>
 
           <!-- Card 5: Virtual Paper Tape -->
           <div class="spec-card">
-            <div class="card-top">
-              <div class="card-layer-tag">Capa 5 · Visualización Witschi</div>
-              <h3 class="card-title">
-                <span>Cinta de Papel Virtual Continua</span>
-              </h3>
-              <p class="card-desc">
-                Representación fiel de los cronocomparadores de laboratorio clásicos: un punto por cada batimiento
-                separado por paridad (tic / tac). La pendiente visual revela inmediatamente el atraso o adelanto en ms.
+            <div>
+              <div class="card-layer-tag" data-i18n="c5_tag">Layer 5 · Visualization</div>
+              <h3 class="card-title" data-i18n="c5_title">Continuous Virtual Paper Tape</h3>
+              <p class="card-desc" data-i18n="c5_desc">
+                Faithful digital recreation of legendary laboratory timegrapher tape rolls.
+                Individual dots for every beat categorized by parity (tic/tac), where trace slope translates visually to rate in ms.
               </p>
               <div class="formula-box">
-                Renderizado PyQt6 / pyqtgraph<br>
-                Líneas de 1 px sin antialiasing · 30 FPS<br>
-                0 congelamientos de GUI (latencia &lt; 33 ms)
+                PyQt6 / pyqtgraph rendering core<br>
+                1-px non-antialiased peak downsampled paths<br>
+                0 GUI stutters (GUI latency &lt; 33 ms @ 30 FPS)
               </div>
             </div>
             <ul class="feature-list">
-              <li>Osciloscopio dinámico centrado en las ventanas P1 / P2 / P3.</li>
-              <li>Historial de cinta con autoescala y selector de zoom temporal.</li>
-              <li>Indicador de salud de captura y detección de saturación (clipping).</li>
+              <li data-i18n="c5_f1">Dynamic oscilloscope focused on P1 / P2 / P3 acoustic gates.</li>
+              <li data-i18n="c5_f2">Paper tape history with auto-scale and 1×, 2×, 4× zoom levels.</li>
+              <li data-i18n="c5_f3">Capture health indicator and real-time clipping detection.</li>
             </ul>
           </div>
 
           <!-- Card 6: Database & Quartz -->
           <div class="spec-card">
-            <div class="card-top">
-              <div class="card-layer-tag">Extensibilidad & Compatibilidad</div>
-              <h3 class="card-title">
-                <span>Modo Cuarzo & Base de Calibres</span>
-              </h3>
-              <p class="card-desc">
-                Modo especializado para movimientos de cuarzo paso a paso (1 a 16 pulsos/segundo).
-                Base de datos horológica integrada (`watch_db.csv`) con parámetros de calibres legendarios.
+            <div>
+              <div class="card-layer-tag" data-i18n="c6_tag">Extensibility · Caliber DB</div>
+              <h3 class="card-title" data-i18n="c6_title">Quartz Mode & Caliber Presets</h3>
+              <p class="card-desc" data-i18n="c6_desc">
+                Dedicated diagnostic mode for stepper quartz watches (1 to 16 pulses per second).
+                Integrated watch movement database (`watch_db.csv`) with verified factory parameters.
               </p>
               <div class="formula-box">
                 ETA C07 (Powermatic 80): LA 51° · 21.6k<br>
                 Miyota 9015: LA 51° · 28.8k · Seiko 4R36: LA 53°<br>
-                Seagull ST1901: LA 47° (Verificado Weishi 1900)
+                Seagull ST1901: LA 47° (Verified Weishi 1900 benchmark)
               </div>
             </div>
             <ul class="feature-list">
-              <li>Exportación e importación de grabaciones en FLAC de 24 bits.</li>
-              <li>Metadatos Vorbis / ICMT completos para trazabilidad técnica.</li>
-              <li>Soporte para micrófonos piezoeléctricos USB (CM18) y estándar.</li>
+              <li data-i18n="c6_f1">24-bit FLAC audio recording with Vorbis / ICMT metadata.</li>
+              <li data-i18n="c6_f2">Export sessions to CSV for positional delta diagnostics (DU, DD, etc.).</li>
+              <li data-i18n="c6_f3">Universal support for USB piezo clamp mics (CM18) and studio mics.</li>
             </ul>
           </div>
 
         </div>
 
         <!-- ====================================================================
-             THREE-STAGE ESCAPE MECHANISM DETAILS
+             THREE-STAGE ESCAPE MECHANISM BREAKDOWN (P1, P2, P3)
              ==================================================================== -->
         <div id="tri-pulse" class="pulse-diagram-box">
           <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
             <div>
-              <div class="card-layer-tag" style="margin-bottom: 0.5rem;">Fundamento Físico del Escape Suizo de Áncora</div>
-              <h3 style="font-size: 1.5rem; font-weight: 800; color: #FFFFFF;">Los Tres Impulsos Acústicos (P1, P2, P3)</h3>
+              <div class="card-layer-tag" style="margin-bottom: 0.5rem;" data-i18n="esc_tag">Swiss Lever Escapement Physics</div>
+              <h3 style="font-size: 1.5rem; font-weight: 800; color: #FFFFFF;" data-i18n="esc_title">The Three Acoustic Impulses (P1, P2, P3)</h3>
             </div>
-            <div class="specs-pill"><span class="highlight">Fórmula Amplitud:</span> A = LA / [2 · sin(π · f · t_lift)]</div>
+            <div class="specs-pill"><span class="highlight">Amplitude:</span> A = LA / [2 · sin(π · f · t_lift)]</div>
           </div>
 
-          <p style="color: var(--text-muted); font-size: 0.95rem; margin-top: 0.75rem; line-height: 1.6;">
-            En cada semioscilación, el conjunto oscilador produce tres transitorios acústicos sucesivos.
-            Identificar con precisión micrométrica la ventana temporal entre P1 y P3 es el requisito físico esencial
-            para deducir la amplitud de giro del volante sin recurrir a sensores ópticos o desensambles invasivos.
+          <p style="color: var(--text-muted); font-size: 0.95rem; margin-top: 0.75rem; line-height: 1.6;" data-i18n="esc_desc">
+            In every half-oscillation, the escapement produces three sequential acoustic transients.
+            Measuring the sub-millisecond interval between P1 and P3 is the physical foundation required
+            to calculate the balance wheel amplitude without invasive optical teardowns.
           </p>
 
           <div class="pulse-diagram-grid">
             <div class="pulse-col p1-col">
-              <div class="pulse-badge" style="color: var(--cyan-pulse);">P1 · Desbloqueo</div>
-              <div class="pulse-name">Entrada de la Elipse en la Horquilla</div>
-              <p class="pulse-text">
-                La elipse del platillo del volante impacta en la muesca del áncora y la desplaza para desbloquear
-                el diente de la rueda de escape. <strong>Es el único sonido producido directamente por la inercia del volante.</strong>
-                Por esta razón física, el error de batimiento se mide con rigor estricto en P1.
+              <div style="color: var(--gui-cyan); font-family: var(--font-mono); font-size: 1.1rem; font-weight: 800; margin-bottom: 0.35rem;" data-i18n="p1_badge">P1 · Unlocking</div>
+              <div style="font-size: 0.95rem; font-weight: 700; color: #FFFFFF; margin-bottom: 0.5rem;" data-i18n="p1_name">Impulse Pin Fork Entry</div>
+              <p style="font-size: 0.84rem; color: var(--text-muted); line-height: 1.55;" data-i18n="p1_text">
+                The balance wheel impulse pin strikes the fork notch and moves the pallet to release the locked escape tooth.
+                <strong>This is the only sound directly produced by balance wheel inertia.</strong> For this reason, true horological Beat Error is measured strictly at P1.
               </p>
             </div>
 
             <div class="pulse-col p2-col">
-              <div class="pulse-badge" style="color: var(--phosphor-amber);">P2 · Impulso</div>
-              <div class="pulse-name">Transferencia Dinámica de Energía</div>
-              <p class="pulse-text">
-                El diente de la rueda de escape resbala sobre el plano de impulso de la paleta del áncora.
-                El áncora empuja la elipse del platillo, transmitiendo energía al volante para compensar la fricción.
-                Es un sonido acústicamente difuso e irregular que la instrumentación Witschi omite en el cálculo de alzado.
+              <div style="color: var(--gui-amber); font-family: var(--font-mono); font-size: 1.1rem; font-weight: 800; margin-bottom: 0.35rem;" data-i18n="p2_badge">P2 · Impulse</div>
+              <div style="font-size: 0.95rem; font-weight: 700; color: #FFFFFF; margin-bottom: 0.5rem;" data-i18n="p2_name">Energy Transfer Phase</div>
+              <p style="font-size: 0.84rem; color: var(--text-muted); line-height: 1.55;" data-i18n="p2_text">
+                The escape tooth slides along the impulse face of the pallet jewel, transferring energy to maintain oscillation.
+                It is an irregular acoustic glide that laboratory Witschi meters omit when computing the lift angle window.
               </p>
             </div>
 
             <div class="pulse-col p3-col">
-              <div class="pulse-badge" style="color: var(--phosphor-green);">P3 · Caída y Tope</div>
-              <div class="pulse-name">Impacto de Paleta y Bocallave</div>
-              <p class="pulse-text">
-                El diente de escape cae sobre la paleta opuesta (Drop) y el brazo del áncora choca con violencia
-                contra el pasador de tope limitador (Banking pin). Es acústicamente el evento de mayor amplitud y energía,
-                utilizado como ancla temporal en el detector acústico.
+              <div style="color: var(--gui-green); font-family: var(--font-mono); font-size: 1.1rem; font-weight: 800; margin-bottom: 0.35rem;" data-i18n="p3_badge">P3 · Drop & Lock</div>
+              <div style="font-size: 0.95rem; font-weight: 700; color: #FFFFFF; margin-bottom: 0.5rem;" data-i18n="p3_name">Impact on Pallet & Banking Pin</div>
+              <p style="font-size: 0.84rem; color: var(--text-muted); line-height: 1.55;" data-i18n="p3_text">
+                The escape wheel tooth drops onto the opposing pallet stone and the pallet fork hits the banking pin.
+                This is acoustically the most energetic impact shock wave, serving as the timing anchor in detection.
               </p>
             </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ========================================================================
+       PROJECT ROADMAP SECTION (REPLACES OLD BUFFER SECURITY BOX)
+       ======================================================================== -->
+    <section id="roadmap" class="section" style="background: rgba(3, 7, 18, 0.7);">
+      <div class="container">
+
+        <div class="roadmap-card">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+            <div>
+              <div class="card-layer-tag" style="background: rgba(0, 229, 255, 0.12); border-color: rgba(0, 229, 255, 0.35); color: var(--gui-cyan);" data-i18n="road_tag">
+                HOROLOGICAL DEVELOPMENT ROADMAP
+              </div>
+              <h2 style="font-size: 1.8rem; font-weight: 800; color: #FFFFFF; margin-top: 0.5rem;" data-i18n="road_title">
+                Project Roadmap & Future Capabilities
+              </h2>
+            </div>
+            <div class="specs-pill"><span class="highlight" data-i18n="road_phase">Current Phase:</span> Phase 6 Validation</div>
+          </div>
+
+          <p style="color: var(--text-muted); font-size: 0.95rem; margin-top: 0.85rem; line-height: 1.65;" data-i18n="road_desc">
+            Strategic milestones driving Advanced Timegrapher from initial community validation into a professional-grade
+            laboratory horological diagnostic instrument.
+          </p>
+
+          <div class="roadmap-timeline">
+
+            <!-- Milestone 1 -->
+            <div class="roadmap-item">
+              <span class="roadmap-status status-active" data-i18n="road_m1_status">Phase 6 · In Progress</span>
+              <h3 class="roadmap-title" data-i18n="road_m1_title">Acoustic Benchmark & Normalization</h3>
+              <p class="roadmap-desc" data-i18n="road_m1_desc">
+                Cross-validation against physical Witschi Chronoscope and Weishi 1900 reference hardware.
+                Normalized cross-correlation on live templates to prevent lobe jumps in noisy calibers (e.g. Seiko 4R36).
+              </p>
+            </div>
+
+            <!-- Milestone 2 -->
+            <div class="roadmap-item">
+              <span class="roadmap-status status-upcoming" data-i18n="road_m2_status">Hardware Clock</span>
+              <h3 class="roadmap-title" data-i18n="road_m2_title">GPS PPS & Hardware PLL/FLL</h3>
+              <p class="roadmap-desc" data-i18n="road_m2_desc">
+                Sub-microsecond synchronization using NEO-6M GPS 1-PPS pulses with a 4 kHz acoustic buzzer.
+                Proportional-Integral (PI) NTP-style PLL/FLL loop to correct sound card crystal drift block-by-block.
+              </p>
+            </div>
+
+            <!-- Milestone 3 -->
+            <div class="roadmap-item">
+              <span class="roadmap-status status-future" data-i18n="road_m3_status">Diagnostics</span>
+              <h3 class="roadmap-title" data-i18n="road_m3_title">Long-Term Spectral Analysis</h3>
+              <p class="roadmap-desc" data-i18n="road_m3_desc">
+                Teager-Kaiser nonlinear energy operator combined with FFT and Lomb-Scargle periodograms to diagnose
+                cyclical gear train defects (escape wheel eccentricity @ 7.5 s, fourth wheel @ 60 s).
+              </p>
+            </div>
+
+            <!-- Milestone 4 -->
+            <div class="roadmap-item">
+              <span class="roadmap-status status-future" data-i18n="road_m4_status">Watchmaking Tools</span>
+              <h3 class="roadmap-title" data-i18n="road_m4_title">Live Regulation Assistant</h3>
+              <p class="roadmap-desc" data-i18n="road_m4_desc">
+                Real-time interactive guidance for watchmakers adjusting the regulator curb pins and balance spring stud holder,
+                providing directional visual cues for instantaneous beat error and rate centering.
+              </p>
+            </div>
+
           </div>
         </div>
 
@@ -1197,14 +1452,14 @@
     <!-- ========================================================================
        INSTALLATION & QUICK START
        ======================================================================== -->
-    <section id="install" class="section" style="background: rgba(3, 7, 18, 0.7);">
+    <section id="install" class="section">
       <div class="container">
 
         <div class="section-header">
-          <div class="section-eyebrow">Distribución & Empaquetado Multiplataforma</div>
-          <h2 class="section-title">Instalación Rápida</h2>
-          <p class="section-desc">
-            Instaladores nativos listos para producción o despliegue en entorno Python puro.
+          <div class="section-eyebrow" data-i18n="inst_eyebrow">Multiplatform Distribution</div>
+          <h2 class="section-title" data-i18n="inst_title">Quick Installation</h2>
+          <p class="section-desc" data-i18n="inst_desc">
+            Native standalone installers for desktop operating systems or direct pure Python pip deployment.
           </p>
         </div>
 
@@ -1214,9 +1469,9 @@
           <div class="spec-card">
             <div>
               <div class="card-layer-tag">macOS 11+ (Apple Silicon & Intel)</div>
-              <h3 class="card-title">Instalador `.dmg`</h3>
-              <p class="card-desc">
-                Paquete universal empaquetado con PyInstaller, PortAudio nativo y soporte para pantalla Retina.
+              <h3 class="card-title" data-i18n="inst_mac_title">Universal `.dmg` Bundle</h3>
+              <p class="card-desc" data-i18n="inst_mac_desc">
+                Native macOS bundle packaged with PyInstaller, bundled PortAudio, and Retina display support.
               </p>
             </div>
             <div class="terminal-box">
@@ -1224,23 +1479,23 @@
                 <span class="term-btn term-red"></span>
                 <span class="term-btn term-yellow"></span>
                 <span class="term-btn term-green"></span>
-                <span style="color: var(--text-dim); font-size: 0.75rem; margin-left: 0.5rem;">Terminal (macOS)</span>
+                <span style="color: var(--text-dim); font-size: 0.75rem; margin-left: 0.5rem;">macOS Terminal</span>
               </div>
-              <div class="terminal-code"><span class="comment"># 1. Descarga el archivo .dmg desde Releases</span>
-<span class="comment"># 2. Arrastra a /Applications</span>
-<span class="comment"># 3. En caso de aviso de Gatekeeper (build beta sin notarizar):</span>
+              <div class="terminal-code"><span class="comment"># 1. Download .dmg from Releases</span>
+<span class="comment"># 2. Drag Advanced Timegrapher to /Applications</span>
+<span class="comment"># 3. For unsigned beta Gatekeeper notice:</span>
 <span class="cmd">xattr -cr /Applications/Advanced\ Timegrapher.app</span></div>
             </div>
-            <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-secondary" style="width: 100%; text-align: center;">Descargar .dmg</a>
+            <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-secondary" style="width: 100%; text-align: center;" data-i18n="btn_dl_mac">Download .dmg</a>
           </div>
 
           <!-- Windows -->
           <div class="spec-card">
             <div>
               <div class="card-layer-tag">Windows 10 / 11 (64-bit)</div>
-              <h3 class="card-title">Instalador `.exe` / Inno Setup</h3>
-              <p class="card-desc">
-                Instalador profesional guiado o binario portable en `.zip` con soporte para PortAudio WASAPI / MME.
+              <h3 class="card-title" data-i18n="inst_win_title">Installer `.exe` / Inno Setup</h3>
+              <p class="card-desc" data-i18n="inst_win_desc">
+                Setup wizard or portable `.zip` binary with WASAPI / MME PortAudio low-latency drivers.
               </p>
             </div>
             <div class="terminal-box">
@@ -1250,20 +1505,20 @@
                 <span class="term-btn term-green"></span>
                 <span style="color: var(--text-dim); font-size: 0.75rem; margin-left: 0.5rem;">PowerShell</span>
               </div>
-              <div class="terminal-code"><span class="comment"># Extraer el .zip o ejecutar adv-tg-setup.exe</span>
-<span class="comment"># Si aparece SmartScreen: "Más información" -> "Ejecutar de todos modos"</span>
+              <div class="terminal-code"><span class="comment"># Extract .zip or run adv-tg-setup.exe</span>
+<span class="comment"># On Windows SmartScreen warning: "More info" -> "Run anyway"</span>
 <span class="cmd">.\adv-tg.exe</span></div>
             </div>
-            <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-secondary" style="width: 100%; text-align: center;">Descargar Windows .exe</a>
+            <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-secondary" style="width: 100%; text-align: center;" data-i18n="btn_dl_win">Download Windows .exe</a>
           </div>
 
           <!-- Linux / Pip -->
           <div class="spec-card">
             <div>
-              <div class="card-layer-tag">Linux & Python Pip Puro</div>
-              <h3 class="card-title">Pip o RPM Package</h3>
-              <p class="card-desc">
-                Instalación estándar en cualquier distribución Linux (Debian, Ubuntu, Fedora, Arch) con Python ≥ 3.12.
+              <div class="card-layer-tag">Linux & Pure Python Pip</div>
+              <h3 class="card-title" data-i18n="inst_lin_title">Pip or RPM Package</h3>
+              <p class="card-desc" data-i18n="inst_lin_desc">
+                Standard install on any modern distribution (Debian, Ubuntu, Fedora, Arch) with Python ≥ 3.12.
               </p>
             </div>
             <div class="terminal-box">
@@ -1273,77 +1528,15 @@
                 <span class="term-btn term-green"></span>
                 <span style="color: var(--text-dim); font-size: 0.75rem; margin-left: 0.5rem;">Bash</span>
               </div>
-              <div class="terminal-code"><span class="comment"># Requisito nativo: PortAudio</span>
+              <div class="terminal-code"><span class="comment"># Install native PortAudio dependency</span>
 <span class="cmd">sudo apt install libportaudio2</span>
-<span class="comment"># Instalación vía pip</span>
+<span class="comment"># Pure Python installation via pip</span>
 <span class="cmd">pip install advanced-timegrapher</span>
 <span class="cmd">adv-tg</span></div>
             </div>
-            <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-secondary" style="width: 100%; text-align: center;">Ver Paquetes Linux</a>
+            <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-secondary" style="width: 100%; text-align: center;" data-i18n="btn_dl_lin">View Linux Packages</a>
           </div>
 
-        </div>
-
-      </div>
-    </section>
-
-    <!-- ========================================================================
-       DEVSECOPS & AUDIT COMPLIANCE
-       ======================================================================== -->
-    <section id="security" class="section">
-      <div class="container">
-
-        <div class="devsecops-card">
-          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
-            <div>
-              <div class="card-layer-tag" style="background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.4); color: var(--phosphor-green);">
-                DevSecOps & Software Supply Chain Security
-              </div>
-              <h3 style="font-size: 1.6rem; font-weight: 800; color: #FFFFFF; margin-top: 0.5rem;">
-                Seguridad Proactiva y Protección de Buffer
-              </h3>
-            </div>
-            <div class="specs-pill"><span class="highlight">Pipeline:</span> GitHub Actions CI/CD · SAST + SCA</div>
-          </div>
-
-          <p style="color: var(--text-muted); font-size: 0.92rem; margin-top: 1rem; line-height: 1.65;">
-            Advanced Timegrapher implementa medidas de endurecimiento continuo para prevenir desbordamientos de buffer,
-            bloqueos de memoria y ataques a la cadena de suministro en el ecosistema de dependencias.
-          </p>
-
-          <div class="sec-checks-grid">
-            <div class="sec-check-item">
-              <span class="sec-check-icon">✓</span>
-              <div>
-                <strong>Límite Rígido de Memoria de Audio:</strong><br>
-                Tope explícito `MAX_IN_MEMORY_BYTES = 8 GiB` para evitar agotamiento de RAM o ataques DoS por buffers descontrolados.
-              </div>
-            </div>
-
-            <div class="sec-check-item">
-              <span class="sec-check-icon">✓</span>
-              <div>
-                <strong>Auditoría Estática SAST (Bandit):</strong><br>
-                Escaneo automatizado en cada pull request y despliegue para detectar deserializaciones inseguras o accesos a archivos no autorizados.
-              </div>
-            </div>
-
-            <div class="sec-check-item">
-              <span class="sec-check-icon">✓</span>
-              <div>
-                <strong>Monitoreo Continuo SCA (Dependabot):</strong><br>
-                Supervisión proactiva de vulnerabilidades y CVEs en el ecosistema de paquetes (PyQt6, NumPy, SoundFile, sounddevice).
-              </div>
-            </div>
-
-            <div class="sec-check-item">
-              <span class="sec-check-icon">✓</span>
-              <div>
-                <strong>Sanitización Rigurosa de Entradas:</strong><br>
-                Mitigaciones SEC-01 a SEC-11: protección contra inyección en CSV (`sanitize_csv_cell`), anonimización de logs y sanitización de rutas (`safe_filename_base`).
-              </div>
-            </div>
-          </div>
         </div>
 
       </div>
@@ -1366,378 +1559,707 @@
               <div class="brand-text-name">Advanced Timegrapher</div>
             </div>
           </a>
-          <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; margin-bottom: 1rem;">
-            Software timegrapher y analizador de escape de código abierto para relojería de alta precisión.
-            Desarrollado bajo licencia libre GPLv3 con arquitectura DSP moderna en tiempo real.
+          <p style="font-size: 0.88rem; color: var(--text-muted); line-height: 1.6; margin-bottom: 1rem;" data-i18n="footer_intro">
+            Open-source software timegrapher and escape analyzer for precision watchmaking.
+            Published under the GNU General Public License v3 with a modern real-time DSP core.
           </p>
-          <div class="specs-pill"><span class="highlight">Dominio Oficial:</span> https://sqpr14-software.org/</div>
+          <div class="specs-pill"><span class="highlight" data-i18n="footer_domain">Official Domain:</span> https://sqpr14-software.org/</div>
         </div>
 
         <div class="footer-col">
-          <h4>Navegación</h4>
+          <h4 data-i18n="footer_col_nav">Navigation</h4>
           <ul class="footer-links">
-            <li><a href="#console">Consola en Vivo</a></li>
-            <li><a href="#features">Especificaciones DSP</a></li>
-            <li><a href="#tri-pulse">Mecánica del Escape</a></li>
-            <li><a href="#install">Descargas</a></li>
-            <li><a href="#security">Seguridad</a></li>
+            <li><a href="#gui-demo" data-i18n="nav_demo">Interface Demo</a></li>
+            <li><a href="#features" data-i18n="nav_features">Specifications</a></li>
+            <li><a href="#tri-pulse" data-i18n="nav_pulse">P1/P2/P3 Physics</a></li>
+            <li><a href="#roadmap" data-i18n="nav_roadmap">Roadmap</a></li>
+            <li><a href="#install" data-i18n="nav_downloads">Downloads</a></li>
           </ul>
         </div>
 
         <div class="footer-col">
-          <h4>Proyecto & Código</h4>
+          <h4 data-i18n="footer_col_code">Code & Releases</h4>
           <ul class="footer-links">
-            <li><a href="https://github.com/SPQR14/advanced_timegrapher" target="_blank" rel="noopener noreferrer">Repositorio GitHub</a></li>
-            <li><a href="https://github.com/SPQR14/advanced_timegrapher/releases" target="_blank" rel="noopener noreferrer">Releases y Binarios</a></li>
-            <li><a href="https://github.com/SPQR14/advanced_timegrapher/issues" target="_blank" rel="noopener noreferrer">Reporte de Fallos</a></li>
-            <li><a href="https://github.com/SPQR14/advanced_timegrapher/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">Licencia GPL-3.0</a></li>
+            <li><a href="https://github.com/SPQR14/advanced_timegrapher" target="_blank" rel="noopener noreferrer">GitHub Repository</a></li>
+            <li><a href="https://github.com/SPQR14/advanced_timegrapher/releases" target="_blank" rel="noopener noreferrer" data-i18n="btn_download_latest">Download latest version</a></li>
+            <li><a href="https://github.com/SPQR14/advanced_timegrapher/issues" target="_blank" rel="noopener noreferrer">Issue Tracker</a></li>
+            <li><a href="https://github.com/SPQR14/advanced_timegrapher/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GPL-3.0 License</a></li>
           </ul>
         </div>
 
         <div class="footer-col">
-          <h4>Documentación Técnica</h4>
+          <h4 data-i18n="footer_col_docs">Documentation</h4>
           <ul class="footer-links">
-            <li><a href="https://github.com/SPQR14/advanced_timegrapher/tree/main/docs" target="_blank" rel="noopener noreferrer">Directorio de Documentación</a></li>
-            <li><a href="https://github.com/SPQR14/advanced_timegrapher/blob/main/docs/marco_teorico_y_matematico.md" target="_blank" rel="noopener noreferrer">Marco Teórico y Matemático</a></li>
-            <li><a href="https://github.com/SPQR14/advanced_timegrapher/blob/main/docs/resumen_beat_error.md" target="_blank" rel="noopener noreferrer">Estimación Beat Error en P1</a></li>
+            <li><a href="https://github.com/SPQR14/advanced_timegrapher/tree/main/docs" target="_blank" rel="noopener noreferrer" data-i18n="footer_docs_dir">Technical Documentation</a></li>
+            <li><a href="https://github.com/SPQR14/advanced_timegrapher/blob/main/docs/marco_teorico_y_matematico.md" target="_blank" rel="noopener noreferrer" data-i18n="footer_docs_math">Theoretical & Mathematical Framework</a></li>
+            <li><a href="https://github.com/SPQR14/advanced_timegrapher/blob/main/docs/resumen_beat_error.md" target="_blank" rel="noopener noreferrer" data-i18n="footer_docs_be">Beat Error Estimation at P1</a></li>
+            <!-- Extra Buy me a coffee link in footer -->
+            <li style="margin-top: 1rem;">
+              <a href="https://buymeacoffee.com/sqpr14" target="_blank" rel="noopener noreferrer" class="coffee-btn" style="display: inline-flex; padding: 4px 10px; font-size: 0.8rem;">
+                <span>☕</span>
+                <span data-i18n="btn_support_coffee">Support the project</span>
+              </a>
+            </li>
           </ul>
         </div>
 
       </div>
 
-      <div class="security-notice">
-        <strong>Aviso de Seguridad Horológica & DevSecOps:</strong> Advanced Timegrapher es una herramienta de instrumentación acústica no invasiva para diagnóstico de relojes. Respeta los niveles de ganancia de micrófono para evitar la saturación del transductor piezoeléctrico. Desarrollado con prácticas DevSecOps para asegurar la integridad de la memoria y la protección del buffer de audio.
+      <!-- Simplified Footer Notice Requested by User -->
+      <div class="footer-simplified-notice" id="footer-text-notice">
+        <strong>Made with ❤️ by Alberto Pico Lara.</strong> Advanced Timegrapher is a non-invasive acoustic instrumentation tool for watch diagnostics. Respect microphone gain levels to prevent piezoelectric transducer saturation. Developed with DevSecOps best practices to guarantee memory safety and audio buffer protection.
       </div>
 
       <div class="footer-bottom">
         <div>
-          Copyright © 2026 <a href="https://sqpr14-software.org/" style="color: var(--cyan-pulse); text-decoration: none;">sqpr14-software.org</a>. Todos los derechos reservados.
+          Copyright © 2026 <a href="https://sqpr14-software.org/" style="color: var(--gui-cyan); text-decoration: none;">sqpr14-software.org</a>. All rights reserved.
         </div>
+
+        <!-- Bottom Buy Me a Coffee Link -->
+        <a href="https://buymeacoffee.com/sqpr14" target="_blank" rel="noopener noreferrer" style="color: #ffd740; text-decoration: none; font-family: var(--font-mono); font-weight: 700; display: inline-flex; align-items: center; gap: 0.35rem;">
+          <span>☕</span>
+          <span data-i18n="btn_support_coffee">Support the project (Buy me a coffee)</span>
+        </a>
+
         <div>
-          Distribuido bajo Licencia <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener noreferrer" style="color: #94A3B8;">GNU General Public License v3.0</a>
+          Licensed under <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener noreferrer" style="color: #94A3B8;">GNU General Public License v3.0</a>
         </div>
       </div>
     </div>
   </footer>
 
   <!-- ========================================================================
-       HOROLOGICAL OSCILLOSCOPE & WITSCHI PAPER TAPE SIMULATION ENGINE (JS)
+       BILINGUAL DICTIONARY & REAL-TIME GUI ANIMATION ENGINE (JS)
        ======================================================================== -->
   <script>
-    // Caliber Presets Definition
-    const calibers = {
+    // ------------------------------------------------------------------------
+    // BILINGUAL DICTIONARY (EN by default / ES)
+    // ------------------------------------------------------------------------
+    const i18nData = {
+      en: {
+        nav_demo: "Interface Demo",
+        nav_features: "Specifications",
+        nav_pulse: "P1/P2/P3 Physics",
+        nav_roadmap: "Roadmap",
+        nav_downloads: "Downloads",
+        btn_support_coffee: "Support the project",
+        hero_status_badge: "STATUS: V0.7.0 MVP · PURE NUMPY DSP · ZERO-SCIPY RUNTIME",
+        hero_subtitle: "Modern Watch Escape Analyzer",
+        hero_desc: "Non-invasive acoustic analyzer and modern software timegrapher for mechanical and quartz watches. Measures Rate (s/d), Beat Error (ms), and Amplitude (°) in real time through decoupled digital signal processing (DSP), with dynamic sound card clock drift calibration.",
+        badge_license: "License:",
+        badge_precision: "Precision:",
+        badge_resolution: "Resolution:",
+        btn_download_latest: "Download latest version",
+        btn_download_sub: "macOS (.dmg) · Windows (.exe) · Linux · pip",
+        btn_view_github: "View Code on GitHub",
+        gui_window_title: "Advanced Timegrapher — Horological DSP Test Bench",
+        gui_lbl_caliber: "Caliber:",
+        gui_lbl_bph: "BPH:",
+        gui_lbl_lift: "Lift:",
+        gui_lbl_fs: "Fs:",
+        btn_buy_coffee: "Buy me a coffee",
+        hud_rate: "RATE",
+        hud_rate_trend: "Trend: stable (±0.2 s/d)",
+        hud_beat_error: "BEAT ERROR",
+        hud_be_drop: "at the drop (P3): 0.20 ms",
+        hud_amplitude: "AMPLITUDE",
+        gui_signal_quality: "SIGNAL QUALITY / SNR",
+        gui_stats_title: "TELEMETRY STATISTICS",
+        stat_max: "Max:",
+        stat_min: "Min:",
+        stat_delta: "Delta:",
+        stat_mean: "Mean:",
+        stat_elapsed: "Elapsed:",
+        stat_drift: "Clock Drift:",
+        btn_start: "START",
+        btn_stop: "STOP",
+        gui_tape_title: "Paper Tape (timing of every tic and tac; slope = rate)",
+        gui_scope_title: "Real-Time Escapement Oscilloscope (P1 / P2 / P3)",
+        feat_eyebrow: "Layered Architecture · Metrology Core",
+        feat_title: "High-Fidelity Horological Engineering",
+        feat_desc: "Engineered from first principles with strict separation of concerns: lock-free audio capture, pure NumPy mathematical core, and total algorithmic transparency without black boxes.",
+        c1_tag: "Layer 1 & 2 · Audio & DSP",
+        c1_title: "Pure NumPy Acoustic DSP Core",
+        c1_desc: "Digital signal processing 100% written in Python/NumPy without runtime dependencies on SciPy or C++ extensions. Lock-free SPSC (Single-Producer Single-Consumer) ring buffer with absolute sample indexing synchronized to the ADC hardware clock.",
+        c1_f1: "Dedicated child process for audio capture (native PortAudio).",
+        c1_f2: "GUI operations never delay or block audio sample ingestion.",
+        c1_f3: "Automated buffer overwrite detection (`SamplesOverwritten`).",
+        c2_tag: "Layer 2 · Beat Detector",
+        c2_title: "Swiss Lever Tri-Pulse Analysis",
+        c2_desc: "Precise acoustic identification of the three discrete physical events produced during each alternation by the balance wheel, pallet fork, and escape wheel. Sub-sample temporal resolution with automatic noise floor rejection.",
+        c2_f1_k: "P1 (Unlocking):",
+        c2_f1_v: "Impulse pin enters the fork notch.",
+        c2_f2_k: "P2 (Impulse):",
+        c2_f2_v: "Escape tooth slides over pallet impulse face.",
+        c2_f3_k: "P3 (Drop & Lock):",
+        c2_f3_v: "Tooth hits locking face and fork hits banking pin.",
+        c3_tag: "Layer 3 · Metrics Engine",
+        c3_title: "Weighted Parity Regression",
+        c3_desc: "Rate and beat error calculation using robust linear regression weighted by tic/tac parity with 5σ trimming (MAD outlier filter), eliminating false deviations from external ambient shocks.",
+        c3_f1: "Beat error measured at P1 for pure balance symmetry isolation.",
+        c3_f2: "Independent tracking of mean amplitude, tic amplitude, and tac amplitude.",
+        c3_f3: "Sliding measurement windows from 10 s to 60 s with 4 Hz telemetry refresh.",
+        c4_tag: "Layer 4 · Hardware Clock",
+        c4_title: "ADC Clock Drift Compensation",
+        c4_desc: "Consumer USB sound card crystal oscillators carry tolerances of ±30 to ±100 ppm (where 1 ppm = 0.0864 s/d). Advanced Timegrapher measures and eliminates this systematic hardware bias.",
+        c4_f1: "Support for external GPS PPS reference (NEO-6M at 4 kHz).",
+        c4_f2: "Automatic device-specific calibration persistence.",
+        c4_f3: "Zero systematic drift distortion in reported watch daily rate.",
+        c5_tag: "Layer 5 · Visualization",
+        c5_title: "Continuous Virtual Paper Tape",
+        c5_desc: "Faithful digital recreation of legendary laboratory timegrapher tape rolls. Individual dots for every beat categorized by parity (tic/tac), where trace slope translates visually to rate in ms.",
+        c5_f1: "Dynamic oscilloscope focused on P1 / P2 / P3 acoustic gates.",
+        c5_f2: "Paper tape history with auto-scale and 1×, 2×, 4× zoom levels.",
+        c5_f3: "Capture health indicator and real-time clipping detection.",
+        c6_tag: "Extensibility · Caliber DB",
+        c6_title: "Quartz Mode & Caliber Presets",
+        c6_desc: "Dedicated diagnostic mode for stepper quartz watches (1 to 16 pulses per second). Integrated watch movement database (`watch_db.csv`) with verified factory parameters.",
+        c6_f1: "24-bit FLAC audio recording with Vorbis / ICMT metadata.",
+        c6_f2: "Export sessions to CSV for positional delta diagnostics (DU, DD, etc.).",
+        c6_f3: "Universal support for USB piezo clamp mics (CM18) and studio mics.",
+        esc_tag: "Swiss Lever Escapement Physics",
+        esc_title: "The Three Acoustic Impulses (P1, P2, P3)",
+        esc_desc: "In every half-oscillation, the escapement produces three sequential acoustic transients. Measuring the sub-millisecond interval between P1 and P3 is the physical foundation required to calculate the balance wheel amplitude without invasive optical teardowns.",
+        p1_badge: "P1 · Unlocking",
+        p1_name: "Impulse Pin Fork Entry",
+        p1_text: "The balance wheel impulse pin strikes the fork notch and moves the pallet to release the locked escape tooth. This is the only sound directly produced by balance wheel inertia. For this reason, true horological Beat Error is measured strictly at P1.",
+        p2_badge: "P2 · Impulse",
+        p2_name: "Energy Transfer Phase",
+        p2_text: "The escape tooth slides along the impulse face of the pallet jewel, transferring energy to maintain oscillation. It is an irregular acoustic glide that laboratory Witschi meters omit when computing the lift angle window.",
+        p3_badge: "P3 · Drop & Lock",
+        p3_name: "Impact on Pallet & Banking Pin",
+        p3_text: "The escape wheel tooth drops onto the opposing pallet stone and the pallet fork hits the banking pin. This is acoustically the most energetic impact shock wave, serving as the timing anchor in detection.",
+        road_tag: "HOROLOGICAL DEVELOPMENT ROADMAP",
+        road_title: "Project Roadmap & Future Capabilities",
+        road_phase: "Current Phase:",
+        road_desc: "Strategic milestones driving Advanced Timegrapher from initial community validation into a professional-grade laboratory horological diagnostic instrument.",
+        road_m1_status: "Phase 6 · In Progress",
+        road_m1_title: "Acoustic Benchmark & Normalization",
+        road_m1_desc: "Cross-validation against physical Witschi Chronoscope and Weishi 1900 reference hardware. Normalized cross-correlation on live templates to prevent lobe jumps in noisy calibers (e.g. Seiko 4R36).",
+        road_m2_status: "Hardware Clock",
+        road_m2_title: "GPS PPS & Hardware PLL/FLL",
+        road_m2_desc: "Sub-microsecond synchronization using NEO-6M GPS 1-PPS pulses with a 4 kHz acoustic buzzer. Proportional-Integral (PI) NTP-style PLL/FLL loop to correct sound card crystal drift block-by-block.",
+        road_m3_status: "Diagnostics",
+        road_m3_title: "Long-Term Spectral Analysis",
+        road_m3_desc: "Teager-Kaiser nonlinear energy operator combined with FFT and Lomb-Scargle periodograms to diagnose cyclical gear train defects (escape wheel eccentricity @ 7.5 s, fourth wheel @ 60 s).",
+        road_m4_status: "Watchmaking Tools",
+        road_m4_title: "Live Regulation Assistant",
+        road_m4_desc: "Real-time interactive guidance for watchmakers adjusting the regulator curb pins and balance spring stud holder, providing directional visual cues for instantaneous beat error and rate centering.",
+        inst_eyebrow: "Multiplatform Distribution",
+        inst_title: "Quick Installation",
+        inst_desc: "Native standalone installers for desktop operating systems or direct pure Python pip deployment.",
+        inst_mac_title: "Universal `.dmg` Bundle",
+        inst_mac_desc: "Native macOS bundle packaged with PyInstaller, bundled PortAudio, and Retina display support.",
+        btn_dl_mac: "Download .dmg",
+        inst_win_title: "Installer `.exe` / Inno Setup",
+        inst_win_desc: "Setup wizard or portable `.zip` binary with WASAPI / MME PortAudio low-latency drivers.",
+        btn_dl_win: "Download Windows .exe",
+        inst_lin_title: "Pip or RPM Package",
+        inst_lin_desc: "Standard install on any modern distribution (Debian, Ubuntu, Fedora, Arch) with Python ≥ 3.12.",
+        btn_dl_lin: "View Linux Packages",
+        footer_intro: "Open-source software timegrapher and escape analyzer for precision watchmaking. Published under the GNU General Public License v3 with a modern real-time DSP core.",
+        footer_domain: "Official Domain:",
+        footer_col_nav: "Navigation",
+        footer_col_code: "Code & Releases",
+        footer_col_docs: "Documentation",
+        footer_docs_dir: "Technical Documentation",
+        footer_docs_math: "Theoretical & Mathematical Framework",
+        footer_docs_be: "Beat Error Estimation at P1",
+        footer_notice: "<strong>Made with ❤️ by Alberto Pico Lara.</strong> Advanced Timegrapher is a non-invasive acoustic instrumentation tool for watch diagnostics. Respect microphone gain levels to prevent piezoelectric transducer saturation. Developed with DevSecOps best practices to guarantee memory safety and audio buffer protection."
+      },
+      es: {
+        nav_demo: "Interfaz y Demo",
+        nav_features: "Especificaciones",
+        nav_pulse: "Mecánica P1/P2/P3",
+        nav_roadmap: "Roadmap",
+        nav_downloads: "Descargas",
+        btn_support_coffee: "Apoyar el proyecto",
+        hero_status_badge: "ESTADO: V0.7.0 MVP · DSP EN NUMPY PURO · ZERO-SCIPY EN EJECUCIÓN",
+        hero_subtitle: "Analizador Acústico de Escape Horológico",
+        hero_desc: "Analizador acústico no invasivo y cronocomparador moderno por software para relojes mecánicos y de cuarzo. Mide en tiempo real la marcha (Rate en s/d), el error de batimiento (Beat Error en ms) y la amplitud (°) mediante procesamiento digital de señales (DSP) desacoplado, con calibración dinámica de deriva del reloj del ADC.",
+        badge_license: "Licencia:",
+        badge_precision: "Precisión:",
+        badge_resolution: "Resolución:",
+        btn_download_latest: "Descargar última versión",
+        btn_download_sub: "macOS (.dmg) · Windows (.exe) · Linux · pip",
+        btn_view_github: "Ver Código en GitHub",
+        gui_window_title: "Advanced Timegrapher — Banco de Pruebas Horológico DSP",
+        gui_lbl_caliber: "Calibre:",
+        gui_lbl_bph: "BPH:",
+        gui_lbl_lift: "Alzado:",
+        gui_lbl_fs: "Fs:",
+        btn_buy_coffee: "Buy me a coffee",
+        hud_rate: "MARCHA",
+        hud_rate_trend: "Tendencia: estable (±0.2 s/d)",
+        hud_beat_error: "ERROR BATIMIENTO",
+        hud_be_drop: "en la caída (P3): 0.20 ms",
+        hud_amplitude: "AMPLITUD",
+        gui_signal_quality: "CALIDAD DE SEÑAL / SNR",
+        gui_stats_title: "ESTADÍSTICAS DE TELEMETRÍA",
+        stat_max: "Máx:",
+        stat_min: "Mín:",
+        stat_delta: "Delta:",
+        stat_mean: "Media:",
+        stat_elapsed: "Tiempo:",
+        stat_drift: "Deriva Reloj:",
+        btn_start: "INICIAR",
+        btn_stop: "DETENER",
+        gui_tape_title: "Cinta de Papel (instante de cada tic y tac; pendiente = marcha)",
+        gui_scope_title: "Osciloscopio del Escape en Tiempo Real (P1 / P2 / P3)",
+        feat_eyebrow: "Arquitectura por Capas · Núcleo Metrológico",
+        feat_title: "Ingeniería Horológica de Máxima Fidelidad",
+        feat_desc: "Diseñado desde cero con separación estricta de responsabilidades: captura sin bloqueos, motor matemático en NumPy puro y trazabilidad algorítmica total sin cajas negras.",
+        c1_tag: "Capa 1 & 2 · Audio & DSP",
+        c1_title: "Motor Acústico DSP NumPy Puro",
+        c1_desc: "Procesamiento digital de señales 100% en Python/NumPy sin dependencias de SciPy ni extensiones C++ en tiempo de ejecución. Buffer circular lock-free SPSC (Single-Producer Single-Consumer) con indexación absoluta referenciada al reloj del convertidor ADC.",
+        c1_f1: "Captura desacoplada en proceso hijo dedicado (PortAudio nativo).",
+        c1_f2: "La interfaz GUI jamás bloquea ni retrasa la ingesta de audio.",
+        c1_f3: "Detección automática de sobrescritura de muestras (`SamplesOverwritten`).",
+        c2_tag: "Capa 2 · Detector de Batimientos",
+        c2_title: "Análisis Tri-Pulsante del Escape Suizo",
+        c2_desc: "Identificación acústica precisa de los tres sub-eventos producidos durante cada alternancia por el volante, el áncora y la rueda de escape. Resolución temporal sub-muestra con discriminación automática de ruido de fondo.",
+        c2_f1_k: "P1 (Desbloqueo):",
+        c2_f1_v: "La elipse del platillo entra en la muesca del áncora.",
+        c2_f2_k: "P2 (Impulso):",
+        c2_f2_v: "El diente de escape resbala sobre la boca de alzado.",
+        c2_f3_k: "P3 (Caída y Tope):",
+        c2_f3_v: "El diente choca en la bocallave y el áncora en el tope.",
+        c3_tag: "Capa 3 · Motor de Métricas",
+        c3_title: "Métricas con Regresión Ponderada",
+        c3_desc: "Cálculo de marcha y error de batimiento mediante regresión lineal robusta ponderada por paridad tic/tac con recorte a 5σ (filtro de valores atípicos MAD), eliminando anomalías por ruidos externos.",
+        c3_f1: "Error de batimiento medido en P1 para fidelidad horológica absoluta.",
+        c3_f2: "Estimación independiente de amplitud media, amplitud tic y amplitud tac.",
+        c3_f3: "Ventanas deslizantes de 10 s a 60 s con refresco de telemetría a 4 Hz.",
+        c4_tag: "Capa 4 · Reloj Hardware",
+        c4_title: "Calibración de Deriva del ADC",
+        c4_desc: "Los cristales de tarjetas de sonido USB comerciales tienen tolerancias de ±30 a ±100 ppm (donde 1 ppm = 0.0864 s/d). Advanced Timegrapher mide y elimina esta desviación sistemática.",
+        c4_f1: "Soporte de sincronización PPS por GPS externo (NEO-6M a 4 kHz).",
+        c4_f2: "Persistencia automática de calibraciones por dispositivo de audio.",
+        c4_f3: "Cero distorsión sistemática en la marcha final del reloj reportada.",
+        c5_tag: "Capa 5 · Visualización",
+        c5_title: "Cinta de Papel Virtual Continua",
+        c5_desc: "Recreación digital fiel de los clásicos cronocomparadores de rollo de laboratorio Witschi. Un punto por batimiento separado por paridad (tic/tac), donde la pendiente revela visualmente la marcha en ms.",
+        c5_f1: "Osciloscopio dinámico centrado en las compuertas P1 / P2 / P3.",
+        c5_f2: "Historial de cinta con autoescala y niveles de zoom 1×, 2×, 4×.",
+        c5_f3: "Indicador de salud de captura y detección de saturación (clipping).",
+        c6_tag: "Extensibilidad · Base de Calibres",
+        c6_title: "Modo Cuarzo & Base de Calibres",
+        c6_desc: "Modo especializado para movimientos de cuarzo paso a paso (1 a 16 pulsos por segundo). Base de datos horológica integrada (`watch_db.csv`) con parámetros de calibres de fábrica verificados.",
+        c6_f1: "Grabación en FLAC de 24 bits con metadatos Vorbis / ICMT completos.",
+        c6_f2: "Exportación a CSV para análisis de delta posicional (DU, DD, etc.).",
+        c6_f3: "Soporte para micrófonos piezoeléctricos USB (CM18) y de estudio.",
+        esc_tag: "Física del Escape Suizo de Áncora",
+        esc_title: "Los Tres Impulsos Acústicos (P1, P2, P3)",
+        esc_desc: "En cada alternancia, el escape produce tres transitorios acústicos sucesivos. Medir con precisión sub-milisegundo el intervalo entre P1 y P3 es el fundamento físico esencial para deducir la amplitud del volante sin desarmes invasivos.",
+        p1_badge: "P1 · Desbloqueo",
+        p1_name: "Entrada de la Elipse en Horquilla",
+        p1_text: "La elipse del volante choca contra la muesca del áncora y la desplaza para desbloquear el diente. Este es el único sonido generado directamente por la inercia del volante. Por ello, el verdadero error de batimiento se mide estrictamente en P1.",
+        p2_badge: "P2 · Impulso",
+        p2_name: "Transferencia de Energía",
+        p2_text: "El diente de la rueda de escape resbala sobre la paleta del áncora, transmitiendo energía al volante para mantener la oscilación. Es un sonido acústicamente difuso que los instrumentos Witschi omiten al delimitar el tiempo de alzado.",
+        p3_badge: "P3 · Caída y Tope",
+        p3_name: "Impacto en Paleta y Pasador de Tope",
+        p3_text: "El diente cae sobre la paleta opuesta y el brazo del áncora golpea el pasador de tope (banking pin). Es el choque acústico más violento y con mayor energía, usado como ancla temporal en la detección.",
+        road_tag: "HOJA DE RUTA HOROLÓGICA",
+        road_title: "Roadmap del Proyecto & Futura Instrumentación",
+        road_phase: "Fase Actual:",
+        road_desc: "Hitos estratégicos que guían a Advanced Timegrapher desde la validación comunitaria hasta consolidarse como instrumento de metrología horológica de nivel profesional.",
+        road_m1_status: "Fase 6 · En Curso",
+        road_m1_title: "Validación Acústica & Normalización",
+        road_m1_desc: "Validación cruzada frente a cronocomparadores de referencia Witschi Chronoscope y Weishi 1900. Normalización de correlación en plantillas para evitar saltos de lóbulo en calibres ruidosos (ej. Seiko 4R36).",
+        road_m2_status: "Reloj Hardware",
+        road_m2_title: "GPS PPS & PLL/FLL por Hardware",
+        road_m2_desc: "Sincronización sub-microsegundo mediante pulsos 1-PPS de GPS NEO-6M a 4 kHz. Bucle PI PLL/FLL al estilo NTP para corregir la deriva del cristal de audio bloque a bloque.",
+        road_m3_status: "Diagnóstico",
+        road_m3_title: "Diagnóstico Espectral a Largo Plazo",
+        road_m3_desc: "Operador de energía no lineal de Teager-Kaiser combinado con transformadas FFT y periodogramas Lomb-Scargle para diagnosticar defectos periódicos del rodaje (rueda de escape @ 7.5 s, rueda de segundos @ 60 s).",
+        road_m4_status: "Herramientas de Taller",
+        road_m4_title: "Asistente de Regulación en Vivo",
+        road_m4_desc: "Guía interactiva en tiempo real para relojeros durante el ajuste físico de la raqueta y el pitón de áncora, proporcionando indicaciones direccionales para el centrado instantáneo de marcha y batimiento.",
+        inst_eyebrow: "Distribución Multiplataforma",
+        inst_title: "Instalación Rápida",
+        inst_desc: "Instaladores binarios nativos para sistemas de escritorio o instalación en Python puro mediante pip.",
+        inst_mac_title: "Instalador `.dmg` Universal",
+        inst_mac_desc: "Paquete universal empaquetado con PyInstaller, PortAudio nativo incluido y soporte para pantallas Retina.",
+        btn_dl_mac: "Descargar .dmg",
+        inst_win_title: "Instalador `.exe` / Inno Setup",
+        inst_win_desc: "Instalador guiado o binario portable en `.zip` con controladores PortAudio WASAPI / MME de baja latencia.",
+        btn_dl_win: "Descargar Windows .exe",
+        inst_lin_title: "Pip o Paquete RPM",
+        inst_lin_desc: "Instalación estándar en cualquier distribución Linux moderna (Debian, Ubuntu, Fedora, Arch) con Python ≥ 3.12.",
+        btn_dl_lin: "Ver Paquetes Linux",
+        footer_intro: "Software timegrapher y analizador de escape horológico de código abierto para relojería de alta precisión. Distribuido bajo licencia GNU GPLv3 con motor DSP en tiempo real.",
+        footer_domain: "Dominio Oficial:",
+        footer_col_nav: "Navegación",
+        footer_col_code: "Código & Releases",
+        footer_col_docs: "Documentación",
+        footer_docs_dir: "Documentación Técnica",
+        footer_docs_math: "Marco Teórico y Matemático",
+        footer_docs_be: "Estimación Beat Error en P1",
+        footer_notice: "Hecho con ❤️ por Alberto Pico Lara. Advanced Timegrapher es una herramienta de instrumentación acústica no invasiva para diagnóstico de relojes. Respeta los niveles de ganancia de micrófono para evitar la saturación del transductor piezoeléctrico. Desarrollado con prácticas DevSecOps para asegurar la integridad de la memoria y la protección del buffer de audio."
+      }
+    };
+
+    let currentLang = 'en'; // Default to English as requested
+
+    function setLanguage(lang) {
+      if (!i18nData[lang]) return;
+      currentLang = lang;
+      document.documentElement.lang = lang;
+
+      // Update button highlights
+      document.getElementById('btn-lang-en').classList.toggle('active', lang === 'en');
+      document.getElementById('btn-lang-es').classList.toggle('active', lang === 'es');
+
+      // Update translatable text elements
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if (i18nData[lang][key]) {
+          el.textContent = i18nData[lang][key];
+        }
+      });
+
+      // Update simplified footer notice
+      const footerNotice = document.getElementById('footer-text-notice');
+      if (footerNotice) {
+        if (lang === 'es') {
+          footerNotice.innerHTML = "<strong>Hecho con ❤️ por Alberto Pico Lara.</strong> Advanced Timegrapher es una herramienta de instrumentación acústica no invasiva para diagnóstico de relojes. Respeta los niveles de ganancia de micrófono para evitar la saturación del transductor piezoeléctrico. Desarrollado con prácticas DevSecOps para asegurar la integridad de la memoria y la protección del buffer de audio.";
+        } else {
+          footerNotice.innerHTML = "<strong>Made with ❤️ by Alberto Pico Lara.</strong> Advanced Timegrapher is a non-invasive acoustic instrumentation tool for watch diagnostics. Respect microphone gain levels to prevent piezoelectric transducer saturation. Developed with DevSecOps best practices to guarantee memory safety and audio buffer protection.";
+        }
+      }
+
+      // Refresh caliber readout text in active language
+      setCaliberPreset(document.getElementById('gui-caliber-select').value);
+    }
+
+    // ------------------------------------------------------------------------
+    // CALIBER PRESETS DATA
+    // ------------------------------------------------------------------------
+    const caliberData = {
       miyota: {
-        name: "Miyota 9015",
-        rate: "+1.2",
-        rateSub: "Tendencia: estable (±0.2 s/d)",
-        be: "0.1",
-        amp: "295",
-        la: "51°",
-        freq: "28,800",
-        hz: "4.0 Hz · P: 125.0 ms",
         bph: 28800,
+        lift: "51.0°",
+        rate: "+1.2",
+        be: "0.1",
+        beSubEn: "at the drop (P3): 0.20 ms",
+        beSubEs: "en la caída (P3): 0.20 ms",
+        amp: "295°",
+        ampSub: "tic: 294° · tac: 296°",
+        snr: "34.8 dB",
+        max: "+1.8 s/d",
+        min: "+0.6 s/d",
+        delta: "1.2 s/d",
+        mean: "+1.2 s/d",
         rateNum: 1.2,
         beNum: 0.1
       },
       hamilton: {
-        name: "Hamilton H-50",
-        rate: "+0.8",
-        rateSub: "Tendencia: muy estable (±0.1 s/d)",
-        be: "0.2",
-        amp: "292",
-        la: "50°",
-        freq: "21,600",
-        hz: "3.0 Hz · P: 166.7 ms",
         bph: 21600,
+        lift: "50.0°",
+        rate: "+0.8",
+        be: "0.2",
+        beSubEn: "at the drop (P3): 0.18 ms",
+        beSubEs: "en la caída (P3): 0.18 ms",
+        amp: "292°",
+        ampSub: "tic: 290° · tac: 294°",
+        snr: "32.4 dB",
+        max: "+1.1 s/d",
+        min: "+0.5 s/d",
+        delta: "0.6 s/d",
+        mean: "+0.8 s/d",
         rateNum: 0.8,
         beNum: 0.2
       },
       seiko: {
-        name: "Seiko 4R36",
-        rate: "-2.5",
-        rateSub: "Atraso leve · Tac ruidoso",
-        be: "0.3",
-        amp: "270",
-        la: "53°",
-        freq: "21,600",
-        hz: "3.0 Hz · P: 166.7 ms",
         bph: 21600,
+        lift: "53.0°",
+        rate: "-2.5",
+        be: "0.3",
+        beSubEn: "at the drop (P3): 0.45 ms",
+        beSubEs: "en la caída (P3): 0.45 ms",
+        amp: "270°",
+        ampSub: "tic: 268° · tac: 272°",
+        snr: "28.6 dB",
+        max: "-1.8 s/d",
+        min: "-3.2 s/d",
+        delta: "1.4 s/d",
+        mean: "-2.5 s/d",
         rateNum: -2.5,
         beNum: 0.3
       },
       seagull: {
-        name: "Seagull ST1901",
-        rate: "+1.5",
-        rateSub: "Cronógrafo manual · LA 47°",
-        be: "0.2",
-        amp: "287",
-        la: "47°",
-        freq: "21,600",
-        hz: "3.0 Hz · P: 166.7 ms",
         bph: 21600,
+        lift: "47.0°",
+        rate: "+1.5",
+        be: "0.2",
+        beSubEn: "at the drop (P3): 0.22 ms",
+        beSubEs: "en la caída (P3): 0.22 ms",
+        amp: "287°",
+        ampSub: "tic: 285° · tac: 289°",
+        snr: "31.0 dB",
+        max: "+2.0 s/d",
+        min: "+0.9 s/d",
+        delta: "1.1 s/d",
+        mean: "+1.5 s/d",
         rateNum: 1.5,
         beNum: 0.2
       },
       quartz: {
-        name: "Reloj de Cuarzo",
-        rate: "-0.1",
-        rateSub: "Modo Cuarzo: 1 pulso/seg",
-        be: "0.0",
-        amp: "---",
-        la: "N/A",
-        freq: "7,200",
-        hz: "1.0 Hz · P: 1000.0 ms",
         bph: 7200,
+        lift: "N/A",
+        rate: "-0.1",
+        be: "0.0",
+        beSubEn: "quartz stepper: 1 Hz",
+        beSubEs: "paso cuarzo: 1 Hz",
+        amp: "---",
+        ampSub: "N/A",
+        snr: "38.2 dB",
+        max: "0.0 s/d",
+        min: "-0.2 s/d",
+        delta: "0.2 s/d",
+        mean: "-0.1 s/d",
         rateNum: -0.1,
         beNum: 0.0
       }
     };
 
-    let currentCaliber = calibers.miyota;
+    let activeCaliber = caliberData.miyota;
 
-    function setCaliber(key) {
-      if (!calibers[key]) return;
-      currentCaliber = calibers[key];
+    function setCaliberPreset(key) {
+      if (!caliberData[key]) return;
+      activeCaliber = caliberData[key];
 
-      // Update UI elements
-      document.getElementById('disp-rate').innerHTML = currentCaliber.rate + '<span class="metric-unit">s/d</span>';
-      document.getElementById('disp-rate-sub').textContent = currentCaliber.rateSub;
-      document.getElementById('disp-be').innerHTML = currentCaliber.be + '<span class="metric-unit">ms</span>';
-      document.getElementById('disp-amp').innerHTML = currentCaliber.amp + (currentCaliber.amp !== '---' ? '<span class="metric-unit">°</span>' : '');
-      document.getElementById('disp-la').textContent = currentCaliber.la;
-      document.getElementById('disp-freq').innerHTML = currentCaliber.freq + '<span class="metric-unit">bph</span>';
-      document.getElementById('disp-freq-hz').textContent = currentCaliber.hz;
+      document.getElementById('top-bph-val').textContent = activeCaliber.bph;
+      document.getElementById('top-lift-val').textContent = activeCaliber.lift;
+      document.getElementById('real-bph-val').textContent = `${activeCaliber.bph.toLocaleString()} bph (0.0%)`;
 
-      // Update active button state
-      const buttons = document.querySelectorAll('.caliber-btn');
-      buttons.forEach(btn => {
-        if (btn.textContent.includes(currentCaliber.name.split(' ')[0])) {
-          btn.classList.add('active');
-        } else {
-          btn.classList.remove('active');
-        }
-      });
+      document.getElementById('gui-val-rate').textContent = activeCaliber.rate;
+      document.getElementById('gui-val-be').textContent = activeCaliber.be;
+      document.getElementById('gui-sub-be').textContent = currentLang === 'es' ? activeCaliber.beSubEs : activeCaliber.beSubEn;
+      document.getElementById('gui-val-amp').textContent = activeCaliber.amp;
+      document.getElementById('gui-sub-amp').textContent = activeCaliber.ampSub;
+
+      document.getElementById('gui-val-snr').textContent = activeCaliber.snr;
+      document.getElementById('stat-max').textContent = activeCaliber.max;
+      document.getElementById('stat-min').textContent = activeCaliber.min;
+      document.getElementById('stat-delta').textContent = activeCaliber.delta;
+      document.getElementById('stat-mean').textContent = activeCaliber.mean;
     }
 
-    // Canvas Simulator: CRT Oscilloscope & Virtual Paper Tape
-    const canvas = document.getElementById('scopeCanvas');
-    const ctx = canvas.getContext('2d');
+    // ------------------------------------------------------------------------
+    // REAL-TIME CANVAS ANIMATION ENGINE: EXACT ADVANCED TIMEGRAPHER GUI
+    // ------------------------------------------------------------------------
+    const tapeCanvas = document.getElementById('paperTapeCanvas');
+    const tapeCtx = tapeCanvas.getContext('2d');
+    const scopeCanvas = document.getElementById('oscilloscopeCanvas');
+    const scopeCtx = scopeCanvas.getContext('2d');
 
-    let animationFrameId;
-    let time = 0;
+    const tapePoints = [];
+    const maxTapePoints = 95;
+    let lastTapeTick = 0;
+    let tapeParity = 0;
+    let animTime = 0;
 
-    // Paper Tape Dots Array
-    const tapeDots = [];
-    const maxDots = 70;
-    let lastDotTime = 0;
-    let parity = 0; // 0 = tic, 1 = tac
-
-    function renderScope() {
-      time += 0.035;
-
-      // Resize canvas buffer if needed for high DPI
-      const rect = canvas.getBoundingClientRect();
-      if (canvas.width !== Math.floor(rect.width * window.devicePixelRatio)) {
-        canvas.width = Math.floor(rect.width * window.devicePixelRatio);
-        canvas.height = Math.floor(rect.height * window.devicePixelRatio);
-      }
-
-      const w = canvas.width;
-      const h = canvas.height;
+    function renderGuiCanvas() {
+      animTime += 0.04;
       const dpr = window.devicePixelRatio || 1;
 
+      // 1. PAPER TAPE CANVAS (Exact pyqtgraph Paper Tape trace)
+      const tRect = tapeCanvas.getBoundingClientRect();
+      if (tapeCanvas.width !== Math.floor(tRect.width * dpr)) {
+        tapeCanvas.width = Math.floor(tRect.width * dpr);
+        tapeCanvas.height = Math.floor(tRect.height * dpr);
+      }
+      const tw = tapeCanvas.width;
+      const th = tapeCanvas.height;
+
       // Background
-      ctx.fillStyle = "#030814";
-      ctx.fillRect(0, 0, w, h);
+      tapeCtx.fillStyle = "#070b12";
+      tapeCtx.fillRect(0, 0, tw, th);
 
-      // Grid division line between Oscilloscope (left 65%) and Paper Tape (right 35%)
-      const splitX = w * 0.62;
-
-      // Draw Grid Lines (Tektronix / Witschi style)
-      ctx.strokeStyle = "rgba(0, 229, 255, 0.07)";
-      ctx.lineWidth = 1 * dpr;
-
-      const gridSize = 24 * dpr;
-      for (let x = 0; x < w; x += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, h);
-        ctx.stroke();
+      // Grid Lines
+      tapeCtx.strokeStyle = "rgba(40, 48, 61, 0.4)";
+      tapeCtx.lineWidth = 1 * dpr;
+      for (let x = 0; x < tw; x += 32 * dpr) {
+        tapeCtx.beginPath();
+        tapeCtx.moveTo(x, 0);
+        tapeCtx.lineTo(x, th);
+        tapeCtx.stroke();
       }
-      for (let y = 0; y < h; y += gridSize) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(w, y);
-        ctx.stroke();
+      for (let y = 0; y < th; y += 24 * dpr) {
+        tapeCtx.beginPath();
+        tapeCtx.moveTo(0, y);
+        tapeCtx.lineTo(tw, y);
+        tapeCtx.stroke();
       }
 
-      // Vertical separator
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.35)";
-      ctx.lineWidth = 1.5 * dpr;
-      ctx.beginPath();
-      ctx.moveTo(splitX, 0);
-      ctx.lineTo(splitX, h);
-      ctx.stroke();
+      // Zero-deviation dashed center line
+      const centerY = th * 0.5;
+      tapeCtx.strokeStyle = "#3b4659";
+      tapeCtx.setLineDash([4 * dpr, 4 * dpr]);
+      tapeCtx.beginPath();
+      tapeCtx.moveTo(0, centerY);
+      tapeCtx.lineTo(tw, centerY);
+      tapeCtx.stroke();
 
-      // Titles for panels
-      ctx.fillStyle = "rgba(148, 163, 184, 0.75)";
-      ctx.font = `${10 * dpr}px 'JetBrains Mono', monospace`;
-      ctx.fillText("OSCILOSCOPIO ACÚSTICO (P1/P2/P3 EN DETALLE)", 12 * dpr, 16 * dpr);
-      ctx.fillText("CINTA WITSCHI (TIC/TAC)", splitX + 12 * dpr, 16 * dpr);
+      // COSC ± Lines in green (0, 230, 118)
+      tapeCtx.strokeStyle = "rgba(0, 230, 118, 0.55)";
+      tapeCtx.beginPath();
+      tapeCtx.moveTo(0, centerY - 28 * dpr);
+      tapeCtx.lineTo(tw, centerY - 28 * dpr);
+      tapeCtx.moveTo(0, centerY + 28 * dpr);
+      tapeCtx.lineTo(tw, centerY + 28 * dpr);
+      tapeCtx.stroke();
+      tapeCtx.setLineDash([]);
 
-      // -------------------------------------------------------------
-      // 1. LEFT PANEL: Real acoustic impulse waveform (P1, P2, P3)
-      // -------------------------------------------------------------
-      const scopeCenterY = h * 0.58;
-      const scopeWidth = splitX - 24 * dpr;
+      // COSC Labels
+      tapeCtx.fillStyle = "rgba(0, 230, 118, 0.85)";
+      tapeCtx.font = `${9 * dpr}px 'JetBrains Mono', monospace`;
+      tapeCtx.fillText("+6 s/d", tw - 42 * dpr, centerY - 31 * dpr);
+      tapeCtx.fillText("-4 s/d", tw - 42 * dpr, centerY + 38 * dpr);
 
-      // Oscilloscope baseline
-      ctx.strokeStyle = "rgba(0, 255, 102, 0.18)";
-      ctx.beginPath();
-      ctx.moveTo(12 * dpr, scopeCenterY);
-      ctx.lineTo(splitX - 12 * dpr, scopeCenterY);
-      ctx.stroke();
-
-      // Generate realistic acoustic watch beat envelope
-      ctx.beginPath();
-      ctx.strokeStyle = "#00FF66";
-      ctx.lineWidth = 1.8 * dpr;
-      ctx.shadowColor = "rgba(0, 255, 102, 0.6)";
-      ctx.shadowBlur = 8 * dpr;
-
-      // Positions of pulses relative to scopeWidth
-      const p1_x = 12 * dpr + scopeWidth * 0.22;
-      const p2_x = 12 * dpr + scopeWidth * 0.44;
-      const p3_x = 12 * dpr + scopeWidth * 0.68;
-
-      for (let x = 12 * dpr; x <= splitX - 12 * dpr; x += 1 * dpr) {
-        let signal = (Math.sin(x * 0.08 + time * 2) * 2) * (Math.random() * 0.6 + 0.4); // Noise floor
-
-        // P1 Pulse (Unlocking - weak impulse)
-        const distP1 = Math.abs(x - p1_x);
-        if (distP1 < 25 * dpr) {
-          signal += Math.sin(distP1 * 0.6) * Math.exp(-distP1 * 0.12) * 28 * dpr;
-        }
-
-        // P2 Pulse (Impulse - irregular)
-        const distP2 = Math.abs(x - p2_x);
-        if (distP2 < 30 * dpr) {
-          signal += Math.sin(distP2 * 0.45) * Math.exp(-distP2 * 0.09) * 40 * dpr;
-        }
-
-        // P3 Pulse (Drop & Lock - dominant shock wave with exponential ringing)
-        const distP3 = Math.abs(x - p3_x);
-        if (distP3 < 45 * dpr) {
-          signal += Math.sin(distP3 * 0.5) * Math.exp(-distP3 * 0.065) * 85 * dpr;
-        }
-
-        const y = scopeCenterY - signal;
-        if (x === 12 * dpr) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      }
-      ctx.stroke();
-      ctx.shadowBlur = 0; // reset shadow
-
-      // Draw P1, P2, P3 Marker Lines and Labels
-      function drawMarker(x, label, color, sub) {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1 * dpr;
-        ctx.setLineDash([3 * dpr, 3 * dpr]);
-        ctx.beginPath();
-        ctx.moveTo(x, 26 * dpr);
-        ctx.lineTo(x, h - 16 * dpr);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        ctx.fillStyle = color;
-        ctx.font = `bold ${10 * dpr}px 'JetBrains Mono', monospace`;
-        ctx.fillText(label, x - 8 * dpr, 38 * dpr);
-
-        ctx.font = `${8.5 * dpr}px 'JetBrains Mono', monospace`;
-        ctx.fillText(sub, x - 18 * dpr, h - 22 * dpr);
-      }
-
-      drawMarker(p1_x, "P1", "#00E5FF", "Desbloqueo");
-      drawMarker(p2_x, "P2", "#FFB800", "Impulso");
-      drawMarker(p3_x, "P3", "#00FF66", "Caída (Drop)");
-
-      // Lift Angle / t_lift bracket between P1 and P3
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.7)";
-      ctx.lineWidth = 1 * dpr;
-      ctx.beginPath();
-      ctx.moveTo(p1_x, 50 * dpr);
-      ctx.lineTo(p3_x, 50 * dpr);
-      ctx.moveTo(p1_x, 46 * dpr);
-      ctx.lineTo(p1_x, 54 * dpr);
-      ctx.moveTo(p3_x, 46 * dpr);
-      ctx.lineTo(p3_x, 54 * dpr);
-      ctx.stroke();
-
-      ctx.fillStyle = "rgba(56, 189, 248, 0.95)";
-      ctx.font = `${9 * dpr}px 'JetBrains Mono', monospace`;
-      ctx.fillText(`t_lift = P3 - P1 (${currentCaliber.la})`, (p1_x + p3_x) / 2 - 45 * dpr, 46 * dpr);
-
-      // -------------------------------------------------------------
-      // 2. RIGHT PANEL: Virtual Witschi Paper Tape
-      // -------------------------------------------------------------
-      const tapeWidth = w - splitX - 24 * dpr;
-      const tapeCenterY = h * 0.52;
-
-      // Update paper tape simulation
-      if (Date.now() - lastDotTime > 140) {
-        lastDotTime = Date.now();
-        parity = 1 - parity;
+      // Add new tape points over time
+      if (Date.now() - lastTapeTick > 130) {
+        lastTapeTick = Date.now();
+        tapeParity = 1 - tapeParity;
 
         // Rate slope drift: ms offset based on current rate
-        const rateDrift = (currentCaliber.rateNum / 10) * (tapeDots.length * 0.08);
-        const beOffset = (parity === 0 ? 1 : -1) * (currentCaliber.beNum * 14);
+        const rateDrift = (activeCaliber.rateNum / 10) * (tapePoints.length * 0.08);
+        const beOffset = (tapeParity === 0 ? 1 : -1) * (activeCaliber.beNum * 15);
 
-        tapeDots.push({
-          x: w - 16 * dpr,
-          y: tapeCenterY + beOffset + rateDrift + (Math.random() - 0.5) * 2,
-          parity: parity
+        tapePoints.push({
+          x: tw - 12 * dpr,
+          y: centerY + beOffset + rateDrift + (Math.random() - 0.5) * 2,
+          parity: tapeParity
         });
 
-        if (tapeDots.length > maxDots) {
-          tapeDots.shift();
+        if (tapePoints.length > maxTapePoints) {
+          tapePoints.shift();
         }
       }
 
-      // Shift tape dots leftwards smoothly
-      tapeDots.forEach(dot => {
-        dot.x -= 1.6 * dpr;
+      // Shift tape points smoothly leftwards
+      tapePoints.forEach(p => {
+        p.x -= 1.6 * dpr;
       });
 
-      // Draw Paper Tape Dots
-      tapeDots.forEach(dot => {
-        if (dot.x < splitX + 8 * dpr) return;
-
-        ctx.fillStyle = dot.parity === 0 ? "#00FF66" : "#38BDF8";
-        ctx.beginPath();
-        ctx.arc(dot.x, dot.y, 2.2 * dpr, 0, Math.PI * 2);
-        ctx.fill();
+      // Draw Paper Tape Dots (Tic in cyan #00e5ff, Tac in amber #ffab00)
+      tapePoints.forEach(p => {
+        if (p.x < 10 * dpr) return;
+        tapeCtx.fillStyle = p.parity === 0 ? "#00e5ff" : "#ffab00";
+        tapeCtx.beginPath();
+        tapeCtx.arc(p.x, p.y, 2.4 * dpr, 0, Math.PI * 2);
+        tapeCtx.fill();
       });
 
-      // Slope guide lines on paper tape
-      ctx.strokeStyle = "rgba(148, 163, 184, 0.15)";
-      ctx.setLineDash([4 * dpr, 4 * dpr]);
-      ctx.beginPath();
-      ctx.moveTo(splitX + 16 * dpr, tapeCenterY - 30 * dpr);
-      ctx.lineTo(w - 16 * dpr, tapeCenterY - 30 * dpr);
-      ctx.moveTo(splitX + 16 * dpr, tapeCenterY + 30 * dpr);
-      ctx.lineTo(w - 16 * dpr, tapeCenterY + 30 * dpr);
-      ctx.stroke();
-      ctx.setLineDash([]);
 
-      animationFrameId = requestAnimationFrame(renderScope);
+      // 2. OSCILLOSCOPE CANVAS (Exact pyqtgraph Escapement Oscilloscope)
+      const sRect = scopeCanvas.getBoundingClientRect();
+      if (scopeCanvas.width !== Math.floor(sRect.width * dpr)) {
+        scopeCanvas.width = Math.floor(sRect.width * dpr);
+        scopeCanvas.height = Math.floor(sRect.height * dpr);
+      }
+      const sw = scopeCanvas.width;
+      const sh = scopeCanvas.height;
+
+      // Background
+      scopeCtx.fillStyle = "#070b12";
+      scopeCtx.fillRect(0, 0, sw, sh);
+
+      // Scope Grid
+      scopeCtx.strokeStyle = "rgba(40, 48, 61, 0.4)";
+      scopeCtx.lineWidth = 1 * dpr;
+      for (let x = 0; x < sw; x += 32 * dpr) {
+        scopeCtx.beginPath();
+        scopeCtx.moveTo(x, 0);
+        scopeCtx.lineTo(x, sh);
+        scopeCtx.stroke();
+      }
+      for (let y = 0; y < sh; y += 22 * dpr) {
+        scopeCtx.beginPath();
+        scopeCtx.moveTo(0, y);
+        scopeCtx.lineTo(sw, y);
+        scopeCtx.stroke();
+      }
+
+      const scopeCenterY = sh * 0.55;
+      const p1_x = sw * 0.24;
+      const p2_x = sw * 0.48;
+      const p3_x = sw * 0.72;
+
+      // Draw P1, P2, P3 Vertical Marker Lines (Exact GUI dashlines)
+      function drawScopeLine(x, label, color) {
+        scopeCtx.strokeStyle = color;
+        scopeCtx.lineWidth = 1.2 * dpr;
+        scopeCtx.setLineDash([3 * dpr, 3 * dpr]);
+        scopeCtx.beginPath();
+        scopeCtx.moveTo(x, 18 * dpr);
+        scopeCtx.lineTo(x, sh - 8 * dpr);
+        scopeCtx.stroke();
+        scopeCtx.setLineDash([]);
+
+        scopeCtx.fillStyle = color;
+        scopeCtx.font = `bold ${10 * dpr}px 'JetBrains Mono', monospace`;
+        scopeCtx.fillText(label, x - 8 * dpr, 14 * dpr);
+      }
+
+      drawScopeLine(p1_x, "P1", "#00e676");
+      drawScopeLine(p2_x, "P2", "#ffab00");
+      drawScopeLine(p3_x, "P3", "#00e5ff");
+
+      // Draw Escapement Waveform (Fast acoustic signal in cyan #00e5ff)
+      scopeCtx.strokeStyle = "#00e5ff";
+      scopeCtx.lineWidth = 1.4 * dpr;
+      scopeCtx.beginPath();
+
+      for (let x = 0; x < sw; x += 1.5 * dpr) {
+        let sig = (Math.sin(x * 0.1 + animTime * 2.5) * 1.5) * (Math.random() * 0.5 + 0.5);
+
+        // P1 Unlocking pulse
+        const d1 = Math.abs(x - p1_x);
+        if (d1 < 24 * dpr) sig += Math.sin(d1 * 0.6) * Math.exp(-d1 * 0.12) * 22 * dpr;
+
+        // P2 Impulse pulse
+        const d2 = Math.abs(x - p2_x);
+        if (d2 < 28 * dpr) sig += Math.sin(d2 * 0.45) * Math.exp(-d2 * 0.09) * 35 * dpr;
+
+        // P3 Drop dominant pulse
+        const d3 = Math.abs(x - p3_x);
+        if (d3 < 42 * dpr) sig += Math.sin(d3 * 0.52) * Math.exp(-d3 * 0.065) * 65 * dpr;
+
+        const y = scopeCenterY - sig;
+        if (x === 0) scopeCtx.moveTo(x, y);
+        else scopeCtx.lineTo(x, y);
+      }
+      scopeCtx.stroke();
+
+      // Draw Envelope Curve in Amber (rgba(255, 171, 0, 0.7))
+      scopeCtx.strokeStyle = "rgba(255, 171, 0, 0.75)";
+      scopeCtx.lineWidth = 1.2 * dpr;
+      scopeCtx.beginPath();
+      for (let x = 0; x < sw; x += 3 * dpr) {
+        let env = 2 * dpr;
+        const d1 = Math.abs(x - p1_x);
+        if (d1 < 24 * dpr) env += Math.exp(-d1 * 0.12) * 20 * dpr;
+        const d2 = Math.abs(x - p2_x);
+        if (d2 < 28 * dpr) env += Math.exp(-d2 * 0.09) * 32 * dpr;
+        const d3 = Math.abs(x - p3_x);
+        if (d3 < 42 * dpr) env += Math.exp(-d3 * 0.065) * 60 * dpr;
+
+        const y = scopeCenterY - env;
+        if (x === 0) scopeCtx.moveTo(x, y);
+        else scopeCtx.lineTo(x, y);
+      }
+      scopeCtx.stroke();
+
+      requestAnimationFrame(renderGuiCanvas);
     }
 
-    // Launch oscilloscope on page load
+    // Launch UI & Animation on page load (starts in English)
     window.addEventListener('DOMContentLoaded', () => {
-      renderScope();
+      setLanguage('en');
+      requestAnimationFrame(renderGuiCanvas);
     });
   </script>
 </body>
