@@ -1,6 +1,6 @@
 # Empaquetado y Distribución Multiplataforma (Beta)
 
-Este directorio contiene las especificaciones y utilidades para construir los binarios de la beta (macOS `.app`/`.zip`, Windows `.zip`, Linux `.tar.gz`) y distribuirlos a través de GitHub Releases y GitHub Actions al crear una etiqueta (`v0.6.1-beta.2` o similar).
+Este directorio contiene las especificaciones y utilidades para construir los binarios (macOS `.dmg`/`.app`/`.zip`, Windows `.exe` setup/`.zip`, Linux `.tar.gz`/`.rpm`) y distribuirlos a través de GitHub Releases y GitHub Actions al crear una etiqueta (`v0.7.0-beta4` o similar).
 
 | Archivo | Para qué |
 |---|---|
@@ -9,8 +9,10 @@ Este directorio contiene las especificaciones y utilidades para construir los bi
 | `linux/adv-tg.desktop` | Entrada de escritorio de Linux (menú de aplicaciones, Wayland app-id) |
 | `linux/adv-tg.rpm.spec` | Especificación RPM para distribuciones basadas en RPM (Fedora, RHEL, openSUSE) |
 | `linux/build_rpm.sh` | Script de empaquetado RPM a partir del bundle generado por PyInstaller |
+| `macos/build_dmg.sh` | Script para generar imagen de disco DMG con enlace de arrastrar y soltar a `/Applications` |
 | `macos/Info.plist` | Configuración del bundle de macOS, incluyendo **`NSMicrophoneUsageDescription`** e icono |
 | `macos/adv-tg.icns` | Icono multi-resolución de macOS (16x16 hasta 1024x1024) |
+| `windows/installer.iss` | Script de Inno Setup para crear el instalador `.exe` con instalación en aplicaciones, accesos directos y desinstalador |
 | `windows/adv-tg.ico` | Icono estándar para ejecutables de Windows |
 
 ---
@@ -26,15 +28,21 @@ GitHub Actions (.github/workflows/build.yml):
  2. [build]         ──> pip install . + PyInstaller en Linux, macOS (arm64) y Windows
  3. [Smoke test]    ──> --version y --smoke-test headless: arranca la GUI, comprueba que SciPy
                         no está cargado y mide una muestra (o ticks sintéticos) sin hardware
- 4. [release]       ──> Solo con etiqueta v*: publica los 3 bundles, el wheel y el sdist
+ 4. [Package]       ──> Generación de instaladores nativos:
+                        - macOS: .dmg de instalación (drag & drop a /Applications) y .zip
+                        - Windows: instalador Inno Setup .exe (instalación en aplicaciones) y .zip
+                        - Linux: paquete RPM y .tar.gz
+ 5. [release]       ──> Solo con etiqueta v*: publica los instaladores, paquetes, wheel y sdist
 ```
 
 ### Tabla de Artefactos de Release
 
 | Artefacto | Plataforma y Arquitectura | Tipo |
 |---|---|---|
+| `adv-tg-macos-arm64.dmg` | macOS Apple Silicon (M1/M2/M3/M4) | Imagen DMG con arrastre directo a `/Applications` |
 | `adv-tg-macos-arm64.zip` | macOS Apple Silicon (M1/M2/M3/M4) | Bundle `.app` con Info.plist de micrófono |
-| `adv-tg-windows-x64.zip` | Windows 10/11 x64 | Carpeta standalone con `adv-tg.exe` e icono |
+| `adv-tg-windows-x64-setup.exe` | Windows 10/11 x64 | Instalador estándar con accesos directos y desinstalador |
+| `adv-tg-windows-x64.zip` | Windows 10/11 x64 | Carpeta standalone comprimida con `adv-tg.exe` |
 | `adv-tg-linux-x86_64.tar.gz` | Linux x86_64 | Carpeta standalone con PortAudio integrado |
 | `adv-tg-*-1.x86_64.rpm` | Linux x86_64 (Fedora, RHEL, openSUSE) | Paquete RPM instalable vía `dnf` / `zypper` |
 | `advanced_timegrapher-*-py3-none-any.whl` | Cualquier plataforma (Python ≥ 3.11) | Wheel puro (sin compilador) |
