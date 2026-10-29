@@ -10,6 +10,7 @@ on:
 jobs:
   test:
     name: Run Unit Tests (${{ matrix.os }})
+    if: github.actor != 'dependabot[bot]'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -53,7 +54,7 @@ jobs:
     name: Run Unit Tests
     needs: test
     runs-on: ubuntu-latest
-    if: always()
+    if: github.actor != 'dependabot[bot]' && always()
     steps:
       - name: Verify All Platform Tests Passed
         run: |
