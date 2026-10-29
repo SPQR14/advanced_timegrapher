@@ -29,7 +29,7 @@ jobs:
           ls dist/*-py3-none-any.whl
 
       - name: Upload Python distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-dist
           path: dist/*
@@ -144,7 +144,7 @@ jobs:
           }
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
@@ -152,7 +152,7 @@ jobs:
 
       - name: Upload macOS DMG Artifact
         if: matrix.platform == 'macos'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: adv-tg-macos-arm64-dmg
           path: dist/*.dmg
@@ -160,7 +160,7 @@ jobs:
 
       - name: Upload Windows Installer Artifact
         if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: adv-tg-windows-x64-installer
           path: dist/*setup.exe
@@ -168,7 +168,7 @@ jobs:
 
       - name: Upload Linux RPM Artifact
         if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: adv-tg-linux-rpm
           path: dist/*.rpm
