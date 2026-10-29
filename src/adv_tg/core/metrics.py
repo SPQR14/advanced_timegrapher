@@ -59,6 +59,11 @@ Model and conventions
   ``_BE_SWITCH_RATIO`` (1/1.6) of it: the block jackknife of an uncertainty scatters ~30 %
   itself, so a near tie keeps the validated estimator. Without any P1, ``c`` of the
   ``t_fine`` regression is used and a warning says that the measuring point changed.
+  P1 is the reference of the Witschi documentation: the unlocking is the only sound caused
+  by the balance itself. ``beat_error_p3_ms`` (``2 |c|`` of the ``t_fine`` regression, i.e. at
+  the drop) is reported for comparison: many instruments time the loudest sound, and the two
+  differ by the tic/tac lift-time difference, ``BE_P3 = BE_P1 + (t_lift_tic - t_lift_tac)``
+  with signs (Seagull ST1901: 0.51 ms at P1, 0.20 ms at P3, lift times 8.69 / 8.37 ms).
 * **Amplitude.** ``A = LA / (2 sin(pi f t_lift))``, ``f = BPH / 7200``, with ``t_lift`` from
   the templates ONLY (``ParityTemplate.t_lift_samples``: P1 onset -> P3 onset). Tic, tac and
   their mean are reported; outside ``amplitude_range_deg`` a value is invalid (NaN). With the
@@ -257,7 +262,10 @@ class Metrics:
     beat_error_sigma_ms: float = math.nan
     beat_error_sigma_block_ms: float = math.nan
     beat_error_uncertainty_ms: float = math.nan  # max(covariance, block) sigma
-    beat_error_point: str = "—"  # "p1" (template P1 onsets) or "t_fine" (fallback)
+    beat_error_point: str = "—"  # "p1" (template P1), "p1_beat" (per-beat P1) or "t_fine"
+    # at the drop (P3 onset, t_fine), for comparison with instruments that time the loudest
+    # sound (Weishi, WAM): differs from the P1 figure by the tic/tac lift-time difference
+    beat_error_p3_ms: float = math.nan
     amplitude_deg: float = math.nan
     amplitude_tic_deg: float = math.nan
     amplitude_tac_deg: float = math.nan
@@ -671,6 +679,7 @@ def compute_metrics(
         )
     if not config.quartz:
         _beat_error(m, beats, k, t, templates, config)
+        m.beat_error_p3_ms = beat_error_from_fit(fit, fs)[0]
         _amplitude(m, templates, config)
     m.confidence = _confidence(m, config)
     return m

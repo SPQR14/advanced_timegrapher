@@ -200,7 +200,14 @@ class BeatDetectorConfig:
         template_burst_ms: Span before the burst maximum where its first lobe is searched
             (default 2.5 ms; shorter than the P2-P3 spacing of real calibres).
         template_p1_fraction: P1 onset on the template: first rise above the template noise
-            by this fraction of the burst maximum, or 6 robust sigmas if larger (0.04).
+            by this fraction of the burst maximum, or 6 robust sigmas if larger (0.04). The
+            noise level and sigma come from the whole template before the end of the P1 search
+            window (median and lower-side MAD), so they do not depend on the lift angle.
+        template_p1_min_ms: The rise must stay above that threshold for at least this long
+            (default 0.1 ms). Noise blips cross it for 0.02-0.06 ms, a real P1 for 1-5 ms (a
+            weak synthetic one for ~0.2 ms); without it a blip early in a long search window
+            (a larger lift angle) was taken for P1 (Miyota 9015 at LA 54°: 17.7 ms of t_lift,
+            10.7 ms of beat error).
         template_min_corr: Normalised correlation a beat needs to be aligned and added to the
             template (default 0.5); below it ``t_fine`` is NaN.
         template_front_fraction: Second definition of the P3 onset on a template, the
@@ -291,6 +298,7 @@ class BeatDetectorConfig:
     template_lobe_fraction: float = 0.4
     template_burst_ms: float = 2.5
     template_p1_fraction: float = 0.04
+    template_p1_min_ms: float = 0.1
     template_min_corr: float = 0.5
     template_align_smooth_ms: float = 1.0
     template_front_fraction: float = 0.5
@@ -370,7 +378,7 @@ class BeatDetectorConfig:
             raise ValueError("quartz_template_ms debe ser positivo")
         if not 1 <= self.template_min_beats <= self.template_beats:
             raise ValueError("se requiere 1 <= template_min_beats <= template_beats")
-        for name in ("template_search_ms", "template_post_ms"):
+        for name in ("template_search_ms", "template_post_ms", "template_p1_min_ms"):
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} debe ser positivo (recibido {getattr(self, name)})")
         if not self.template_amp_mismatch_deg > 0:
@@ -1646,22 +1654,29 @@ class BeatDetector:
         j = bb + int(below[-1])
         d = float(tm[j + 1] - tm[j])
         p3 = j + ((level - float(tm[j])) / d if d > 0 else 0.0)
-        # P1: first rise above the template noise inside the physical lift-time window
+        # P1: first sustained rise above the template noise inside the physical lift-time
+        # window (shorter crossings are noise blips, see template_p1_min_ms)
+        # The noise is measured on everything before the end of the window: its median and the
+        # MAD of the samples below it (the P1/P2 bursts sit above the median and do not count).
+        # The first 1 ms alone moved with the template length, i.e. with the lift angle typed
+        # in, and so did the beat error (Seagull ST1901: 0.39-0.50 ms for LA 45-52°).
         n0 = max(2, int(round(1.0 * ms)))
-        quiet = tm[:n0]
-        b1 = float(np.median(quiet))
-        spread = 1.4826 * float(np.median(np.abs(quiet - b1)))
-        thr = b1 + max(c.template_p1_fraction * (float(tm[mx]) - b1), 6.0 * spread)
         lo = max(n0, int(math.floor(p3 - self.tmax)))
         hi = int(math.floor(p3 - self.tmin))
         if hi <= lo:
             return p3, math.nan
-        above = np.flatnonzero(tm[lo:hi] > thr)
-        if above.size == 0 or above[0] == 0:
+        noise = tm[:hi]
+        b1 = float(np.median(noise))
+        low = b1 - noise[noise <= b1]
+        spread = 1.4826 * float(np.median(low))
+        thr = b1 + max(c.template_p1_fraction * (float(tm[mx]) - b1), 6.0 * spread)
+        starts, ends = _runs(tm[lo:hi] > thr)
+        long_enough = (ends - starts) >= max(1, int(round(c.template_p1_min_ms * ms)))
+        if not long_enough.any() or starts[long_enough][0] == 0:
             # nothing rises above the noise, or the window already starts above it (no clean
             # rise to time): P1 is not resolvable on this template
             return p3, math.nan
-        j = lo + int(above[0]) - 1
+        j = lo + int(starts[long_enough][0]) - 1
         d = float(tm[j + 1] - tm[j])
         p1 = j + ((thr - float(tm[j])) / d if d > 0 else 0.0)
         return p3, p1

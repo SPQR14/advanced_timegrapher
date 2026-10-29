@@ -238,28 +238,61 @@ def test_seiko_4r34_gmt_beat_error() -> None:
 
 
 def test_seagull_st1901_beat_error_point() -> None:
-    """``SeagullST1901.flac`` (21600 A/h, 30 s; Weishi 1900 and WAM: +1 s/d, 0.2 ms).
+    """``SeagullST1901.flac`` (21600 A/h, LA 47° ± 1°, 30 s; Weishi 1900 and WAM: +1 s/d, 0.2 ms).
 
     P1 is weak (clicks pass for it in some beats) and the drop is clean. At the drop the
     tic/tac asymmetry is 0.20 ms, the figure of both instruments; at P1, where this app
-    measures the beat error, it is ~0.4 ms because tic and tac have different lift times
-    (8.80 vs 8.63 ms). The noisy per-beat P1 must not replace the template P1. The lift angle
-    of the ST19 is not confirmed: the amplitude is not checked.
+    measures the beat error (Witschi), it is ~0.5 ms because tic and tac have different lift
+    times (8.69 vs 8.37 ms): BE_P3 = BE_P1 + delta t_lift, with signs. The noisy per-beat P1
+    must not replace the template P1. Amplitude measured live with LA 47°: 287°.
     """
     name = "SeagullST1901.flac"
     if not (SAMPLES / name).is_file():
         pytest.skip(f"no está {SAMPLES / name}")
     from adv_tg.core.metrics import beat_error_from_fit, fit_parity_weighted, select_beats
 
-    r = measure_file(SAMPLES / name, 21600, 52.0)
+    r = measure_file(SAMPLES / name, 21600, 47.0)
     m = r.metrics
     assert m.beat_error_point == "p1"
-    assert m.beat_error_ms == pytest.approx(0.39, abs=0.1)
+    assert m.beat_error_ms == pytest.approx(0.51, abs=0.1)
     k, t, _ = select_beats(r.beats)
     at_drop = beat_error_from_fit(fit_parity_weighted(k, t), r.sample_rate)[0]
     assert at_drop == pytest.approx(0.2, abs=0.05)
+    assert m.beat_error_p3_ms == pytest.approx(at_drop, abs=1e-9)
+    tic, tac = r.templates
+    assert tic is not None and tac is not None
+    delta_lift_ms = (tic.t_lift_samples - tac.t_lift_samples) / r.sample_rate * 1e3
+    assert abs(m.beat_error_ms - at_drop) == pytest.approx(abs(delta_lift_ms), abs=0.05)
+    assert _band_distance(m.amplitude_deg, (287.0, 287.0)) <= TOL[2]
     # uncalibrated rate (the CM18 runs ~+9 ppm: ~-0.8 s/d) vs +1 s/d live, in 30 s
     assert m.rate_s_per_day == pytest.approx(1.0, abs=3.0)
+
+
+@pytest.mark.parametrize(
+    ("name", "bph", "lift_angles"),
+    [
+        ("miyota_9015.flac", 28800, (48.0, 51.0, 54.0, 56.0)),
+        ("SeagullST1901.flac", 21600, (45.0, 47.0, 49.0, 52.0)),
+        ("hamilton_h50.flac", 21600, (47.0, 50.0, 53.0)),
+    ],
+)
+def test_beat_error_does_not_depend_on_the_lift_angle(
+    name: str, bph: int, lift_angles: tuple[float, ...]
+) -> None:
+    """The lift angle only scales the amplitude; the template P1 must not move with it.
+
+    It sets the length of the P1 search window. Two faults made the P1 onset depend on it: a
+    0.02-0.06 ms noise blip early in a longer window was taken for P1 (Miyota at 54°: tac
+    t_lift 17.7 ms, beat error 10.7 ms), and the noise level came from the first 1 ms of a
+    template whose length changes with the window (Seagull: 0.39-0.50 ms over 45-52°).
+    """
+    if not (SAMPLES / name).is_file():
+        pytest.skip(f"no está {SAMPLES / name}")
+    values = [measure_file(SAMPLES / name, bph, la).metrics for la in lift_angles]
+    be = [m.beat_error_ms for m in values]
+    assert max(be) - min(be) <= 0.03, be
+    for m in values:
+        assert abs(m.amplitude_tic_deg - m.amplitude_tac_deg) <= 15.0
 
 
 def test_second_bulova_take_reproduces_the_card_drift() -> None:
