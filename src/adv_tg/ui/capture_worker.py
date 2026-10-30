@@ -63,8 +63,14 @@ _dbg = Debugger.get(__name__)
 logger = _dbg.logger
 
 # Device opening (validated on hardware: 100 % ingest, max gap 21.7 ms).
+# Latency "high", not "low": on ALSA hw: devices "low" leaves a host buffer of a single block
+# (21.3 ms at 48 kHz) and any scheduling hiccup overruns it. Measured on Linux/PipeWire with a
+# CM108 USB adapter (hw:5,0), 10 s each: "low" 6 overflows / 96.9 % ingest at 48 kHz and
+# 82 overflows / 58 % at 44.1 kHz; "high" (2 blocks, 42.7 ms) 0 overflows / 99.8 % at both.
+# Latency does not affect the measurement: timing comes from the ADC stamps, only the plots
+# lag a few ms more.
 PRIMARY_BLOCKSIZE: int = 1024
-PRIMARY_LATENCY: str = "low"
+PRIMARY_LATENCY: str = "high"
 FALLBACK_BLOCKSIZE: int = 0
 FALLBACK_LATENCY: str = "high"
 
@@ -72,7 +78,8 @@ FALLBACK_LATENCY: str = "high"
 BUFFER_S: float = 10.0
 TICK_MS: int = 33
 WAVEFORM_WINDOW_S: float = 0.6
-# 960 bins divide 0.6 s exactly at 48 and 96 kHz (no sample dropped by the envelope).
+# 960 bins divide 0.6 s exactly at 48 and 96 kHz; at 44.1 kHz the oldest 540 samples
+# (12 ms) of the window are dropped so the bins stay whole (display only).
 WAVEFORM_BINS: int = 960
 LEVEL_PERIOD_S: float = 0.1
 HEALTH_PERIOD_S: float = 0.5

@@ -466,6 +466,7 @@ class MeasureStreamWorker(CaptureStreamWorker):
             bph=float(cfg.bph),
             lift_angle_deg=None if cfg.quartz else float(cfg.lift_angle),
             quartz=cfg.quartz,
+            normalize=cfg.normalize,
             span_s=SPAN_S,
             calibration=cal,
             calibration_source=source,
@@ -486,6 +487,8 @@ class MeasureStreamWorker(CaptureStreamWorker):
                 tags["ADV_TG_QUARTZ"] = "1"
             else:
                 tags["ADV_TG_LIFT_ANGLE"] = f"{cfg.lift_angle:g}"
+            if cfg.normalize:
+                tags["ADV_TG_NORMALIZE"] = "1"
             with self._rec_lock:
                 self._pending_recording = path
         _dbg.process_start(
@@ -494,6 +497,7 @@ class MeasureStreamWorker(CaptureStreamWorker):
             bph=cfg.bph,
             lift=cfg.lift_angle,
             fs=fs,
+            normalize=cfg.normalize,
             calibration=source,
             recording=str(path) if path else None,
         )
