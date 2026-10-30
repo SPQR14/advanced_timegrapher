@@ -29,10 +29,11 @@ through a microphone and shows, in real time:
 6. [Quartz watches](#quartz-watches)
 7. [Sound card clock calibration](#sound-card-clock-calibration)
 8. [Saving results](#saving-results)
-9. [Help us improve it](#help-us-improve-it)
-10. [Troubleshooting](#troubleshooting)
-11. [Beta limitations](#beta-limitations)
-12. [Support the project](#support-the-project) · [Licence](#licence-and-technical-documentation)
+9. [Analyzing a recording](#analyzing-a-recording)
+10. [Help us improve it](#help-us-improve-it)
+11. [Troubleshooting](#troubleshooting)
+12. [Beta limitations](#beta-limitations)
+13. [Support the project](#support-the-project) · [Licence](#licence-and-technical-documentation)
 
 ## What you need
 
@@ -108,7 +109,9 @@ Terminal app (or your IDE) will ask for microphone access.
 ## Your first measurement
 
 1. **Plug in the microphone**, then open the app. It uses your system's default input; you can
-   choose another one in **IN Device** (top bar). Leave **Sample Rate** at 48 kHz.
+   choose another one in **IN Device** (top bar). Leave **Sample Rate** at 48 kHz; choose
+   **44.1 kHz** only if the microphone refuses 48 kHz (some USB microphones on Linux/PipeWire
+   run at 44.1 kHz).
 2. **Put the watch on the microphone**, in the position you want to measure. Dial up is the
    most common. Choose the same position in **Position**:
    - **DU** dial up · **DD** dial down · **CU** crown up · **CD** crown down · **CL** crown left
@@ -133,7 +136,7 @@ Terminal app (or your IDE) will ask for microphone access.
 | Element | Meaning |
 |---|---|
 | **Rate, Beat error, Amplitude** cards (left) | `---.-` = not enough data yet, or confidence too low to show a figure. **Grey** figure = doubtful, use with caution. |
-| **Signal Quality / SNR** bar | Before the watch is detected it shows the microphone level (dBFS). Then it shows the detection quality: signal-to-noise ratio and % of usable beats. **Green** = good; **amber** = could be better; **red with ⚠** = the signal is clipping: lower the microphone gain. |
+| **Signal Quality / SNR** bar | Before the watch is detected it shows the microphone level (dBFS). Then it shows the detection quality: signal-to-noise ratio and % of usable beats. **Green** = good; **amber** = could be better; **red with ⚠** = the signal is clipping: lower the microphone gain. Below it, **Normalize audio** (see [Tips](#tips-for-a-good-measurement)). |
 | Statistics panel | Maximum, minimum, spread and mean rate of the test, elapsed time and **Clock Drift** (see [calibration](#sound-card-clock-calibration)). |
 | **Paper Tape** (centre) | Like the paper strip of a mechanical timegrapher: **one dot for every tic (cyan) and every tac (orange)**, showing how early or late it arrives (ms) against the nominal beat. A healthy watch draws **two straight rows**: rising = gaining, falling = losing; the steeper, the larger the rate (the green dashed lines are the COSC limits, −4 and +6 s/d). The rows are timed at the drop (P3), so their distance is the tic/tac offset at that sound, not exactly the beat error card (measured at P1). Scattered dots = noise or an irregular escapement; a row that jumps up or down = the sound of that beat changed. It rescales by itself; if you pan or zoom it, press **Center Trace** to go back. |
 | **Escapement Oscilloscope** (bottom left) | The last beat, with its three sounds: **P1** unlocking, **P2** impulse and **P3** drop. |
@@ -148,6 +151,13 @@ Terminal app (or your IDE) will ask for microphone access.
   the vibration of the table, not the air.
 - If the bar turns **red with ⚠**, the signal is clipping: lower the microphone volume in your
   system's sound settings, or move the watch slightly.
+- If it still clips with the volume at its minimum (loud watches such as many Timex quartz, or
+  USB adapters with a hardware **auto gain control**), tick **Normalize audio** under the
+  signal quality bar. It brings the level down by software before the analysis so the clipped
+  beats are still measured. Use it **only** when the gain cannot be lowered: clipping cannot be
+  undone. It applies from the next test and cannot be changed during a test.
+  - On Linux, first try to turn the adapter's auto gain off, e.g.
+    `amixer -c <card> sset 'Auto Gain Control' off` (`cat /proc/asound/cards` lists the cards).
 - If figures never appear, check the BPH (a wrong BPH is the most common cause; the status bar
   may warn about it) and that the watch is firmly held.
 - Wind the watch fully and let it run for a few minutes before measuring.
@@ -156,10 +166,11 @@ Terminal app (or your IDE) will ask for microphone access.
 
 ## Quartz watches
 
-1. Tick **Quartz** next to the BPH. The **BPH** list becomes **Steps**: the number of steps per
-   second of the seconds hand. Most quartz watches: **1/s**. "Sweeping" seconds hands such as
-   the Bulova Precisionist: **16/s**.
-2. The lift angle and the caliber list are disabled; only the **rate** is measured.
+1. Tick **Quartz** next to the BPH. **Caliber**, **BPH** (shown as **Steps**, fixed at **1/s**,
+   the step rate of almost every quartz watch) and **Lift Angle** are disabled; only the
+   **rate** is measured.
+2. If the watch is so loud that the signal clips even at the minimum gain, see
+   **Normalize audio** in [Tips](#tips-for-a-good-measurement).
 3. Many quartz movements correct their rate in jumps every few seconds or minutes
    (inhibition), so use long tests (5 minutes or more).
 
@@ -174,9 +185,14 @@ correction applied and its confidence level (1–3).
 For a more precise correction, press **Calibrate clock…** (under the statistics):
 
 - After a **long test (15 minutes or more)**, press **Use live estimate** and then **Save**.
-- If you have a reference (a quartz watch of known error, a GPS with PPS output), type the
-  measured clock error in **Clock error** and its **Uncertainty**, add a note and press
-  **Save**. A positive value means the card's clock runs fast (watches look slow).
+- **With a quartz watch of known rate** (checked against a time signal over several days):
+  measure it, open **Calibrate clock…** and, in **From a reference watch of known rate**, type
+  its **known rate**. The **measured rate** is already filled in with the last reading,
+  without any clock correction. The window computes `ppm = (known − measured) / 0.0864`;
+  press **Use this value** and then **Save**.
+- With another reference (e.g. a GPS with PPS output), type the clock error directly in
+  **Clock error** and its **Uncertainty**, add a note and press **Save**. A positive value
+  means the card's clock runs fast (watches look slow).
 
 The calibration is stored per microphone and is applied from the **next** test. The same window
 shows the history and lets you delete it.
@@ -191,6 +207,40 @@ shows the history and lets you delete it.
   (Positional Delta)** shows the differences between positions.
 - **Export Results to CSV**, **Export Test Results**, **Export Traces**, **Print Traces**: the
   test data as CSV, and the plots as an image or on paper.
+
+## Analyzing a recording
+
+**Analyze Recording** (above **Record Audio**) looks for defects that the live figures do not
+show. It analyses the last test's recording (tests of up to 240 s are recorded); if there is
+none, or after you saved it, it asks for a WAV/FLAC file. The BPH and lift angle stored in the
+app's own recordings are used; for other files, those of the top bar. Mechanical watches only.
+Beat detection takes about 1 s per 40 s of audio.
+
+The window has three tabs:
+
+- **Gear train**: periodic errors once per turn of a wheel.
+  - **Escape wheel**: one turn every `2 × teeth × 3600 / BPH` seconds (3.75 s at 28800,
+    5 s at 21600 with the usual 15 teeth; change the teeth if your caliber differs).
+  - **Fourth wheel** (seconds wheel): one turn per minute. It needs **at least 180 s of
+    recording** (three turns): use the **240 s** test. Shorter recordings show "Record ≥ 180 s".
+  - The plots show the timing error of every beat, the loudness of the drop (P3) and their
+    spectrum; the table gives, for each wheel, the amplitude, the equivalent rate ripple and
+    whether it is present (false-alarm probability below 1 %).
+- **Features**: the feature vector of every 60 s window and of the whole recording: escape
+  and fourth wheel spectral energy, mean, variance, skewness and kurtosis of the P1→P2 and
+  P2→P3 times, P1/P2 and P3/P2 energy ratios, rate, beat error, amplitude, sounds before P1
+  and abrupt timing jumps.
+- **Diagnosis**: indications of **rebanking** (amplitude above 310° with sounds before P1 and
+  timing jumps), **lack of pallet lubrication** (weak impulse P2 against the drop P3 and an
+  unstable P1→P2), **magnetism / off-centre hairspring** (rate above +30 s/d with a beat error
+  that changes with the position) and the gear-train components. Save positions (**Save
+  Position**, at least one horizontal and one vertical) before opening the window to get the
+  horizontal-vertical rate and amplitude differences.
+
+The thresholds of these indications are **provisional** (not yet calibrated with real watches
+of known faults): treat them as something to check on the bench, never as a diagnosis, and
+repeat the test in another position and after winding before opening the watch.
+**Export features…** saves everything as JSON.
 
 ## Help us improve it
 
@@ -229,7 +279,10 @@ If the app does not open at all, attach the files of the log folder instead:
 | Windows: "Windows protected your PC" | **More info → Run anyway**. |
 | The status bar says *"No sound from the microphone"* | The system is not giving the microphone to the app. macOS: **System Settings → Privacy & Security → Microphone**; Windows: **Settings → Privacy & security → Microphone**. Then restart the app. Also check **IN Device** and the input volume. |
 | The level is fine but figures never appear | Check the **BPH** and that the watch is firmly on the microphone. Try another position or a quieter place. |
-| The bar is red with ⚠ | The signal clips: lower the input volume. |
+| The bar is red with ⚠ | The signal clips: lower the input volume. If it clips even at the minimum, tick **Normalize audio** (see [Tips](#tips-for-a-good-measurement)). |
+| *"Invalid sample rate"* when starting | The microphone does not accept that rate: choose **44.1 kHz** (or 48 kHz) in **Sample Rate**. |
+| **Analyze Recording** asks for a file | There is no recording of the last test (longer than 240 s, already saved, or no test yet): open the saved FLAC or any WAV/FLAC. |
+| The fourth wheel says "Record ≥ 180 s" | The recording is too short to see one turn per minute three times: repeat with the **240 s** test. |
 | Figures jump a lot | Noise (engines, voices, the table) or a watch whose rate really varies. Use foam under the stand and longer tests. |
 | Amplitude in grey and a *"tic and tac amplitude differ"* warning | The amplitude is only indicative for this beat; check the lift angle and the microphone contact. |
 | "Calibrate clock…" says it is not available | Choose a real microphone in **IN Device** (not the simulator). |
@@ -240,6 +293,9 @@ If the app does not open at all, attach the files of the log folder instead:
 - The beat error is sensitive to ambient noise.
 - No support for beat rates above 36000 BPH.
 - Builds are not code-signed (see [Installation](#installation)).
+- Quartz mode measures watches with **1 step per second** only.
+- The indications of **Analyze Recording** use provisional thresholds (see
+  [Analyzing a recording](#analyzing-a-recording)).
 - Some measurement warnings in the status bar (e.g. *"sin enganche… ¿BPH mal configurado?"*,
   no lock: wrong BPH?) are only in Spanish for now.
 
@@ -251,7 +307,10 @@ the ☕ button in the app).
 ## Licence and technical documentation
 
 Free software under the **GNU GPL v3.0 or later** (see [`LICENSE`](LICENSE)). Technical
-documentation (architecture, algorithms, validation and command-line tools, in Spanish):
+documentation, in Spanish: what is new in v0.8.0 (capture, audio normalization, recording
+analysis, features and diagnosis rules) in
+[`docs/documentation_v0.8.0-beta.md`](docs/documentation_v0.8.0-beta.md); architecture,
+algorithms, validation and command-line tools in
 [`docs/documentation_v0.6.3-beta3.md`](docs/documentation_v0.6.3-beta3.md).
 
 ---
@@ -281,10 +340,11 @@ tic-tac con un micrófono y muestra en tiempo real:
 6. [Relojes de cuarzo](#relojes-de-cuarzo)
 7. [Calibración del reloj de la tarjeta](#calibración-del-reloj-de-la-tarjeta)
 8. [Guardar resultados](#guardar-resultados)
-9. [Ayúdanos a mejorarla](#ayúdanos-a-mejorarla)
-10. [Solución de problemas](#solución-de-problemas)
-11. [Limitaciones de la beta](#limitaciones-de-la-beta)
-12. [Apoya el proyecto](#apoya-el-proyecto) · [Licencia](#licencia-y-documentación-técnica)
+9. [Analizar una grabación](#analizar-una-grabación)
+10. [Ayúdanos a mejorarla](#ayúdanos-a-mejorarla)
+11. [Solución de problemas](#solución-de-problemas)
+12. [Limitaciones de la beta](#limitaciones-de-la-beta)
+13. [Apoya el proyecto](#apoya-el-proyecto) · [Licencia](#licencia-y-documentación-técnica)
 
 ## Qué necesitas
 
@@ -361,7 +421,8 @@ aplicación Terminal (o tu editor) pedirá acceso al micrófono.
 
 1. **Conecta el micrófono** y después abre la aplicación. Usa la entrada predeterminada del
    sistema; puedes elegir otra en **Dispositivo IN** (barra superior). Deja **Frec. Muestreo**
-   en 48 kHz.
+   en 48 kHz; elige **44.1 kHz** solo si el micrófono no acepta 48 kHz (algunos micrófonos USB
+   en Linux/PipeWire funcionan a 44.1 kHz).
 2. **Coloca el reloj en el micrófono**, en la posición que quieras medir. La más habitual es
    esfera arriba. Elige la misma en **Posición**:
    - **DU** esfera arriba · **DD** esfera abajo · **CU** corona arriba · **CD** corona abajo ·
@@ -388,7 +449,7 @@ aplicación Terminal (o tu editor) pedirá acceso al micrófono.
 | Elemento | Qué significa |
 |---|---|
 | Tarjetas de **marcha, error de batimiento y amplitud** (izquierda) | `---.-` = todavía no hay datos suficientes o la confianza es demasiado baja para mostrar una cifra. Cifra **en gris** = dudosa, tómala con cautela. |
-| Barra **Calidad de Señal / SNR** | Antes de detectar el reloj muestra el nivel del micrófono (dBFS). Después, la calidad de la detección: relación señal/ruido y % de batimientos útiles. **Verde** = bien; **ámbar** = mejorable; **rojo con ⚠** = la señal satura: baja la ganancia del micrófono. |
+| Barra **Calidad de Señal / SNR** | Antes de detectar el reloj muestra el nivel del micrófono (dBFS). Después, la calidad de la detección: relación señal/ruido y % de batimientos útiles. **Verde** = bien; **ámbar** = mejorable; **rojo con ⚠** = la señal satura: baja la ganancia del micrófono. Debajo, **Normalizar audio** (ver [Consejos](#consejos-para-una-buena-medida)). |
 | Panel de estadísticas | Marcha máxima, mínima, diferencia y media de la prueba, tiempo transcurrido y **Deriva de Reloj** (ver [calibración](#calibración-del-reloj-de-la-tarjeta)). |
 | **Cinta de papel** (centro) | Como la tira de papel de un cronocomparador mecánico: **un punto por cada tic (cian) y cada tac (naranja)**, que indica cuánto se adelanta o atrasa (ms) respecto al batimiento nominal. Un reloj sano dibuja **dos hileras rectas**: si suben, adelanta; si bajan, atrasa; cuanto más inclinadas, mayor la marcha (las líneas verdes discontinuas son los límites COSC, −4 y +6 s/d). Las hileras se miden en la caída (P3), así que su separación es el desfase tic/tac en ese sonido, no exactamente la tarjeta de error de batimiento (medido en P1). Puntos dispersos = ruido o un escape irregular; una hilera que salta hacia arriba o abajo = cambió el sonido de ese batimiento. Se reajusta sola; si la mueves o amplías, pulsa **Centrar Trazo** para volver. |
 | **Osciloscopio de Escape** (abajo a la izquierda) | El último batimiento con sus tres sonidos: **P1** desbloqueo, **P2** impulso y **P3** caída. |
@@ -403,6 +464,15 @@ aplicación Terminal (o tu editor) pedirá acceso al micrófono.
   capta sobre todo la vibración de la mesa, no el aire.
 - Si la barra se pone **roja con ⚠**, la señal satura: baja el volumen del micrófono en los
   ajustes de sonido del sistema o mueve un poco el reloj.
+- Si sigue saturando con el volumen al mínimo (relojes muy ruidosos, como muchos cuarzos Timex,
+  o adaptadores USB con **control automático de ganancia** por hardware), marca **Normalizar
+  audio** bajo la barra de calidad de señal. Baja el nivel por software antes del análisis para
+  que los batimientos saturados se sigan midiendo. Úsalo **solo** cuando no se pueda bajar la
+  ganancia: el recorte no se puede deshacer. Se aplica desde la siguiente prueba y no se puede
+  cambiar durante una prueba.
+  - En Linux, prueba antes a desactivar la ganancia automática del adaptador, p. ej.
+    `amixer -c <tarjeta> sset 'Auto Gain Control' off` (`cat /proc/asound/cards` lista las
+    tarjetas).
 - Si nunca aparecen cifras, revisa los A/h (unos A/h equivocados son la causa más frecuente; la
   barra de estado puede avisarlo) y que el reloj esté bien sujeto.
 - Da cuerda completa al reloj y déjalo funcionar unos minutos antes de medir.
@@ -411,10 +481,11 @@ aplicación Terminal (o tu editor) pedirá acceso al micrófono.
 
 ## Relojes de cuarzo
 
-1. Marca **Cuarzo** junto a los A/h. La lista **A/h** pasa a ser **Pasos**: los pasos por
-   segundo del segundero. La mayoría de cuarzos: **1/s**. Segunderos "de barrido" como los
-   Bulova Precisionist: **16/s**.
-2. El ángulo y la lista de calibres se desactivan; solo se mide la **marcha**.
+1. Marca **Cuarzo** junto a los A/h. Se desactivan **Calibre**, **A/h** (que se muestra como
+   **Pasos**, fijo en **1/s**, el paso de casi todos los relojes de cuarzo) y el **Ángulo**; solo
+   se mide la **marcha**.
+2. Si el reloj es tan ruidoso que la señal satura incluso con la ganancia al mínimo, ver
+   **Normalizar audio** en [Consejos](#consejos-para-una-buena-medida).
 3. Muchos cuarzos corrigen su marcha a saltos cada pocos segundos o minutos (inhibición), así
    que usa pruebas largas (5 minutos o más).
 
@@ -430,10 +501,14 @@ Para una corrección más precisa, pulsa **Calibrar reloj…** (bajo las estadí
 
 - Tras una **prueba larga (15 minutos o más)**, pulsa **Usar la estimación en vivo** y después
   **Guardar**.
-- Si tienes una referencia (un cuarzo de error conocido, un GPS con salida PPS), escribe el
-  error medido en **Error del reloj** y su **Incertidumbre**, añade una nota y pulsa
-  **Guardar**. Un valor positivo significa que el reloj de la tarjeta adelanta (los relojes
-  parecen atrasar).
+- **Con un cuarzo de marcha conocida** (comprobada contra una señal horaria durante varios
+  días): mídelo, abre **Calibrar reloj…** y, en **Desde un reloj de referencia de marcha
+  conocida**, escribe su **marcha conocida**. La **marcha medida** ya viene rellenada con la
+  última lectura, sin corrección de reloj. La ventana calcula
+  `ppm = (conocida − medida) / 0.0864`; pulsa **Usar este valor** y después **Guardar**.
+- Con otra referencia (p. ej. un GPS con salida PPS), escribe directamente el error en
+  **Error del reloj** y su **Incertidumbre**, añade una nota y pulsa **Guardar**. Un valor
+  positivo significa que el reloj de la tarjeta adelanta (los relojes parecen atrasar).
 
 La calibración se guarda por micrófono y se aplica desde la **siguiente** prueba. La misma
 ventana muestra el historial y permite borrarlo.
@@ -448,6 +523,41 @@ ventana muestra el historial y permite borrarlo.
   Globales (Delta Posicional)** muestra las diferencias entre posiciones.
 - **Exportar resultados a CSV**, **Exportar resultados de la prueba**, **Exportar Trazas** e
   **Imprimir Trazas**: los datos de la prueba en CSV y las gráficas como imagen o en papel.
+
+## Analizar una grabación
+
+**Analizar Grabación** (encima de **Grabar Sonido**) busca defectos que las cifras en vivo no
+muestran. Analiza la grabación de la última prueba (se graban las pruebas de hasta 240 s); si
+no hay ninguna, o ya la guardaste, pide un archivo WAV/FLAC. Usa los A/h y el ángulo guardados
+en las grabaciones de la propia aplicación; en otros archivos, los de la barra superior. Solo
+relojes mecánicos. La detección de batimientos tarda aprox. 1 s por cada 40 s de audio.
+
+La ventana tiene tres pestañas:
+
+- **Tren de rodaje**: errores periódicos una vez por vuelta de una rueda.
+  - **Rueda de escape**: una vuelta cada `2 × dientes × 3600 / A/h` segundos (3.75 s a 28800,
+    5 s a 21600 con los 15 dientes habituales; cambia los dientes si tu calibre es distinto).
+  - **Cuarta rueda** (rueda de segundos): una vuelta por minuto. Necesita **al menos 180 s de
+    grabación** (tres vueltas): usa la prueba de **240 s**. Con grabaciones más cortas aparece
+    "Graba ≥ 180 s".
+  - Las gráficas muestran el error de tiempo de cada batimiento, la fuerza de la caída (P3) y
+    su espectro; la tabla da, para cada rueda, la amplitud, el rizado de marcha equivalente y
+    si está presente (probabilidad de falsa alarma menor del 1 %).
+- **Características**: el vector de características de cada ventana de 60 s y de la grabación
+  completa: energía espectral de la rueda de escape y de la cuarta rueda; media, varianza,
+  asimetría y curtosis de los tiempos P1→P2 y P2→P3; relaciones de energía P1/P2 y P3/P2;
+  marcha, error de batimiento, amplitud, sonidos antes de P1 y saltos bruscos de tiempo.
+- **Diagnóstico**: indicios de **rebanking** (amplitud por encima de 310° con sonidos antes de
+  P1 y saltos de tiempo), **falta de lubricación en las paletas** (impulso P2 débil frente a la
+  caída P3 y P1→P2 inestable), **magnetismo / espiral descentrada** (marcha por encima de
+  +30 s/d con un error de batimiento que cambia con la posición) y las componentes del tren de
+  rodaje. Guarda posiciones (**Guardar Posición**, al menos una horizontal y una vertical) antes
+  de abrir la ventana para obtener las diferencias de marcha y amplitud horizontal-vertical.
+
+Los umbrales de estos indicios son **provisionales** (aún no están calibrados con relojes
+reales de averías conocidas): tómalos como algo a comprobar en el banco, nunca como un
+diagnóstico, y repite la prueba en otra posición y tras dar cuerda antes de abrir el reloj.
+**Exportar características…** lo guarda todo en JSON.
 
 ## Ayúdanos a mejorarla
 
@@ -488,7 +598,10 @@ su lugar los archivos de la carpeta de registros:
 | Windows: "Windows protegió su PC" | **Más información → Ejecutar de todas formas**. |
 | La barra de estado dice *"No llega sonido del micrófono"* | El sistema no le da el micrófono a la aplicación. macOS: **Ajustes del Sistema → Privacidad y seguridad → Micrófono**; Windows: **Configuración → Privacidad y seguridad → Micrófono**. Después reinicia la aplicación. Revisa también **Dispositivo IN** y el volumen de entrada. |
 | El nivel es bueno pero nunca salen cifras | Revisa los **A/h** y que el reloj esté bien apoyado en el micrófono. Prueba otra posición o un sitio más silencioso. |
-| La barra está roja con ⚠ | La señal satura: baja el volumen de entrada. |
+| La barra está roja con ⚠ | La señal satura: baja el volumen de entrada. Si satura incluso al mínimo, marca **Normalizar audio** (ver [Consejos](#consejos-para-una-buena-medida)). |
+| *"Invalid sample rate"* al iniciar | El micrófono no acepta esa frecuencia: elige **44.1 kHz** (o 48 kHz) en **Frec. Muestreo**. |
+| **Analizar Grabación** pide un archivo | No hay grabación de la última prueba (duró más de 240 s, ya la guardaste o aún no hay prueba): abre el FLAC guardado o cualquier WAV/FLAC. |
+| La cuarta rueda dice "Graba ≥ 180 s" | La grabación es demasiado corta para ver tres veces la vuelta por minuto: repite con la prueba de **240 s**. |
 | Las cifras saltan mucho | Ruido (motores, voces, la mesa) o un reloj cuya marcha varía de verdad. Usa espuma bajo el soporte y pruebas más largas. |
 | Amplitud en gris y aviso *"amplitud de tic y tac distinta"* | La amplitud es orientativa en esa medida; revisa el ángulo y el contacto con el micrófono. |
 | "Calibrar reloj…" dice que no está disponible | Elige un micrófono real en **Dispositivo IN** (no el simulador). |
@@ -499,6 +612,9 @@ su lugar los archivos de la carpeta de registros:
 - El error de batimiento es sensible al ruido ambiental.
 - No admite frecuencias por encima de 36000 A/h.
 - Las aplicaciones no están firmadas (ver [Instalación](#instalación)).
+- El modo cuarzo solo mide relojes de **1 paso por segundo**.
+- Los indicios de **Analizar Grabación** usan umbrales provisionales (ver
+  [Analizar una grabación](#analizar-una-grabación)).
 - Algunos avisos de la medida en la barra de estado solo están en español, aunque la interfaz
   esté en inglés.
 
@@ -510,5 +626,8 @@ desde el botón ☕ de la aplicación).
 ## Licencia y documentación técnica
 
 Software libre bajo la licencia **GNU GPL v3.0 o posterior** (ver [`LICENSE`](LICENSE)). La
-documentación técnica (arquitectura, algoritmos, validación y herramientas de consola) está en
+documentación técnica: lo nuevo de la v0.8.0 (captura, normalización de audio, análisis de
+grabaciones, características y reglas de diagnóstico) en
+[`docs/documentation_v0.8.0-beta.md`](docs/documentation_v0.8.0-beta.md); arquitectura,
+algoritmos, validación y herramientas de consola en
 [`docs/documentation_v0.6.3-beta3.md`](docs/documentation_v0.6.3-beta3.md).

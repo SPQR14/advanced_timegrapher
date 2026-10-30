@@ -145,6 +145,118 @@ class Translator:
             "btn_export_traces": "Export Traces",
             "btn_print_traces": "Print Traces",
             "btn_record_audio": "Record Audio",
+            "btn_analyze_recording": "Analyze Recording",
+            "btn_analyze_recording_tooltip": (
+                "Look for cyclical gear-train defects (escape wheel, fourth wheel) in the last "
+                "session's recording, or in a WAV/FLAC file"
+            ),
+            "an_title": "Recording analysis — gear train",
+            "an_source": "Recording: {name}",
+            "an_last_session": "last session",
+            "an_summary": (
+                "{duration:.0f} s · {bph} A/h · {used} beats used ({missing} missing) · "
+                "mean rate {rate:+.1f} s/d (no clock correction)"
+            ),
+            "an_teeth": "Escape wheel teeth:",
+            "an_teeth_tooltip": "15 in almost every Swiss and Japanese calibre; count them if in doubt",
+            "an_escape_period": "→ one turn every {period:.2f} s at {bph} A/h (2 × teeth × 3600 / BPH)",
+            "an_open_file": "Open file…",
+            "an_running": "Detecting beats… (about 1 s per 40 s of audio)",
+            "an_failed": "The analysis failed: {error}",
+            "an_too_few_beats": "Only {found} beats could be timed: check the BPH and the signal level.",
+            "an_quartz": "Not applicable to quartz watches: the gear train analysis needs an escapement.",
+            "an_busy": "Stop the session before analysing its recording.",
+            "an_found": "Periodic components found: {n}.",
+            "an_none_found": "No periodic gear-train component found.",
+            "an_warn_short_for_escape": "Too short for the escape wheel: record at least {min_s:.0f} s.",
+            "an_warn_short_for_fourth": "Too short for the fourth wheel: record at least {min_s:.0f} s (240 s test).",
+            "an_warn_many_missing": "Many beats were missed: the result is less reliable.",
+            "an_plot_timing": "Timing residual per beat (rate, drift and beat error removed)",
+            "an_plot_energy": "P3 drop energy (Teager-Kaiser) relative to its median",
+            "an_plot_spectrum": "Lomb-Scargle periodogram (normalised)",
+            "an_axis_time": "Time (s)",
+            "an_axis_period": "Period (s)",
+            "an_col_component": "Wheel",
+            "an_col_series": "Series",
+            "an_col_expected": "Expected period",
+            "an_col_measured": "Measured period",
+            "an_col_amplitude": "Amplitude",
+            "an_col_ripple": "Rate ripple",
+            "an_col_fap": "False-alarm prob.",
+            "an_col_verdict": "Verdict",
+            "an_escape_wheel": "Escape wheel",
+            "an_fourth_wheel": "Fourth wheel",
+            "an_series_timing": "Timing",
+            "an_series_energy": "P3 energy",
+            "an_verdict_present": "Present",
+            "an_verdict_absent": "Not detected",
+            "an_verdict_unresolvable": "Record ≥ {min_s:.0f} s",
+            "an_tab_gear": "Gear train",
+            "an_tab_features": "Features",
+            "an_tab_diagnosis": "Diagnosis",
+            "an_export": "Export features…",
+            "an_export_tooltip": "Save the feature vectors, the gear-train components and the findings as JSON (a record for the ML dataset)",
+            "an_whole": "Whole recording",
+            "an_features_help": (
+                "One column per 60 s window and one for the whole recording. Escape-wheel energy at "
+                "f_beat / (2 × teeth) (f_beat / 30 with 15 teeth); fourth-wheel energy at 1/60 Hz, "
+                "only for the whole recording and from 180 s of audio (one 60 s window holds a "
+                "single turn, which cannot be told from the drift of the rate)."
+            ),
+            "an_f_n_beats": "Beats",
+            "an_f_rate": "Rate (s/d)",
+            "an_f_be": "Beat error (ms)",
+            "an_f_amp": "Amplitude (°)",
+            "an_f_escape_power": "Escape wheel: LS power",
+            "an_f_escape_amp": "Escape wheel: amplitude (µs)",
+            "an_f_fourth_power": "Fourth wheel: LS power",
+            "an_f_fourth_amp": "Fourth wheel: amplitude (µs)",
+            "an_f_d12_mean": "t_P2 − t_P1: mean (ms)",
+            "an_f_d12_var": "t_P2 − t_P1: variance (ms²)",
+            "an_f_d12_skew": "t_P2 − t_P1: skewness",
+            "an_f_d12_kurt": "t_P2 − t_P1: excess kurtosis",
+            "an_f_d23_mean": "t_P3 − t_P2: mean (ms)",
+            "an_f_d23_var": "t_P3 − t_P2: variance (ms²)",
+            "an_f_d23_skew": "t_P3 − t_P2: skewness",
+            "an_f_d23_kurt": "t_P3 − t_P2: excess kurtosis",
+            "an_f_e1_e2": "E_P1 / E_P2 (median)",
+            "an_f_e3_e2": "E_P3 / E_P2 (median)",
+            "an_f_spurious": "Beats with a sound before P1",
+            "an_f_jumps": "Abrupt timing excursions",
+            "an_col_finding": "Indication",
+            "an_col_level": "Level",
+            "an_col_evidence": "Evidence",
+            "an_no_findings": "No indication of a defect.",
+            "an_level_probable": "Probable",
+            "an_level_possible": "Possible",
+            "an_finding_rebanking": "Rebanking / knocking (ellipse hitting the fork)",
+            "an_finding_pallet_lubrication": "Lack of lubrication on the pallet stones",
+            "an_finding_magnetism": "Magnetism / off-centre hairspring",
+            "an_finding_escape_wheel": "Escape wheel: eccentricity or damaged tooth",
+            "an_finding_fourth_wheel": "Fourth wheel: bent pivot or dirty tooth",
+            "an_positional": (
+                "Positions {positions}: ΔRate H−V {rate:+.1f} s/d · ΔAmp H−V {amp:+.0f}° · "
+                "beat error spread {be:.2f} ms"
+            ),
+            "an_positional_none": (
+                "No horizontal-vertical differentials: save at least one horizontal (DU/DD) and "
+                "one vertical (CU/CD/CL/CR) position."
+            ),
+            "an_diag_help": (
+                "Rules: rebanking = amplitude > 310° with a sound before P1 and abrupt timing "
+                "excursions; lubrication = P2 more than 10 dB below P3 and an unstable P1→P2 "
+                "(variation > 5 %); magnetism = rate > +30 s/d with a beat error that changes with "
+                "the position (> 0.5 ms). The thresholds are provisional, not calibrated with "
+                "labelled watches: an indication to check on the bench, never a diagnosis."
+            ),
+            "an_help": (
+                "A component is present when its false-alarm probability is below 1 %. In timing "
+                "it is a rate ripple once per turn of the wheel; in P3 energy, a drop that gets "
+                "louder and softer. Escape wheel: eccentric wheel or pinion, damaged or dirty "
+                "tooth, bent pivot. Fourth wheel: eccentric wheel, damaged tooth, seconds hand "
+                "rubbing. It is a symptom, not a diagnosis: repeat it in another position and "
+                "after winding before opening the watch."
+            ),
             "dialog_save_csv": "Export Telemetry Results to CSV",
             "dialog_export_test_results": "Export Global Statistics & Positional Delta",
             "dialog_export_traces": "Export Audio Traces",
@@ -330,6 +442,119 @@ class Translator:
             "btn_export_traces": "Exportar Trazas",
             "btn_print_traces": "Imprimir Trazas",
             "btn_record_audio": "Grabar Sonido",
+            "btn_analyze_recording": "Analizar Grabación",
+            "btn_analyze_recording_tooltip": (
+                "Busca defectos cíclicos del tren de rodaje (rueda de escape, cuarta rueda) en la "
+                "grabación de la última sesión o en un archivo WAV/FLAC"
+            ),
+            "an_title": "Análisis de la grabación — tren de rodaje",
+            "an_source": "Grabación: {name}",
+            "an_last_session": "última sesión",
+            "an_summary": (
+                "{duration:.0f} s · {bph} A/h · {used} batimientos usados ({missing} perdidos) · "
+                "marcha media {rate:+.1f} s/d (sin corrección de reloj)"
+            ),
+            "an_teeth": "Dientes de la rueda de escape:",
+            "an_teeth_tooltip": "15 en casi todos los calibres suizos y japoneses; cuéntalos si dudas",
+            "an_escape_period": "→ una vuelta cada {period:.2f} s a {bph} A/h (2 × dientes × 3600 / BPH)",
+            "an_open_file": "Abrir archivo…",
+            "an_running": "Detectando batimientos… (aprox. 1 s por cada 40 s de audio)",
+            "an_failed": "El análisis falló: {error}",
+            "an_too_few_beats": "Solo se pudieron medir {found} batimientos: revisa el BPH y el nivel de señal.",
+            "an_quartz": "No aplicable a relojes de cuarzo: el análisis del rodaje necesita un escape.",
+            "an_busy": "Detén la sesión antes de analizar su grabación.",
+            "an_found": "Componentes periódicas encontradas: {n}.",
+            "an_none_found": "No se encontró ninguna componente periódica del rodaje.",
+            "an_warn_short_for_escape": "Demasiado corta para la rueda de escape: graba al menos {min_s:.0f} s.",
+            "an_warn_short_for_fourth": "Demasiado corta para la cuarta rueda: graba al menos {min_s:.0f} s (prueba de 240 s).",
+            "an_warn_many_missing": "Se perdieron muchos batimientos: el resultado es menos fiable.",
+            "an_plot_timing": "Residuo de tiempo por batimiento (sin marcha, deriva ni error de batimiento)",
+            "an_plot_energy": "Energía de la caída P3 (Teager-Kaiser) relativa a su mediana",
+            "an_plot_spectrum": "Periodograma de Lomb-Scargle (normalizado)",
+            "an_axis_time": "Tiempo (s)",
+            "an_axis_period": "Periodo (s)",
+            "an_col_component": "Rueda",
+            "an_col_series": "Serie",
+            "an_col_expected": "Periodo esperado",
+            "an_col_measured": "Periodo medido",
+            "an_col_amplitude": "Amplitud",
+            "an_col_ripple": "Rizado de marcha",
+            "an_col_fap": "Prob. falsa alarma",
+            "an_col_verdict": "Veredicto",
+            "an_escape_wheel": "Rueda de escape",
+            "an_fourth_wheel": "Cuarta rueda",
+            "an_series_timing": "Tiempo",
+            "an_series_energy": "Energía P3",
+            "an_verdict_present": "Presente",
+            "an_verdict_absent": "No detectada",
+            "an_verdict_unresolvable": "Graba ≥ {min_s:.0f} s",
+            "an_tab_gear": "Tren de rodaje",
+            "an_tab_features": "Características",
+            "an_tab_diagnosis": "Diagnóstico",
+            "an_export": "Exportar características…",
+            "an_export_tooltip": "Guarda los vectores de características, las componentes del rodaje y los indicios en JSON (un registro para el dataset de ML)",
+            "an_whole": "Grabación completa",
+            "an_features_help": (
+                "Una columna por ventana de 60 s y otra para la grabación completa. Energía de la "
+                "rueda de escape en f_beat / (2 × dientes) (f_beat / 30 con 15 dientes); de la "
+                "cuarta rueda en 1/60 Hz, solo para la grabación completa y a partir de 180 s de "
+                "audio (una ventana de 60 s contiene una sola vuelta, indistinguible de la deriva "
+                "de la marcha)."
+            ),
+            "an_f_n_beats": "Batimientos",
+            "an_f_rate": "Marcha (s/d)",
+            "an_f_be": "Error de batimiento (ms)",
+            "an_f_amp": "Amplitud (°)",
+            "an_f_escape_power": "Rueda de escape: potencia LS",
+            "an_f_escape_amp": "Rueda de escape: amplitud (µs)",
+            "an_f_fourth_power": "Cuarta rueda: potencia LS",
+            "an_f_fourth_amp": "Cuarta rueda: amplitud (µs)",
+            "an_f_d12_mean": "t_P2 − t_P1: media (ms)",
+            "an_f_d12_var": "t_P2 − t_P1: varianza (ms²)",
+            "an_f_d12_skew": "t_P2 − t_P1: asimetría",
+            "an_f_d12_kurt": "t_P2 − t_P1: exceso de curtosis",
+            "an_f_d23_mean": "t_P3 − t_P2: media (ms)",
+            "an_f_d23_var": "t_P3 − t_P2: varianza (ms²)",
+            "an_f_d23_skew": "t_P3 − t_P2: asimetría",
+            "an_f_d23_kurt": "t_P3 − t_P2: exceso de curtosis",
+            "an_f_e1_e2": "E_P1 / E_P2 (mediana)",
+            "an_f_e3_e2": "E_P3 / E_P2 (mediana)",
+            "an_f_spurious": "Batimientos con sonido antes de P1",
+            "an_f_jumps": "Excursiones bruscas de tiempo",
+            "an_col_finding": "Indicio",
+            "an_col_level": "Nivel",
+            "an_col_evidence": "Evidencia",
+            "an_no_findings": "Ningún indicio de defecto.",
+            "an_level_probable": "Probable",
+            "an_level_possible": "Posible",
+            "an_finding_rebanking": "Rebanking / knocking (rebote de la elipse en la horquilla)",
+            "an_finding_pallet_lubrication": "Falta de lubricación en las paletas del áncora",
+            "an_finding_magnetism": "Magnetismo / espiral descentrada",
+            "an_finding_escape_wheel": "Rueda de escape: excentricidad o diente dañado",
+            "an_finding_fourth_wheel": "Cuarta rueda: pivote doblado o diente sucio",
+            "an_positional": (
+                "Posiciones {positions}: ΔMarcha H−V {rate:+.1f} s/d · ΔAmp H−V {amp:+.0f}° · "
+                "dispersión del error de batimiento {be:.2f} ms"
+            ),
+            "an_positional_none": (
+                "Sin diferenciales horizontal-vertical: guarda al menos una posición horizontal "
+                "(DU/DD) y una vertical (CU/CD/CL/CR)."
+            ),
+            "an_diag_help": (
+                "Reglas: rebanking = amplitud > 310° con sonido antes de P1 y excursiones bruscas "
+                "de tiempo; lubricación = P2 más de 10 dB por debajo de P3 y P1→P2 inestable "
+                "(variación > 5 %); magnetismo = marcha > +30 s/d con un error de batimiento que "
+                "cambia con la posición (> 0.5 ms). Los umbrales son provisionales, no calibrados "
+                "con relojes etiquetados: un indicio a comprobar en el banco, nunca un diagnóstico."
+            ),
+            "an_help": (
+                "Una componente está presente cuando su probabilidad de falsa alarma es menor del "
+                "1 %. En el tiempo es un rizado de la marcha una vez por vuelta de la rueda; en la "
+                "energía P3, una caída que suena más fuerte y más débil. Rueda de escape: rueda o "
+                "piñón excéntricos, diente dañado o sucio, pivote doblado. Cuarta rueda: rueda "
+                "excéntrica, diente dañado, segundero que roza. Es un síntoma, no un diagnóstico: "
+                "repítelo en otra posición y tras dar cuerda antes de abrir el reloj."
+            ),
             "dialog_save_csv": "Exportar Resultados de Telemetría a CSV",
             "dialog_export_test_results": "Exportar Estadísticas Globales y Delta Posicional",
             "dialog_export_traces": "Exportar Trazas de Audio",

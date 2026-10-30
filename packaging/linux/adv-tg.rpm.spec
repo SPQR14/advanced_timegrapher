@@ -73,6 +73,9 @@ which update-desktop-database &>/dev/null && update-desktop-database %{_datadir}
 which gtk-update-icon-cache &>/dev/null && gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 
 %changelog
+* Fri Oct 30 2026 Alberto Pico <albertopicolara@gmail.com> - 0.8.0-1
+- Release version 0.8.0 (beta): recording analysis (gear train, feature vectors,
+  rule-based diagnosis), audio normalization, 44.1 kHz input, no ALSA overflows.
 * Wed Oct 28 2026 Alberto Pico <albertopicolara@gmail.com> - 0.7.0-1
 - Release version 0.7.0.
 * Tue Oct 27 2026 Alberto Pico <albertopicolara@gmail.com> - 0.6.1-1

@@ -496,7 +496,7 @@ de la base de calibres (`utils/db/watch_db.csv`):
 - **Diagnóstico largo (5 min o más)**:
   - envolvente con el operador de Teager-Kaiser, `Ψ[x[n]] = x²[n] − x[n−1]·x[n+1]`;
   - FFT o Lomb-Scargle de la serie de intervalos, para ver defectos periódicos del rodaje
-    (rueda de escape ~7.5 s, rueda de segundos 60 s).
+    (rueda de escape 2·Z·3600/BPH: 3.75 s a 28 800 A/h, 5 s a 21 600; rueda de segundos 60 s).
 - **Regulación en vivo**:
   - wavelets (Morlet, 8–16 kHz) para separar los transitorios del escape;
   - detector de cambio abrupto (> 3σ) que vacía el historial y reduce la ventana a 4–8
