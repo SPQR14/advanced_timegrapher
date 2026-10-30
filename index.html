@@ -1000,6 +1000,48 @@
       .brand-logo img { width: 28px; height: 28px; }
     }
 
+    /* --- Interface demo on tablets and phones: compact grid instead of a tall stack --- */
+    @media (max-width: 980px) {
+      .gui-left-panel {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.6rem;
+        border-right: none;
+        border-bottom: 1px solid var(--border-gui);
+      }
+      .gui-left-panel > .gui-subpanel,
+      .gui-left-panel > .gui-btn-row { grid-column: 1 / -1; }
+      .gui-btn-row { margin-top: 0; }
+      /* Telemetry: three label/value pairs per row */
+      .stats-table-grid { grid-template-columns: repeat(3, auto minmax(0, 1fr)); gap: 0.25rem 0.6rem; }
+    }
+
+    @media (max-width: 600px) {
+      .app-topbar { padding: 0.6rem 0.75rem; gap: 0.5rem; }
+      .app-topbar .topbar-group:first-child { flex: 1 1 100%; }
+      .topbar-select { flex: 1; min-width: 0; width: 100%; }
+      .gui-left-panel, .gui-right-area { padding: 0.6rem; gap: 0.5rem; }
+      .hud-card { padding: 0.5rem 0.55rem; border-left-width: 3px !important; }
+      .hud-card-header { flex-wrap: wrap; gap: 0 0.3rem; }
+      .hud-card-title { font-size: 0.6rem; letter-spacing: 0.3px; }
+      .hud-card-unit { font-size: 0.6rem; }
+      .hud-card-value { font-size: 1.35rem; text-align: left; margin-top: 0.2rem; }
+      .hud-card-sub { font-size: 0.58rem; text-align: left; line-height: 1.3; }
+      /* Telemetry: two pairs per row on phones */
+      .stats-table-grid { grid-template-columns: repeat(2, auto minmax(0, 1fr)); font-size: 0.7rem; }
+      .graph-header { font-size: 0.68rem; }
+      canvas#paperTapeCanvas { height: 160px; }
+      canvas#oscilloscopeCanvas { height: 140px; }
+      .app-window-frame { margin-bottom: 1.5rem; }
+
+      /* Slimmer outer panels so cards are not boxed twice with double indentation */
+      .pulse-diagram-box, .roadmap-card { padding: 1.1rem 0.85rem; margin-top: 2rem; }
+      .pulse-col, .roadmap-item { padding: 1rem; }
+      .pulse-diagram-box h3 { font-size: 1.25rem !important; }
+      .roadmap-card h2 { font-size: 1.4rem !important; }
+      .pulse-diagram-box .specs-pill { display: block; font-size: 0.72rem; line-height: 1.5; }
+    }
+
     /* No hover lift on touch screens (avoids sticky hover state) */
     @media (hover: none) {
       .spec-card:hover { transform: none; }
