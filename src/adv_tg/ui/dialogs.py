@@ -3,7 +3,9 @@
 ``CalibrationDialog`` edits the calibrations stored per device (``adv_tg.utils.adc_calibration``,
 the same file as ``python -m adv_tg.tools.adc_calibration``): it shows the one that applies
 now and the history, saves a manual value (level 3) or the live estimate of the last session,
-and deletes the device's calibrations. A new calibration applies from the next session.
+and deletes the device's calibrations. A new calibration applies from the next session. The
+"reference watch" box turns the rate of a watch of known error (a quartz checked against a
+time signal) into ppm: ``ppm = (known rate - uncorrected measured rate) / 0.0864``.
 
 ``ReportDialog`` builds the ``.zip`` of ``adv_tg.utils.report`` (logs, system, settings,
 calibrations and optionally the last recording) and opens the GitHub issue chooser.
@@ -12,6 +14,7 @@ calibrations and optionally the last recording) and opens the GitHub issue choos
 from __future__ import annotations
 
 import html
+import math
 import platform
 import sys
 from datetime import UTC, datetime
@@ -26,6 +29,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -99,6 +103,8 @@ class CalibrationDialog(QDialog):
         device: Device name (as PortAudio reports it).
         sample_rate: Sample rate the calibration applies to.
         live: Live estimate of the last session (level >= 2), or None.
+        measured_rate_spd: Rate of the last session WITHOUT any clock correction (s/d), used
+            to prefill the reference-watch box; None if there is no reading.
         store: Calibration store (default: the user's).
         parent: Qt parent.
     """
@@ -111,6 +117,7 @@ class CalibrationDialog(QDialog):
         live: LiveDrift | None = None,
         store: CalibrationStore | None = None,
         parent: QWidget | None = None,
+        measured_rate_spd: float | None = None,
     ) -> None:
         super().__init__(parent)
         self._tr = translator.tr
@@ -157,6 +164,34 @@ class CalibrationDialog(QDialog):
         form.addRow("", self.lbl_bias)
         layout.addLayout(form)
 
+        # Reference watch of known rate -> ppm
+        self.grp_ref = QGroupBox(tr("cal_ref_title"))
+        ref_layout = QVBoxLayout(self.grp_ref)
+        ref_help = QLabel(tr("cal_ref_help"))
+        ref_help.setWordWrap(True)
+        ref_help.setObjectName("HelpText")
+        ref_layout.addWidget(ref_help)
+        ref_form = QFormLayout()
+        self.spn_ref_measured = self._rate_spin()
+        if measured_rate_spd is not None and math.isfinite(measured_rate_spd):
+            self.spn_ref_measured.setValue(float(measured_rate_spd))
+        self.spn_ref_known = self._rate_spin()
+        ref_form.addRow(tr("cal_ref_measured"), self.spn_ref_measured)
+        ref_form.addRow(tr("cal_ref_known"), self.spn_ref_known)
+        ref_layout.addLayout(ref_form)
+        ref_row = QHBoxLayout()
+        self.lbl_ref_result = QLabel()
+        self.btn_ref_apply = QPushButton(tr("cal_ref_apply"))
+        self.btn_ref_apply.setToolTip(tr("cal_ref_apply_tooltip"))
+        self.btn_ref_apply.clicked.connect(self._use_reference)
+        ref_row.addWidget(self.lbl_ref_result)
+        ref_row.addStretch()
+        ref_row.addWidget(self.btn_ref_apply)
+        ref_layout.addLayout(ref_row)
+        self.spn_ref_measured.valueChanged.connect(self._refresh_reference)
+        self.spn_ref_known.valueChanged.connect(self._refresh_reference)
+        layout.addWidget(self.grp_ref)
+
         row = QHBoxLayout()
         self.btn_live = QPushButton(tr("cal_use_live"))
         self.btn_live.setEnabled(live is not None)
@@ -188,9 +223,40 @@ class CalibrationDialog(QDialog):
         layout.addWidget(buttons)
 
         self._refresh_bias()
+        self._refresh_reference()
         self.refresh()
 
     # ------------------------------------------------------------------ helpers
+    @staticmethod
+    def _rate_spin() -> QDoubleSpinBox:
+        spn = QDoubleSpinBox()
+        spn.setRange(-999.0, 999.0)
+        spn.setDecimals(3)
+        spn.setSingleStep(0.1)
+        spn.setSuffix(" s/d")
+        return spn
+
+    def reference_ppm(self) -> float:
+        """Card clock error implied by the reference watch box.
+
+        A card fast by ``p`` ppm makes a watch read ``0.0864 p`` s/d slow, so
+        ``p = (known - measured) / 0.0864``.
+        """
+        return (self.spn_ref_known.value() - self.spn_ref_measured.value()) / PPM_TO_S_PER_DAY
+
+    def _refresh_reference(self, *_args: object) -> None:
+        self.lbl_ref_result.setText(self._tr("cal_ref_result").format(ppm=self.reference_ppm()))
+
+    def _use_reference(self) -> None:
+        """Copy the reference-watch result to the form (saved with "Save")."""
+        ppm = self.reference_ppm()
+        self.spn_ppm.setValue(ppm)
+        self.txt_note.setText(
+            self._tr("cal_ref_note").format(
+                known=self.spn_ref_known.value(), measured=self.spn_ref_measured.value()
+            )
+        )
+
     def _refresh_bias(self, *_args: object) -> None:
         bias = -PPM_TO_S_PER_DAY * self.spn_ppm.value()
         self.lbl_bias.setText(self._tr("cal_bias").format(bias=bias))

@@ -118,6 +118,7 @@ from adv_tg.core.beat_types import (
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
 from adv_tg.dsp.engine import compute_cell_envelope, detect_cell_candidates, sosfilt
 from adv_tg.dsp.filters import butter_bandpass_sos, sosfilt_zi, sosfiltfilt_padlen
+from adv_tg.dsp.normalizer import AudioNormalizer, NormalizerConfig
 from adv_tg.utils.debugger import Debugger
 
 __all__ = [
@@ -250,6 +251,12 @@ class BeatDetectorConfig:
             spans +-``quartz_template_ms`` around the step, all of it used for the alignment;
             its timing point is the onset of the step (first rise of the template).
         quartz_template_ms: Half-width of the quartz template (default 25 ms).
+        normalize: Software level normalization of the input (``adv_tg.dsp.normalizer``),
+            default off. For inputs whose gain cannot be lowered: the peaks are brought to
+            -6 dBFS before the analysis, so beats that reached full scale at the input are no
+            longer flagged ``SATURATED`` (and excluded from the figures). Clipping is not
+            undone; ``normalizer_clipped_samples`` still counts it. Delays the analysis by
+            at most one normalizer block (0.1 s); the output stays chunking-invariant.
         template_align_smooth_ms: Moving average applied to the envelope ONLY for the
             alignment (default 1 ms): it fuses the lobes of the drop into one burst, so the
             correlation does not jump between lobes whose relative level changes from beat to
@@ -310,6 +317,7 @@ class BeatDetectorConfig:
     template_anchor: bool | None = None
     quartz: bool = False
     quartz_template_ms: float = 25.0
+    normalize: bool = False
 
     def __post_init__(self) -> None:
         fs = float(self.sample_rate)
@@ -609,11 +617,18 @@ class BeatDetector:
             self.tpl_burst = int(round(3.0 * ms))  # alignment from 3 ms before the anchor
         n_al = max(1, int(round(c.template_align_smooth_ms * ms)))
         self._align_kernel = np.full(n_al, 1.0 / n_al)
+        self._normalizer = (
+            AudioNormalizer(NormalizerConfig(fs, clip_level=c.saturation_level))
+            if c.normalize
+            else None
+        )
         self.reset()
 
     # ------------------------------------------------------------------ public API
     def reset(self) -> None:
         """Forget everything (audio, lock, counters)."""
+        if self._normalizer is not None:
+            self._normalizer.reset()
         self._started = False
         self._finished = False
         self._expected = 0
@@ -658,6 +673,15 @@ class BeatDetector:
         """
         if self._finished:
             raise RuntimeError("el detector ya terminó (flush); llama a reset() para reutilizarlo")
+        if self._normalizer is None:
+            return self._process(chunk, start_index)
+        out: list[Beat] = []
+        for seg_start, seg in self._normalizer.process(chunk, start_index):
+            out += self._process(seg, seg_start)
+        return out
+
+    def _process(self, chunk: ArrayLike, start_index: int) -> list[Beat]:
+        """``process`` after the optional normalizer (see ``process``)."""
         x = np.asarray(chunk, dtype=np.float64)
         if x.ndim != 1:
             raise ValueError(f"se esperaba audio mono 1-D, forma recibida {x.shape}")
@@ -691,6 +715,8 @@ class BeatDetector:
         """
         total = stream.total_samples
         start = self._expected if self._started else stream.oldest_available
+        if self._normalizer is not None and self._normalizer.next_index is not None:
+            start = self._normalizer.next_index  # samples held by the normalizer are taken
         if total <= start:
             return []
         for _ in range(8):
@@ -711,7 +737,11 @@ class BeatDetector:
         """
         if self._finished:
             return []
-        out = self._pump(final=True) if self._started else []
+        out: list[Beat] = []
+        if self._normalizer is not None:
+            for seg_start, seg in self._normalizer.flush():
+                out += self._process(seg, seg_start)
+        out += self._pump(final=True) if self._started else []
         self._close_zero_run(self._raw.end)
         self._finished = True
         _dbg.process_end(
@@ -721,8 +751,19 @@ class BeatDetector:
             missed=self._missed,
             gaps=self._gaps,
             rejected=self._rejected,
+            normalizer_clipped_samples=self.normalizer_clipped_samples,
         )
         return out
+
+    @property
+    def normalizer_clipped_samples(self) -> int | None:
+        """Input samples at full scale seen by the normalizer (None when it is off)."""
+        return None if self._normalizer is None else self._normalizer.clipped_samples
+
+    @property
+    def normalizer_gain_db(self) -> float | None:
+        """Current normalizer gain in dB (None when it is off)."""
+        return None if self._normalizer is None else self._normalizer.gain_db
 
     @property
     def locked(self) -> bool:
