@@ -22,7 +22,7 @@ class Translator:
             "bph": "BPH",
             "quartz": "Quartz",
             "quartz_steps": "Steps",
-            "quartz_tooltip": "Quartz watch: choose the second hand's steps per second; only the rate is measured",
+            "quartz_tooltip": "Quartz watch (1 step per second): caliber, BPH and lift angle are disabled; only the rate is measured",
             "confidence": "Confidence",
             "test_name": "Test Name",
             "test_name_placeholder": "e.g. Movement #01 - Service",
@@ -119,6 +119,29 @@ class Translator:
             "cal_col_date": "Date",
             "cal_col_level": "Level",
             "cal_col_note": "Note",
+            "cal_ref_title": "From a reference watch of known rate",
+            "cal_ref_help": (
+                "Measure a quartz watch whose rate you know (checked against a time signal over "
+                "several days), then enter both rates: ppm = (known − measured) / 0.0864. The "
+                "measured rate is prefilled with the last session's reading without clock correction."
+            ),
+            "cal_ref_measured": "Rate measured here (uncorrected)",
+            "cal_ref_known": "Known rate of the watch",
+            "cal_ref_result": "Card clock error: {ppm:+.3f} ppm",
+            "cal_ref_apply": "Use this value",
+            "cal_ref_apply_tooltip": "Copy the result to “Clock error”; press Save to store it",
+            "cal_ref_note": "reference watch: known {known:+.3f} s/d, measured {measured:+.3f} s/d",
+            "normalize_audio": "Normalize audio",
+            "normalize_audio_tooltip": (
+                "Enable it ONLY when the microphone gain cannot be adjusted (the input saturates "
+                "even at minimum gain). It brings the signal level to -6 dBFS by software before "
+                "the analysis, so saturated beats are still measured. Clipping cannot be undone: "
+                "lower the gain whenever possible. Applies from the next session."
+            ),
+            "error_invalid_sample_rate": (
+                "the device does not accept this sample rate: choose the one it runs at "
+                "(44.1 or 48 kHz)"
+            ),
             "btn_export_traces": "Export Traces",
             "btn_print_traces": "Print Traces",
             "btn_record_audio": "Record Audio",
@@ -182,7 +205,7 @@ class Translator:
             "bph": "A/h",
             "quartz": "Cuarzo",
             "quartz_steps": "Pasos",
-            "quartz_tooltip": "Reloj de cuarzo: elige los pasos por segundo del segundero; solo se mide la marcha",
+            "quartz_tooltip": "Reloj de cuarzo (1 paso por segundo): calibre, BPH y ángulo de levantamiento se deshabilitan; solo se mide la marcha",
             "confidence": "Confianza",
             "test_name": "Nombre de la prueba",
             "test_name_placeholder": "ej. Calibre #01 - Servicio",
@@ -280,6 +303,30 @@ class Translator:
             "cal_col_date": "Fecha",
             "cal_col_level": "Nivel",
             "cal_col_note": "Nota",
+            "cal_ref_title": "Desde un reloj de referencia de marcha conocida",
+            "cal_ref_help": (
+                "Mide un reloj de cuarzo cuya marcha conozcas (comprobada contra una señal horaria "
+                "durante varios días) e introduce ambas marchas: ppm = (conocida − medida) / 0.0864. "
+                "La marcha medida se rellena con la última lectura de la sesión sin corrección de reloj."
+            ),
+            "cal_ref_measured": "Marcha medida aquí (sin corregir)",
+            "cal_ref_known": "Marcha conocida del reloj",
+            "cal_ref_result": "Error del reloj de la tarjeta: {ppm:+.3f} ppm",
+            "cal_ref_apply": "Usar este valor",
+            "cal_ref_apply_tooltip": "Copia el resultado a «Error del reloj»; pulsa Guardar para almacenarlo",
+            "cal_ref_note": "reloj de referencia: conocida {known:+.3f} s/d, medida {measured:+.3f} s/d",
+            "normalize_audio": "Normalizar audio",
+            "normalize_audio_tooltip": (
+                "Actívalo SOLO cuando no sea posible ajustar la ganancia del micrófono (la entrada "
+                "se satura incluso con la ganancia al mínimo). Lleva el nivel de la señal a -6 dBFS "
+                "por software antes del análisis, de modo que los batimientos saturados se sigan "
+                "midiendo. El recorte no se puede deshacer: baja la ganancia siempre que puedas. "
+                "Se aplica desde la próxima sesión."
+            ),
+            "error_invalid_sample_rate": (
+                "el dispositivo no acepta esta frecuencia de muestreo: elige la que usa "
+                "(44.1 o 48 kHz)"
+            ),
             "btn_export_traces": "Exportar Trazas",
             "btn_print_traces": "Imprimir Trazas",
             "btn_record_audio": "Grabar Sonido",

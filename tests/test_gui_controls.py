@@ -94,6 +94,7 @@ def test_quartz_mode_toggle(window) -> None:
         "16/s",
     ]
     assert not window.spn_lift.isEnabled() and not window.cmb_caliber.isEnabled()
+    assert not window.cmb_bph.isEnabled() and window.cmb_bph.currentText() == "1/s"
     window.cmb_bph.setCurrentText("16/s")
     cfg = window.current_watch_config()
     assert cfg.quartz and cfg.bph == 57600
@@ -101,6 +102,93 @@ def test_quartz_mode_toggle(window) -> None:
     window.chk_quartz.setChecked(False)
     cfg = window.current_watch_config()
     assert not cfg.quartz and cfg.bph == 28800 and window.spn_lift.isEnabled()
+    assert window.cmb_bph.isEnabled() and window.cmb_caliber.isEnabled()
+
+
+def test_quartz_lock_survives_the_end_of_a_session(window) -> None:
+    window.chk_quartz.setChecked(True)
+    window._set_capture_state("MIDIENDO")
+    window._on_session_finished()  # re-enables the top bar
+    assert not window.cmb_bph.isEnabled()
+    assert not window.spn_lift.isEnabled() and not window.cmb_caliber.isEnabled()
+    assert window.cmb_srate.isEnabled() and window.cmb_device.isEnabled()
+
+
+def test_sample_rate_choices_include_44k1(window) -> None:
+    items = [window.cmb_srate.itemText(i) for i in range(window.cmb_srate.count())]
+    assert items == ["44.1 kHz", "48 kHz", "96 kHz"]
+    assert window.current_watch_config().sample_rate == 48000  # default unchanged
+    window.cmb_srate.setCurrentIndex(0)
+    assert window.current_watch_config().sample_rate == 44100
+
+
+def test_normalize_checkbox(window) -> None:
+    from adv_tg.i18n.translator import Translator
+
+    assert not window.chk_normalize.isChecked()
+    assert not window.current_watch_config().normalize
+    window.chk_normalize.setChecked(True)
+    assert window.current_watch_config().normalize
+    for lang in ("en", "es"):
+        window.cmb_lang.setCurrentIndex(0 if lang == "en" else 1)
+        tr = Translator(lang).tr
+        assert window.chk_normalize.text() == tr("normalize_audio")
+        assert window.chk_normalize.toolTip() == tr("normalize_audio_tooltip")
+
+
+def test_new_texts_exist_in_both_languages() -> None:
+    from adv_tg.i18n.translator import Translator
+
+    keys = [
+        "normalize_audio",
+        "normalize_audio_tooltip",
+        "error_invalid_sample_rate",
+        "cal_ref_title",
+        "cal_ref_help",
+        "cal_ref_measured",
+        "cal_ref_known",
+        "cal_ref_result",
+        "cal_ref_apply",
+        "cal_ref_apply_tooltip",
+        "cal_ref_note",
+    ]
+    en, es = Translator.DICTIONARIES["en"], Translator.DICTIONARIES["es"]
+    assert set(en) == set(es)
+    for key in keys:
+        assert en[key] and es[key] and en[key] != es[key]
+
+
+def test_invalid_sample_rate_error_gets_a_hint(window) -> None:
+    window._on_worker_error(
+        "No se pudo abrir el dispositivo: Invalid sample rate [PaErrorCode -9997]"
+    )
+    msg = window.statusBar().currentMessage()
+    assert window.translator.tr("error_invalid_sample_rate") in msg
+
+
+def test_quartz_session_at_44k1(qtbot, monkeypatch) -> None:
+    monkeypatch.setattr(mwk, "device_name", lambda device_id: None)
+    fs = 44_100
+    x, _ = synth_watch(
+        bph=3600, rate_s_per_day=1.5, seconds=40, snr_db=30, seed=4, quartz=True, fs=fs,
+        clip_level=0.3,
+    )  # fmt: skip
+    worker = MeasureStreamWorker(
+        WatchConfig(bph=3600, sample_rate=fs, quartz=True, normalize=True),
+        capture_factory=Factory(x, speed=8.0),
+    )
+    rec = Recorder(worker)
+    with qtbot.waitSignal(worker.session_finished, timeout=20000):
+        worker.start_stream()
+    assert rec.telemetry and rec.telemetry[-1].rate_spd == pytest.approx(1.5, abs=0.5)
+    path = worker.take_recording()
+    assert path is not None
+    from adv_tg.utils.audio_files import read_tags
+
+    tags = read_tags(path)
+    assert tags["ADV_TG_NORMALIZE"] == "1" and tags["ADV_TG_QUARTZ"] == "1"
+    path.unlink()
+    worker.shutdown()
 
 
 def test_quartz_session_measures_rate_only(qtbot, monkeypatch) -> None:
@@ -150,6 +238,26 @@ def test_calibration_dialog(qtbot, tmp_path) -> None:
     assert not nolive.btn_live.isEnabled()
 
 
+def test_calibration_from_reference_watch(qtbot, tmp_path) -> None:
+    from adv_tg.i18n.translator import Translator
+
+    store = CalibrationStore(tmp_path / "c.json")
+    # a quartz known at +0.300 s/d reads -0.564 s/d here: the card runs 10 ppm fast
+    dlg = CalibrationDialog(
+        Translator("es"), "Fake CM18", FS, store=store, measured_rate_spd=-0.564
+    )
+    qtbot.addWidget(dlg)
+    assert dlg.spn_ref_measured.value() == pytest.approx(-0.564)
+    dlg.spn_ref_known.setValue(0.3)
+    assert dlg.reference_ppm() == pytest.approx(10.0)
+    assert "+10.000 ppm" in dlg.lbl_ref_result.text()
+    dlg.btn_ref_apply.click()
+    assert dlg.spn_ppm.value() == pytest.approx(10.0)
+    assert "-0.864" in dlg.lbl_bias.text()  # the bias the calibration removes
+    assert "+0.300" in dlg.txt_note.text() and "-0.564" in dlg.txt_note.text()
+    assert dlg.save() and store.records("Fake CM18", FS)[-1].drift.ppm == pytest.approx(10.0)
+
+
 def test_calibration_button_and_about(window) -> None:
     window.btn_mock.setChecked(True)
     assert window.open_calibration_dialog(exec_dialog=False) is None  # MOCK: not available
@@ -160,6 +268,14 @@ def test_calibration_button_and_about(window) -> None:
     dlg = window.open_calibration_dialog(exec_dialog=False)
     assert dlg is not None and dlg.device == "Fake CM18" and dlg.sample_rate == 48000
     assert dlg.live is not None and dlg.live.ppm == pytest.approx(9.46)
+    assert dlg.spn_ref_measured.value() == 0.0  # no reading yet
+    dlg.close()
+    # last reading 2.0 s/d with 9.46 ppm applied -> 2.0 - 0.0864 * 9.46 uncorrected
+    window._last_telemetry = mw.TelemetryResult(
+        rate_spd=2.0, beat_error_ms=0.1, amplitude_deg=280.0, confidence=1.0
+    )
+    dlg = window.open_calibration_dialog(exec_dialog=False)
+    assert dlg.spn_ref_measured.value() == pytest.approx(2.0 - 0.0864 * 9.46, abs=1e-3)
     dlg.close()
     about = window.open_about_dialog(exec_dialog=False)
     assert __version__ in about.version_label.text()
