@@ -146,8 +146,9 @@ Cada batimiento válido recibe un peso $w_i = 1 / \sigma_{\text{paridad}}^2$ der
 * **Operador de Energía de Teager-Kaiser (TKEO):** Algoritmo de complejidad $O(N)$ para extracción instantánea de la envolvente de señal [22, 40]:
   $$\Psi[x[n]] = x^2[n] - x[n-1]x[n+1]$$
 * **Análisis Espectral de Periodicidad:** Se aplica una Transformada Rápida de Fourier (FFT) o Periodograma de Lomb-Scargle sobre la serie temporal de variaciones de intervalo ($\Delta t$) para identificar fallos cíclicos en el tren de rodaje [22, 40]:
-  * Rueda de escape: impulsos periódicos cada $\sim 7.5\text{ s}$.
-  * Rueda cuarta / segundero: anomalías cíclicas cada $60\text{ s}$.
+  * Rueda de escape: una vuelta cada $T = 2 Z \cdot 3600 / \text{BPH}$ (avanza un diente por oscilación, es decir, cada dos batimientos; $Z = 15$ dientes en casi todos los calibres): $3.75\text{ s}$ a 28 800 A/h, $5\text{ s}$ a 21 600 A/h, $6\text{ s}$ a 18 000 A/h.
+  * Rueda cuarta / segundero: anomalías cíclicas cada $60\text{ s}$ (resoluble desde $180\text{ s}$ de grabación: tres vueltas).
+  * **Implementado en v0.8.0** (`src/adv_tg/analysis/`, ventana "Analizar Grabación"); ver `documentation_v0.8.0-beta.md`, secciones 7 y 8.
 
 ### 5.2 Modo Regulación en Vivo (Wavelets + Ventana Adaptativa)
 * **Transformada Wavelet Discreta/Continua (DWT/CWT Morlet):** Aísla los transitorios agudos del escape ($8\text{--}16\text{ kHz}$) eliminando los ruidos metálicos graves provocados por herramientas de regulación [22, 40].

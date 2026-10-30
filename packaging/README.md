@@ -1,6 +1,6 @@
 # Empaquetado y Distribución Multiplataforma (Beta)
 
-Este directorio contiene las especificaciones y utilidades para construir los binarios (macOS `.dmg`/`.app`/`.zip`, Windows `.exe` setup/`.zip`, Linux `.tar.gz`/`.rpm`) y distribuirlos a través de GitHub Releases y GitHub Actions al crear una etiqueta (`v0.7.0-beta4` o similar).
+Este directorio contiene las especificaciones y utilidades para construir los binarios (macOS `.dmg`/`.app`/`.zip`, Windows `.exe` setup/`.zip`, Linux `.tar.gz`/`.rpm`) y distribuirlos a través de GitHub Releases y GitHub Actions al crear una etiqueta (`v0.8.0-beta` o similar).
 
 | Archivo | Para qué |
 |---|---|

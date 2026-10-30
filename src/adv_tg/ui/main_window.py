@@ -54,6 +54,7 @@ from adv_tg.core.models import BeatEvent, BeatTelemetry, TelemetryResult, WatchC
 from adv_tg.i18n.translator import Translator
 from adv_tg.mock.generator import generate_tick_train, save_wav
 from adv_tg.mock.worker import MockStreamWorker
+from adv_tg.ui.analysis_dialog import AnalysisDialog, RecordingSource
 from adv_tg.ui.capture_worker import (
     CaptureStreamWorker,
     SlotProfiler,
@@ -1185,6 +1186,13 @@ class MainWin(QMainWindow):
 
         left_layout.addStretch()
 
+        # Analyze Recording: gear-train defects of the last session's recording (or a file)
+        self.btn_analyze = QPushButton()
+        self.btn_analyze.setObjectName("ActionButton")
+        self.btn_analyze.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_analyze.clicked.connect(lambda: self.open_analysis_dialog())
+        left_layout.addWidget(self.btn_analyze)
+
         # Audio Recording Button (same duration as test, default FLAC or Vorbis)
         self.btn_record = QPushButton()
         self.btn_record.setObjectName("RecordButton")
@@ -2275,6 +2283,63 @@ class MainWin(QMainWindow):
             dlg.exec()
         return dlg
 
+    def _analysis_source(self) -> RecordingSource | None:
+        """Last session's recording (hardware FLAC or MOCK train), or None if there is none."""
+        cfg = self.current_watch_config()
+        worker = self.dsp_worker
+        if self.is_mock_active():
+            if not self.recording_allowed():
+                return None
+            x, fs = self._ensure_test_length_recording()
+            return RecordingSource(
+                x, fs, cfg.bph, cfg.lift_angle, self.translator.tr("an_last_session") + " (MOCK)",
+                cfg.quartz,
+            )  # fmt: skip
+        if isinstance(worker, MeasureStreamWorker) and worker.recording_path is not None:
+            src = RecordingSource.from_file(
+                worker.recording_path, cfg.bph, cfg.lift_angle, cfg.quartz
+            )
+            src.name = self.translator.tr("an_last_session")
+            return src
+        return None
+
+    def open_analysis_dialog(
+        self, path: Path | str | None = None, exec_dialog: bool = True, blocking: bool = False
+    ) -> AnalysisDialog | None:
+        """ "Analyze Recording": gear-train analysis of ``path``, else of the last session's
+        recording, else of a file the user picks. Not during a session."""
+        if self.dsp_worker is not None and self.dsp_worker.isRunning():
+            self.statusBar().showMessage(self.translator.tr("an_busy"), 6000)
+            return None
+        cfg = self.current_watch_config()
+        positions = {
+            pos: (rec.rate_spd, rec.beat_error_ms, rec.amplitude_deg)
+            for pos, rec in self._saved_positions.items()
+        }
+        dlg = AnalysisDialog(
+            self.translator, cfg.bph, cfg.lift_angle, parent=self, positions=positions
+        )
+        if path is not None:
+            if not dlg.open_file(path, blocking=blocking):
+                dlg.deleteLater()
+                return None
+        else:
+            try:
+                source = self._analysis_source()
+            except Exception as exc:  # temporary FLAC gone or unreadable: pick a file instead
+                logger.warning("Grabación de la sesión ilegible para el análisis: %s", exc)
+                source = None
+            if source is not None:
+                dlg.analyze(source, blocking=blocking)
+            elif not dlg.open_file():
+                dlg.deleteLater()
+                return None
+        if blocking:
+            dlg.wait()
+        if exec_dialog:
+            dlg.exec()
+        return dlg
+
     def open_about_dialog(self, exec_dialog: bool = True) -> AboutDialog:
         """Version, licence, links and the configuration and log folders."""
         dlg = AboutDialog(self.translator, parent=self)
@@ -2696,6 +2761,8 @@ class MainWin(QMainWindow):
         self.btn_print_traces.setText(tr("btn_print_traces"))
         self.btn_center_trace.setText(tr("btn_center_trace"))
         self._update_tape_zoom_label()
+        self.btn_analyze.setText(tr("btn_analyze_recording"))
+        self.btn_analyze.setToolTip(tr("btn_analyze_recording_tooltip"))
         self.btn_record.setText(f"● {tr('btn_record_audio').upper()}")
         self._refresh_record_button()
         self.btn_start.setText(tr("btn_start"))
