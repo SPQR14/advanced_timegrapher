@@ -147,6 +147,8 @@ def synth_watch(
     quartz: bool = False,
     quartz_precursor: tuple[float, float, float] | None = None,
     shape_change_at_s: float | None = None,
+    phase_mod: tuple[tuple[float, float], ...] = (),
+    level_mod: tuple[tuple[float, float], ...] = (),
 ) -> tuple[NDArray[np.float64], Truth]:
     """Generate a watch signal and its exact truth.
 
@@ -194,6 +196,10 @@ def synth_watch(
             to step (as the TMI VH31). It is part of the step; the truth stays the main onset.
         shape_change_at_s: From this time on the bursts use other resonance modes (the sound
             changes; exercises the re-anchoring of the template frame).
+        phase_mod: ``(period_s, amplitude_us)`` pairs: each beat is shifted by
+            ``A sin(2 pi t / T)`` (gear-train ripple: an eccentric wheel modulates the rate).
+        level_mod: ``(period_s, depth)`` pairs: every sound of a beat is scaled by
+            ``1 + d sin(2 pi t / T)`` (an escape-wheel tooth dropping louder or softer).
     """
     rng = np.random.default_rng(seed)
     n = int(round(seconds * fs))
@@ -224,6 +230,11 @@ def synth_watch(
             t0 += rng.normal(0.0, jitter_us * 1e-6)
         if odd_jitter_us and k % 2 == 1:
             t0 += rng.normal(0.0, odd_jitter_us * 1e-6)
+        for mod_period, mod_us in phase_mod:
+            t0 += mod_us * 1e-6 * math.sin(2 * math.pi * t0 / mod_period)
+        gain = 1.0
+        for mod_period, depth in level_mod:
+            gain *= 1.0 + depth * math.sin(2 * math.pi * t0 / mod_period)
         if t0 + t_lift + duration > seconds:
             break
         silent = miss_prob > 0 and rng.uniform() < miss_prob
@@ -234,8 +245,10 @@ def synth_watch(
             level, modes = _BURSTS[2]
             if shape_change_at_s is not None and t0 >= shape_change_at_s:
                 modes = ((5200.0, 1.0, 0.35e-3), (8100.0, 0.5, 0.25e-3))
-            lv = level * (
-                1.0 + rng.uniform(-amp_variation, amp_variation) if amp_variation else 1.0
+            lv = (
+                gain
+                * level
+                * (1.0 + rng.uniform(-amp_variation, amp_variation) if amp_variation else 1.0)
             )
             _burst(x, fs, t0, lv * _SCALE, modes + tuple(tails), duration)
             if quartz_precursor is not None:
@@ -247,7 +260,7 @@ def synth_watch(
             p3s.append(t0 * fs)
         else:
             for i, (level, modes) in enumerate(_BURSTS):
-                lv = level * (p1_gain if i == 0 else 1.0)
+                lv = gain * level * (p1_gain if i == 0 else 1.0)
                 if amp_variation:
                     lv *= 1.0 + rng.uniform(-amp_variation, amp_variation)
                 ms = modes

@@ -507,3 +507,19 @@ def test_new_session_forgets_the_previous_reading(window) -> None:
         assert not window.btn_save_position.isEnabled()
     finally:
         window.stop_capture()
+
+
+def test_analyze_recording_button(window, tmp_path) -> None:
+    from adv_tg.utils.audio_files import write_audio
+
+    tr = window.translator.tr
+    assert window.btn_analyze.text() == tr("btn_analyze_recording")
+    layout = window.left_panel.layout()
+    assert layout.indexOf(window.btn_analyze) == layout.indexOf(window.btn_record) - 1
+    x, _ = synth_watch(bph=28800, seconds=30, seed=2, snr_db=30, jitter_us=20)
+    path = write_audio(tmp_path / "r.flac", 0.5 * x / np.max(np.abs(x)), FS,
+                       tags={"ADV_TG_BPH": "28800"})  # fmt: skip
+    dlg = window.open_analysis_dialog(path, exec_dialog=False, blocking=True)
+    assert dlg is not None and dlg.report is not None
+    assert dlg.report.series.bph == 28800 and dlg.report.escape_period_s == 3.75
+    dlg.close()
