@@ -118,6 +118,8 @@ class SessionConfig:
         bph: Nominal beats per hour.
         lift_angle_deg: Lift angle; ``None`` = unknown (default 52°, amplitude indicative).
         quartz: Quartz watch (rate only, one event per step).
+        normalize: Software level normalization before the detector (see
+            ``BeatDetectorConfig.normalize``).
         span_s: Window of the figures in seconds (sliding).
         window_s: Length of the rate windows inside the span (trend and plotting).
         calibration: Stored calibration of the device (already aged), or None.
@@ -131,6 +133,7 @@ class SessionConfig:
     bph: float
     lift_angle_deg: float | None = None
     quartz: bool = False
+    normalize: bool = False
     span_s: float = 30.0
     window_s: float = 10.0
     calibration: AdcDrift | None = None
@@ -208,6 +211,7 @@ class MeasurementSession:
                 bph=config.bph,
                 lift_angle_deg=config.lift_angle_deg or DEFAULT_LIFT_ANGLE_DEG,
                 quartz=config.quartz,
+                normalize=config.normalize,
             )
         )
         self._metrics_config = MetricsConfig(

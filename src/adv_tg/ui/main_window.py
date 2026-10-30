@@ -49,6 +49,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY
 from adv_tg.core.models import BeatEvent, BeatTelemetry, TelemetryResult, WatchConfig
 from adv_tg.i18n.translator import Translator
 from adv_tg.mock.generator import generate_tick_train, save_wav
@@ -184,6 +185,15 @@ RECORDING_MAX_DURATION_S: int = 240
 #: Stabilization times offered in the top bar (seconds).
 STABILIZATION_CHOICES_S: tuple[int, ...] = (10, 15, 20)
 DEFAULT_STABILIZATION_S: int = 10
+#: Sample rates offered in the top bar (Hz). 44.1 kHz is for devices that PipeWire/ALSA
+#: run at 44.1 kHz (several USB microphones open only at their current graph rate).
+SAMPLE_RATE_CHOICES_HZ: tuple[int, ...] = (44100, 48000, 96000)
+DEFAULT_SAMPLE_RATE_HZ: int = 48000
+
+
+def _format_sample_rate(fs: int) -> str:
+    """``44.1 kHz``, ``48 kHz``, ``96 kHz``."""
+    return f"{fs / 1000:g} kHz"
 
 
 def _format_duration(seconds: float) -> str:
@@ -516,6 +526,11 @@ class MainWin(QMainWindow):
             QComboBox:hover {{
                 border: 1px solid #48566a;
             }}
+            QComboBox:disabled, QLineEdit:disabled {{
+                background-color: #151a22;
+                border: 1px solid #222a35;
+                color: #5c6675;
+            }}
             QComboBox::drop-down {{
                 subcontrol-origin: border;
                 subcontrol-position: top right;
@@ -573,6 +588,11 @@ class MainWin(QMainWindow):
             }}
             QSpinBox:hover, QDoubleSpinBox:hover {{
                 border: 1px solid #48566a;
+            }}
+            QSpinBox:disabled, QDoubleSpinBox:disabled {{
+                background-color: #151a22;
+                border: 1px solid #222a35;
+                color: #5c6675;
             }}
             QSpinBox::up-button, QDoubleSpinBox::up-button {{
                 subcontrol-origin: border;
@@ -885,14 +905,14 @@ class MainWin(QMainWindow):
         self._populate_audio_devices()
         self._configure_combo_box(self.cmb_device, min_width=230)
 
-        # Sample Rate (default 48 kHz)
+        # Sample Rate (default 48 kHz; 44.1 kHz for devices that PipeWire/ALSA open at 44.1)
         self.lbl_srate = QLabel()
         self.lbl_srate.setObjectName("TopBarLabel")
         self.cmb_srate = QComboBox()
-        self.cmb_srate.addItem("48 kHz", 48000)
-        self.cmb_srate.addItem("96 kHz", 96000)
+        for fs in SAMPLE_RATE_CHOICES_HZ:
+            self.cmb_srate.addItem(_format_sample_rate(fs), fs)
         self._configure_combo_box(self.cmb_srate, min_width=96)
-        self.cmb_srate.setCurrentIndex(0)
+        self.cmb_srate.setCurrentIndex(SAMPLE_RATE_CHOICES_HZ.index(DEFAULT_SAMPLE_RATE_HZ))
 
         # Stabilization time (fixed choices)
         self.lbl_stab = QLabel()
@@ -1014,12 +1034,18 @@ class MainWin(QMainWindow):
         snr_header.addStretch()
         snr_header.addWidget(self.lbl_snr_value)
 
+        # Software level normalization (for inputs whose gain cannot be lowered)
+        self.chk_normalize = QCheckBox()
+        self.chk_normalize.setObjectName("NormalizeCheck")
+        self.chk_normalize.toggled.connect(self._on_normalize_toggled)
+
         self.prg_snr = QProgressBar()
         self.prg_snr.setRange(0, 100)
         self.prg_snr.setValue(0)
 
         snr_layout.addLayout(snr_header)
         snr_layout.addWidget(self.prg_snr)
+        snr_layout.addWidget(self.chk_normalize)
         left_layout.addWidget(self.snr_panel)
 
         # Statistical Panel (Max, Min, Delta, Mean, Elapsed Time)
@@ -1676,7 +1702,7 @@ class MainWin(QMainWindow):
         self.lbl_session_status.setStyleSheet(color)
 
     def _fill_bph_choices(self, quartz: bool) -> None:
-        """Mechanical BPH, or quartz steps per second (data = steps per hour)."""
+        """Mechanical BPH, or the quartz step rate (data = steps per hour)."""
         was_blocked = self.cmb_bph.blockSignals(True)
         try:
             self.cmb_bph.clear()
@@ -1691,18 +1717,27 @@ class MainWin(QMainWindow):
         finally:
             self.cmb_bph.blockSignals(was_blocked)
 
+    def _apply_quartz_lock(self) -> None:
+        """Quartz mode: caliber, BPH (steps) and lift angle are fixed, so they are disabled."""
+        mechanical = not self.chk_quartz.isChecked()
+        for widget in (self.cmb_caliber, self.cmb_bph, self.spn_lift):
+            widget.setEnabled(mechanical)
+
     def _on_quartz_toggled(self, checked: bool) -> None:
-        """Quartz: steps/s choices, no lift angle nor caliber presets; figures rate only."""
+        """Quartz: 1 step/s, no lift angle, BPH nor caliber choice; figures rate only."""
         if checked:
             self._last_mechanical_bph = int(self.cmb_bph.currentData() or 21600)
-        self._fill_bph_choices(checked)
-        self.spn_lift.setEnabled(not checked)
-        self.cmb_caliber.setEnabled(not checked)
-        if checked:
             self.cmb_caliber.setCurrentText("Custom")
+        self._fill_bph_choices(checked)
+        self._apply_quartz_lock()
         tr = self.translator.tr
         self.lbl_bph.setText(tr("quartz_steps") if checked else tr("bph"))
         _dbg.state_change("modo cuarzo", not checked, checked)
+        self._on_watch_config_changed()
+
+    def _on_normalize_toggled(self, checked: bool) -> None:
+        """Audio normalization on/off (applies from the next session)."""
+        _dbg.state_change("normalizar audio", not checked, checked)
         self._on_watch_config_changed()
 
     def _on_caliber_changed(self, caliber_name: str) -> None:
@@ -2166,6 +2201,17 @@ class MainWin(QMainWindow):
             name = text.split("] ", 1)[1] if "] " in text else text
         return name, int(self.current_watch_config().sample_rate)
 
+    def _uncorrected_rate_spd(self) -> float | None:
+        """Last rate of the real engine without the card clock correction (s/d), or None.
+
+        The engine shows ``raw + 0.0864 * ppm`` (``ppm`` = drift applied, ``_last_drift_ppm``),
+        so the raw rate is the shown one minus that correction.
+        """
+        record = self._last_telemetry
+        if record is None or self.is_mock_active() or not math.isfinite(record.rate_spd):
+            return None
+        return float(record.rate_spd) - PPM_TO_S_PER_DAY * self._last_drift_ppm
+
     def open_calibration_dialog(self, exec_dialog: bool = True) -> CalibrationDialog | None:
         """Manual calibration of the selected device's clock (applies to the next session)."""
         target = self._calibration_target()
@@ -2182,7 +2228,14 @@ class MainWin(QMainWindow):
             live = LiveDrift(
                 self._last_drift_ppm, self._last_drift_sigma_ppm, self._last_clock_level
             )
-        dlg = CalibrationDialog(self.translator, target[0], target[1], live=live, parent=self)
+        dlg = CalibrationDialog(
+            self.translator,
+            target[0],
+            target[1],
+            live=live,
+            parent=self,
+            measured_rate_spd=self._uncorrected_rate_spd(),
+        )
         if exec_dialog:
             dlg.exec()
         return dlg
@@ -2196,6 +2249,7 @@ class MainWin(QMainWindow):
             "caliber": self.cmb_caliber.currentText(),
             "bph": cfg.bph,
             "quartz": cfg.quartz,
+            "normalize": cfg.normalize,
             "lift_angle": cfg.lift_angle,
             "sample_rate": cfg.sample_rate,
             "position": self.cmb_position.currentText(),
@@ -2593,6 +2647,8 @@ class MainWin(QMainWindow):
         self.card_amplitude.set_title(tr("amplitude"))
 
         self.lbl_signal_quality.setText(tr("signal_quality").upper())
+        self.chk_normalize.setText(tr("normalize_audio"))
+        self.chk_normalize.setToolTip(tr("normalize_audio_tooltip"))
         self.lbl_stats_title.setText(tr("statistics").upper())
 
         self.lbl_stat_max_key.setText(f"{tr('stat_max')}:")
@@ -2685,12 +2741,13 @@ class MainWin(QMainWindow):
         """Build a `WatchConfig` instance from the active Top Bar controls."""
         bph = int(self.cmb_bph.currentData() or int(self.cmb_bph.currentText()))
         lift_angle = float(self.spn_lift.value())
-        sample_rate = int(self.cmb_srate.currentData() or 48000)
+        sample_rate = int(self.cmb_srate.currentData() or DEFAULT_SAMPLE_RATE_HZ)
         return WatchConfig(
             bph=bph,
             lift_angle=lift_angle,
             sample_rate=sample_rate,
             quartz=self.chk_quartz.isChecked(),
+            normalize=self.chk_normalize.isChecked(),
         )
 
     def _check_session_duration(self) -> None:
@@ -2782,6 +2839,7 @@ class MainWin(QMainWindow):
 
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
+        self.chk_normalize.setEnabled(False)  # read once per session
 
         config = self.current_watch_config()
         position = self.cmb_position.currentText()
@@ -2841,6 +2899,7 @@ class MainWin(QMainWindow):
         self._capture_start_monotonic = None
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
+        self.chk_normalize.setEnabled(True)
         self._set_top_controls_enabled(True)
         _dbg.process_end("sesión de captura", engine=type(self.dsp_worker).__name__)
         self._set_capture_state("INACTIVO")
@@ -2862,6 +2921,8 @@ class MainWin(QMainWindow):
             self.cmb_duration,
         ):
             widget.setEnabled(enabled)
+        if enabled:
+            self._apply_quartz_lock()  # keep caliber / BPH / lift angle off in quartz mode
 
     def _set_real_bph(self, real_bph: float, declared_bph: float) -> None:
         """Observed BPH box: value and difference from the declared BPH, in percent."""
@@ -3312,6 +3373,8 @@ class MainWin(QMainWindow):
     def _on_worker_error(self, message: str) -> None:
         """Slot logging any error emitted by the engine safely on the UI thread."""
         logger.error("%s reported error: %s", type(self.dsp_worker).__name__, message)
+        if "Invalid sample rate" in message or "-9997" in message:
+            message = f"{message} — {self.translator.tr('error_invalid_sample_rate')}"
         self.statusBar().showMessage(message, 8000)
 
     def closeEvent(self, event) -> None:  # noqa: N802
