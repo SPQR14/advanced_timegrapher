@@ -9,6 +9,8 @@ Subcommands::
     show  FILE                             ADV_TG_* tags of a recording
     tag   FILE --device D                  stamp the stored calibration on an existing
                                            recording (aged to its recording date)
+    pps   FILE [--device D --save]         ADC error from a recording of a GPS PPS (buzzer
+                                           or line input); --save stores it for the device
 
 ``--device`` takes the PortAudio name (``capture_check --list``) or its index. The file lives
 in the user configuration folder (``adv_tg.utils.adc_calibration.config_dir``).
@@ -20,10 +22,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY, AdcDrift, drift_from_tags
+from adv_tg.core.pps import READY_SPAN_S, calibrate_samples
 from adv_tg.utils.adc_calibration import (
     Calibration,
     CalibrationStore,
@@ -31,7 +35,13 @@ from adv_tg.utils.adc_calibration import (
     pick_best,
     recording_tags,
 )
-from adv_tg.utils.audio_files import AudioFileError, audio_info, read_tags, update_tags
+from adv_tg.utils.audio_files import (
+    AudioFileError,
+    audio_info,
+    read_mono,
+    read_tags,
+    update_tags,
+)
 
 __all__ = ["EXIT_ERROR", "EXIT_OK", "main", "resolve_device"]
 
@@ -145,6 +155,38 @@ def _cmd_tag(store: CalibrationStore, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_pps(store: CalibrationStore, args: argparse.Namespace) -> int:
+    path: Path = args.file
+    fs, x = read_mono(path)
+    est = calibrate_samples(x, fs)
+    print(
+        f"{path.name}: {fs} Hz, {est.pulses} pulsos detectados, {est.used} en el último tramo "
+        f"({est.span_s:.0f} s), {est.missing} perdidos, {est.jumps} saltos de fase, "
+        f"{est.rejected} descartados"
+    )
+    if not est.valid:
+        print(f"ERROR: sin estimación ({est.drift.note}).")
+        return EXIT_ERROR
+    d = est.drift
+    print(
+        f"→ reloj ADC: {d.ppm:+.3f} ± {d.uncertainty_ppm:.3f} ppm (jitter {est.jitter_us:.1f} µs, "
+        f"exceso ×{est.excess:.2f}); sesgo sin corregir {d.rate_bias_s_per_day:+.3f} s/d"
+    )
+    if not est.ready:
+        print(f"AVISO: grabación corta o ruidosa; se recomiendan al menos {READY_SPAN_S:.0f} s.")
+    if not args.save:
+        return EXIT_OK
+    if not args.device:
+        print("ERROR: --save necesita --device (el dispositivo con que se grabó).")
+        return EXIT_ERROR
+    note = f"GPS PPS: {est.used} pulsos en {est.span_s:.0f} s, jitter {est.jitter_us:.1f} µs ({path.name})"
+    when = _parse_date(args.date) if args.date else datetime.now(UTC)
+    cal = Calibration(resolve_device(args.device), int(fs), replace(d, note=note), when)
+    store.add(cal)
+    print(f"Guardada: {cal.device} — {_fmt(cal, datetime.now(UTC))}")
+    return EXIT_OK
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m adv_tg.tools.adc_calibration",
@@ -169,6 +211,11 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("file", type=Path)
     s.add_argument("--device", required=True, help="dispositivo con que se grabó")
     s.add_argument("--date", default=None, help="fecha de la grabación si el archivo no la lleva")
+    s = sub.add_parser("pps", help="error del ADC a partir de una grabación de un PPS de GPS")
+    s.add_argument("file", type=Path)
+    s.add_argument("--device", default=None, help="dispositivo con que se grabó (para --save)")
+    s.add_argument("--save", action="store_true", help="guarda la calibración del dispositivo")
+    s.add_argument("--date", default=None, help="fecha de la medida (ISO 8601; por defecto ahora)")
     return p
 
 
@@ -192,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_forget(store, args)
         if args.cmd == "show":
             return _cmd_show(args.file)
+        if args.cmd == "pps":
+            return _cmd_pps(store, args)
         return _cmd_tag(store, args)
     except (AudioFileError, CalibrationStoreError, ValueError) as exc:
         print(f"ERROR: {exc}")

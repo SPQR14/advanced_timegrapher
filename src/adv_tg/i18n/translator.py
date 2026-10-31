@@ -94,7 +94,7 @@ class Translator:
                 "Settings and calibrations: {config}<br>Logs: {logs}"
             ),
             "btn_calibrate": "Calibrate clock…",
-            "btn_calibrate_tooltip": "Enter the sound card's clock error (ppm) for this device",
+            "btn_calibrate_tooltip": "Calibrate this device's clock: live with a GPS PPS, by hand or with a reference watch",
             "cal_unavailable": "Select a hardware input device to calibrate its clock",
             "cal_title": "Sound card clock calibration",
             "cal_device": "Device: {device} at {fs} Hz",
@@ -102,8 +102,8 @@ class Translator:
             "cal_none": "No calibration stored: the rate is not corrected for the card's clock.",
             "cal_help": (
                 "ppm > 0 means the card's clock runs fast, which makes watches look slow by "
-                "0.0864 s/d per ppm. Get the value from a quartz watch of known error, a GPS PPS "
-                "or the live estimate of a long session. It applies from the next session."
+                "0.0864 s/d per ppm. Measure it live with a GPS PPS (most precise), type it in or "
+                "derive it from a reference watch. It applies from the next session."
             ),
             "cal_ppm": "Clock error",
             "cal_sigma": "Uncertainty (±)",
@@ -131,6 +131,56 @@ class Translator:
             "cal_ref_apply": "Use this value",
             "cal_ref_apply_tooltip": "Copy the result to “Clock error”; press Save to store it",
             "cal_ref_note": "reference watch: known {known:+.3f} s/d, measured {measured:+.3f} s/d",
+            "cal_tab_pps": "GPS PPS (live)",
+            "cal_tab_manual": "Manual",
+            "cal_tab_ref": "Reference watch",
+            "cal_history": "History",
+            "cal_pps_help": (
+                "Put the buzzer of the GPS PPS on the microphone you use for watches, wait until "
+                "the GPS has a fix (its LED blinks once per second) and press Start. Clipping is "
+                "fine: only the start of each beep is used. Run it for at least {min_s} s, until "
+                "the status says it is ready (±{sigma} ppm or better), then Save. The result is "
+                "only valid for this device at {fs} Hz."
+            ),
+            "cal_pps_result": "Clock error",
+            "cal_pps_pulses": "Pulses",
+            "cal_pps_jitter": "Pulse jitter",
+            "cal_pps_level": "Input level",
+            "cal_pps_plot_y": "Pulse timing residual (µs)",
+            "cal_pps_plot_x": "Time (s)",
+            "cal_pps_start": "Start live calibration",
+            "cal_pps_stop": "Stop",
+            "cal_pps_start_tooltip": "Listen to the GPS PPS on this device to measure its clock",
+            "cal_pps_no_device": "Choose a hardware input device in the main window",
+            "cal_pps_busy": "Stop the measurement session first: it is using the device",
+            "cal_pps_file": "Analyze PPS recording…",
+            "cal_pps_file_tooltip": (
+                "Calibrate from a WAV/FLAC of the PPS recorded with this device at this sample rate"
+            ),
+            "cal_pps_file_filter": "Audio (*.flac *.wav);;All files (*)",
+            "cal_pps_file_rate": (
+                "The recording is at {file_fs} Hz but this calibration is for {fs} Hz: record "
+                "the PPS at the same sample rate you measure with."
+            ),
+            "cal_pps_save": "Save PPS calibration",
+            "cal_pps_save_tooltip": "Store this result for the device; it applies from the next test",
+            "cal_pps_clipping_ok": "clipping (fine for the PPS)",
+            "cal_pps_error": "Capture error: {error}",
+            "cal_pps_idle": "Stopped.",
+            "cal_pps_waiting": "Listening… waiting for the first pulses.",
+            "cal_pps_collecting": "Collecting pulses ({n})…",
+            "cal_pps_converging": "Measuring… keep it running (at least {min_s} s).",
+            "cal_pps_ready": "Ready: precise enough to save.",
+            "cal_pps_jumped": ("Phase jump ×{n}: the estimate restarted (GPS fix or lost audio)."),
+            "cal_pps_ppm": "{ppm:+.3f} ± {sigma:.3f} ppm (uncorrected watches read {bias:+.3f} s/d)",
+            "cal_pps_counts": (
+                "{used} in {span:.0f} s · {missing} missing · {jumps} jumps · {rejected} discarded"
+            ),
+            "cal_pps_not_ready": (
+                "The estimate is not ready yet ({span:.0f} s, ±{sigma:.3f} ppm; recommended at "
+                "least {min_s} s). Save it anyway?"
+            ),
+            "cal_pps_note": "GPS PPS: {n} pulses in {span:.0f} s, jitter {jitter:.1f} µs",
             "normalize_audio": "Normalize audio",
             "normalize_audio_tooltip": (
                 "Enable it ONLY when the microphone gain cannot be adjusted (the input saturates "
@@ -389,7 +439,7 @@ class Translator:
                 "Ajustes y calibraciones: {config}<br>Registros: {logs}"
             ),
             "btn_calibrate": "Calibrar reloj…",
-            "btn_calibrate_tooltip": "Introduce el error del reloj de la tarjeta (ppm) de este dispositivo",
+            "btn_calibrate_tooltip": "Calibra el reloj de este dispositivo: en vivo con un PPS de GPS, a mano o con un reloj de referencia",
             "cal_unavailable": "Elige un dispositivo de entrada de hardware para calibrar su reloj",
             "cal_title": "Calibración del reloj de la tarjeta",
             "cal_device": "Dispositivo: {device} a {fs} Hz",
@@ -397,8 +447,8 @@ class Translator:
             "cal_none": "No hay calibración guardada: la marcha no se corrige por el reloj de la tarjeta.",
             "cal_help": (
                 "ppm > 0 significa que el reloj de la tarjeta adelanta, lo que hace que los relojes "
-                "parezcan atrasar 0.0864 s/d por cada ppm. Obtén el valor con un cuarzo de error "
-                "conocido, un PPS de GPS o la estimación en vivo de una sesión larga. Se aplica "
+                "parezcan atrasar 0.0864 s/d por cada ppm. Mídelo en vivo con un PPS de GPS (lo "
+                "más preciso), escríbelo a mano o dedúcelo de un reloj de referencia. Se aplica "
                 "desde la próxima sesión."
             ),
             "cal_ppm": "Error del reloj",
@@ -427,6 +477,59 @@ class Translator:
             "cal_ref_apply": "Usar este valor",
             "cal_ref_apply_tooltip": "Copia el resultado a «Error del reloj»; pulsa Guardar para almacenarlo",
             "cal_ref_note": "reloj de referencia: conocida {known:+.3f} s/d, medida {measured:+.3f} s/d",
+            "cal_tab_pps": "GPS PPS (en vivo)",
+            "cal_tab_manual": "Manual",
+            "cal_tab_ref": "Reloj de referencia",
+            "cal_history": "Historial",
+            "cal_pps_help": (
+                "Pon el zumbador del PPS del GPS sobre el micrófono que usas para los relojes, "
+                "espera a que el GPS tenga posición (su LED parpadea una vez por segundo) y pulsa "
+                "Iniciar. Que sature no importa: solo se usa el inicio de cada pitido. Déjalo al "
+                "menos {min_s} s, hasta que el estado diga que está listo (±{sigma} ppm o mejor), "
+                "y pulsa Guardar. El resultado solo vale para este dispositivo a {fs} Hz."
+            ),
+            "cal_pps_result": "Error del reloj",
+            "cal_pps_pulses": "Pulsos",
+            "cal_pps_jitter": "Jitter de los pulsos",
+            "cal_pps_level": "Nivel de entrada",
+            "cal_pps_plot_y": "Residuo de tiempo del pulso (µs)",
+            "cal_pps_plot_x": "Tiempo (s)",
+            "cal_pps_start": "Iniciar calibración en vivo",
+            "cal_pps_stop": "Detener",
+            "cal_pps_start_tooltip": "Escucha el PPS del GPS en este dispositivo para medir su reloj",
+            "cal_pps_no_device": "Elige un dispositivo de entrada de hardware en la ventana principal",
+            "cal_pps_busy": "Detén primero la sesión de medida: está usando el dispositivo",
+            "cal_pps_file": "Analizar grabación del PPS…",
+            "cal_pps_file_tooltip": (
+                "Calibra a partir de un WAV/FLAC del PPS grabado con este dispositivo a esta tasa "
+                "de muestreo"
+            ),
+            "cal_pps_file_filter": "Audio (*.flac *.wav);;Todos los archivos (*)",
+            "cal_pps_file_rate": (
+                "La grabación está a {file_fs} Hz pero esta calibración es para {fs} Hz: graba "
+                "el PPS a la misma tasa de muestreo con la que mides."
+            ),
+            "cal_pps_save": "Guardar calibración PPS",
+            "cal_pps_save_tooltip": "Guarda este resultado para el dispositivo; se aplica desde la siguiente prueba",
+            "cal_pps_clipping_ok": "satura (no importa con el PPS)",
+            "cal_pps_error": "Error de captura: {error}",
+            "cal_pps_idle": "Detenida.",
+            "cal_pps_waiting": "Escuchando… esperando los primeros pulsos.",
+            "cal_pps_collecting": "Reuniendo pulsos ({n})…",
+            "cal_pps_converging": "Midiendo… déjalo correr (al menos {min_s} s).",
+            "cal_pps_ready": "Lista: suficientemente precisa para guardarla.",
+            "cal_pps_jumped": (
+                "Salto de fase ×{n}: la estimación se reinició (posición del GPS o audio perdido)."
+            ),
+            "cal_pps_ppm": "{ppm:+.3f} ± {sigma:.3f} ppm (los relojes sin corregir marcan {bias:+.3f} s/d)",
+            "cal_pps_counts": (
+                "{used} en {span:.0f} s · {missing} perdidos · {jumps} saltos · {rejected} descartados"
+            ),
+            "cal_pps_not_ready": (
+                "La estimación aún no está lista ({span:.0f} s, ±{sigma:.3f} ppm; se recomiendan "
+                "al menos {min_s} s). ¿Guardarla de todos modos?"
+            ),
+            "cal_pps_note": "GPS PPS: {n} pulsos en {span:.0f} s, jitter {jitter:.1f} µs",
             "normalize_audio": "Normalizar audio",
             "normalize_audio_tooltip": (
                 "Actívalo SOLO cuando no sea posible ajustar la ganancia del micrófono (la entrada "
