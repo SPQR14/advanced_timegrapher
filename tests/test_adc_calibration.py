@@ -200,6 +200,25 @@ def test_cli_errors(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert "no se pudo leer el archivo de calibraciones" in capsys.readouterr().out
 
 
+def test_cli_pps(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from tests.test_pps import FS as PPS_FS
+    from tests.test_pps import synth_pps
+
+    x, _ = synth_pps(140.0, ppm=12.0, seed=9)
+    path = write_audio(tmp_path / "pps.flac", x, PPS_FS, subtype="PCM_24")
+    assert tool.main(["pps", str(path)]) == tool.EXIT_OK
+    out = capsys.readouterr().out
+    assert "→ reloj ADC: +12.0" in out or "→ reloj ADC: +11.9" in out
+    assert CalibrationStore().records() == []  # not saved without --save
+    assert tool.main(["pps", str(path), "--save"]) == tool.EXIT_ERROR  # needs --device
+    assert tool.main(["pps", str(path), "--device", DEV, "--save"]) == tool.EXIT_OK
+    rec = CalibrationStore().records(DEV, PPS_FS)
+    assert len(rec) == 1 and rec[0].drift.method == "pps" and "pps.flac" in rec[0].drift.note
+    assert rec[0].drift.ppm == pytest.approx(12.0, abs=0.1)
+    short = write_audio(tmp_path / "short.flac", x[: 5 * PPS_FS], PPS_FS, subtype="PCM_24")
+    assert tool.main(["pps", str(short)]) == tool.EXIT_ERROR
+
+
 def test_measure_resolves_drift(tmp_path: Path, tone_file: Path) -> None:
     # Nothing known.
     assert measure.resolve_adc_drift(tone_file) == (0.0, 0.0, "sin calibrar")

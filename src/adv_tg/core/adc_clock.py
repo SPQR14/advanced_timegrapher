@@ -38,9 +38,12 @@ Conventions
 * External references. ``drift_from_ticks`` fits ``t_k = a + P k`` to the instants (absolute
   samples) of a reference with a known nominal period (1 s for a PPS, 1/16 s for the Bulova
   NM10 steps...) and gives ``ppm = P / (P_nom * fs) - 1`` (in ppm) minus the reference's own
-  error. ``detect_pps_edges`` finds the rising edges of an electrical PPS on a line input with
-  sub-sample interpolation; an acoustic PPS (piezo buzzer) goes through ``BeatDetector`` as a
-  3600 BPH quartz and its beat instants feed ``drift_from_ticks`` directly.
+  error. ``detect_pps_edges`` finds the rising edges of a clean electrical PPS on a line
+  input with sub-sample interpolation. A PPS heard through a buzzer (or any PPS, live or
+  recorded) goes through ``adv_tg.core.pps``: its detector times the start of each beep
+  (8.8 µs scatter on a real recording, against 195 µs through ``BeatDetector`` as a 3600 BPH
+  quartz) and its calibrator handles phase jumps, stray clicks and the excess scatter before
+  calling ``drift_from_ticks``.
 * Recordings. ``drift_to_tags`` / ``drift_from_tags`` turn an ``AdcDrift`` into the
   ``ADV_TG_ADC_DRIFT_*`` tags stored in a recording (offline files carry no host stamps, so the
   calibration valid when they were captured travels with them).

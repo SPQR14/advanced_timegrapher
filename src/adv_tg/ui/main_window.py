@@ -2221,7 +2221,8 @@ class MainWin(QMainWindow):
         return float(record.rate_spd) - PPM_TO_S_PER_DAY * self._last_drift_ppm
 
     def open_calibration_dialog(self, exec_dialog: bool = True) -> CalibrationDialog | None:
-        """Manual calibration of the selected device's clock (applies to the next session)."""
+        """Clock calibration of the selected device: live GPS PPS, manual or reference watch
+        (applies to the next session). The live PPS needs the device free (no session)."""
         target = self._calibration_target()
         if target is None:
             self.statusBar().showMessage(self.translator.tr("cal_unavailable"), 6000)
@@ -2243,6 +2244,8 @@ class MainWin(QMainWindow):
             live=live,
             parent=self,
             measured_rate_spd=self._uncorrected_rate_spd(),
+            device_id=self.selected_device_id(),
+            capture_busy=self.dsp_worker is not None and self.dsp_worker.isRunning(),
         )
         if exec_dialog:
             dlg.exec()
