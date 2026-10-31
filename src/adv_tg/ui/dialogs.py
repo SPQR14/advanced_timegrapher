@@ -1,11 +1,16 @@
-"""Dialogs of the main window: manual ADC clock calibration, "About" and the report bundle.
+"""Dialogs of the main window: ADC clock calibration, "About" and the report bundle.
 
 ``CalibrationDialog`` edits the calibrations stored per device (``adv_tg.utils.adc_calibration``,
 the same file as ``python -m adv_tg.tools.adc_calibration``): it shows the one that applies
-now and the history, saves a manual value (level 3) or the live estimate of the last session,
-and deletes the device's calibrations. A new calibration applies from the next session. The
-"reference watch" box turns the rate of a watch of known error (a quartz checked against a
-time signal) into ppm: ``ppm = (known rate - uncorrected measured rate) / 0.0864``.
+now and the history, and deletes the device's calibrations. A new calibration applies from the
+next session. Three tabs give the value:
+
+* GPS PPS: listens live to a GPS PPS made audible by a buzzer on the same microphone
+  (``PpsCalibrationWorker`` + ``adv_tg.core.pps``) or analyses a recording of it, and saves
+  the estimate (level 3, method ``pps``).
+* Manual: a value typed in or the live estimate of the last session (level 3, ``manual``).
+* Reference watch: turns the rate of a watch of known error (a quartz checked against a time
+  signal) into ppm: ``ppm = (known rate - uncorrected measured rate) / 0.0864``.
 
 ``ReportDialog`` builds the ``.zip`` of ``adv_tg.utils.report`` (logs, system, settings,
 calibrations and optionally the last recording) and opens the GitHub issue chooser.
@@ -17,19 +22,22 @@ import html
 import math
 import platform
 import sys
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pyqtgraph as pg
 from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, Qt, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QCloseEvent, QDesktopServices
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -39,13 +47,16 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from adv_tg import __version__
 from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY, AdcDrift
+from adv_tg.core.pps import READY_SIGMA_PPM, READY_SPAN_S, PpsEstimate, calibrate_samples
 from adv_tg.i18n.translator import Translator
+from adv_tg.ui.pps_worker import PpsCalibrationWorker
 from adv_tg.utils.adc_calibration import (
     Calibration,
     CalibrationStore,
@@ -53,6 +64,7 @@ from adv_tg.utils.adc_calibration import (
     config_dir,
     pick_best,
 )
+from adv_tg.utils.audio_files import read_mono
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
 from adv_tg.utils.report import ISSUES_URL, build_report, default_report_name
@@ -70,6 +82,8 @@ _dbg = Debugger.get(__name__)
 logger = _dbg.logger
 
 REPO_URL = "https://github.com/SPQR14/advanced_timegrapher"
+#: Colour of the PPS residual points.
+PPS_COLOR = "#4FC3F7"
 
 
 def open_folder(path: Path) -> bool:
@@ -96,18 +110,28 @@ class LiveDrift:
 
 
 class CalibrationDialog(QDialog):
-    """Manual calibration of the ADC clock of one device (see module docstring).
+    """Calibration of the ADC clock of one device (see module docstring).
+
+    Three ways to get the value, one tab each: a GPS PPS heard live (or a recording of it),
+    a manual value (or the live estimate of the last session) and a reference watch of known
+    rate. The calibration that applies now and the history are shown below the tabs.
 
     Args:
         translator: UI texts.
         device: Device name (as PortAudio reports it).
         sample_rate: Sample rate the calibration applies to.
         live: Live estimate of the last session (level >= 2), or None.
-        measured_rate_spd: Rate of the last session WITHOUT any clock correction (s/d), used
-            to prefill the reference-watch box; None if there is no reading.
         store: Calibration store (default: the user's).
         parent: Qt parent.
+        measured_rate_spd: Rate of the last session WITHOUT any clock correction (s/d), used
+            to prefill the reference-watch box; None if there is no reading.
+        device_id: PortAudio index of the device, for the live PPS capture (None = not
+            available).
+        capture_busy: A measurement session holds the device: the live PPS cannot start.
+        pps_worker_factory: ``(device_id, sample_rate) -> PpsCalibrationWorker`` (tests).
     """
+
+    PPS_TAB, MANUAL_TAB, REFERENCE_TAB = range(3)
 
     def __init__(
         self,
@@ -118,6 +142,9 @@ class CalibrationDialog(QDialog):
         store: CalibrationStore | None = None,
         parent: QWidget | None = None,
         measured_rate_spd: float | None = None,
+        device_id: int | None = None,
+        capture_busy: bool = False,
+        pps_worker_factory: Callable[[int | None, int], PpsCalibrationWorker] | None = None,
     ) -> None:
         super().__init__(parent)
         self._tr = translator.tr
@@ -125,9 +152,18 @@ class CalibrationDialog(QDialog):
         self.sample_rate = int(sample_rate)
         self.live = live
         self.store = store or CalibrationStore()
+        self.device_id = device_id
+        self.capture_busy = capture_busy
+        self._pps_factory = pps_worker_factory or (
+            lambda dev, fs: PpsCalibrationWorker(dev, fs, parent=self)
+        )
+        self.pps_worker: PpsCalibrationWorker | None = None
+        self.pps_estimate: PpsEstimate | None = None
+        self.pps_source = ""  # "" = live, else the file name
+        self._pps_listening = False
         tr = self._tr
         self.setWindowTitle(tr("cal_title"))
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(680)
 
         layout = QVBoxLayout(self)
         head = QLabel(tr("cal_device").format(device=device, fs=self.sample_rate))
@@ -142,6 +178,105 @@ class CalibrationDialog(QDialog):
         help_lbl.setObjectName("HelpText")
         layout.addWidget(help_lbl)
 
+        self.tabs = QTabWidget()  # order: PPS_TAB, MANUAL_TAB, REFERENCE_TAB
+        self.tabs.addTab(self._build_pps_tab(), tr("cal_tab_pps"))
+        self.tabs.addTab(self._build_manual_tab(), tr("cal_tab_manual"))
+        self.tabs.addTab(self._build_reference_tab(measured_rate_spd), tr("cal_tab_ref"))
+        layout.addWidget(self.tabs)
+
+        hist = QLabel(tr("cal_history"))
+        hist.setObjectName("SectionHeader")
+        layout.addWidget(hist)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(
+            [tr("cal_col_date"), "ppm", "± ppm", tr("cal_col_level"), tr("cal_col_note")]
+        )
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setMinimumHeight(110)
+        layout.addWidget(self.table)
+
+        bottom = QHBoxLayout()
+        self.btn_forget = QPushButton(tr("cal_forget"))
+        self.btn_forget.clicked.connect(self.forget)
+        bottom.addWidget(self.btn_forget)
+        bottom.addStretch()
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        bottom.addWidget(buttons)
+        layout.addLayout(bottom)
+
+        self._refresh_bias()
+        self._refresh_reference()
+        self._show_pps(None)
+        self.refresh()
+
+    # ------------------------------------------------------------------ tabs
+    def _build_pps_tab(self) -> QWidget:
+        tr = self._tr
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        help_lbl = QLabel(tr("cal_pps_help").format(
+            min_s=int(READY_SPAN_S), sigma=READY_SIGMA_PPM, fs=self.sample_rate
+        ))  # fmt: skip
+        help_lbl.setWordWrap(True)
+        help_lbl.setObjectName("HelpText")
+        lay.addWidget(help_lbl)
+
+        self.lbl_pps_status = QLabel()
+        self.lbl_pps_status.setWordWrap(True)
+        lay.addWidget(self.lbl_pps_status)
+        form = QFormLayout()
+        self.lbl_pps_ppm = QLabel()
+        self.lbl_pps_pulses = QLabel()
+        self.lbl_pps_jitter = QLabel()
+        self.lbl_pps_level = QLabel("—")
+        form.addRow(tr("cal_pps_result"), self.lbl_pps_ppm)
+        form.addRow(tr("cal_pps_pulses"), self.lbl_pps_pulses)
+        form.addRow(tr("cal_pps_jitter"), self.lbl_pps_jitter)
+        form.addRow(tr("cal_pps_level"), self.lbl_pps_level)
+        lay.addLayout(form)
+
+        self.plot_pps = pg.PlotWidget()
+        self.plot_pps.setMinimumHeight(140)
+        self.plot_pps.setLabel("left", tr("cal_pps_plot_y"))
+        self.plot_pps.setLabel("bottom", tr("cal_pps_plot_x"))
+        self.plot_pps.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_pps.setMouseEnabled(x=False, y=False)
+        self._pps_curve = self.plot_pps.plot(
+            [], [], pen=None, symbol="o", symbolSize=4, symbolBrush=PPS_COLOR, symbolPen=None
+        )
+        lay.addWidget(self.plot_pps)
+
+        row = QHBoxLayout()
+        self.btn_pps_start = QPushButton(tr("cal_pps_start"))
+        self.btn_pps_start.setCheckable(True)
+        self.btn_pps_start.toggled.connect(self._toggle_pps)
+        if self.device_id is None:
+            self.btn_pps_start.setEnabled(False)
+            self.btn_pps_start.setToolTip(tr("cal_pps_no_device"))
+        elif self.capture_busy:
+            self.btn_pps_start.setEnabled(False)
+            self.btn_pps_start.setToolTip(tr("cal_pps_busy"))
+        else:
+            self.btn_pps_start.setToolTip(tr("cal_pps_start_tooltip"))
+        self.btn_pps_file = QPushButton(tr("cal_pps_file"))
+        self.btn_pps_file.setToolTip(tr("cal_pps_file_tooltip"))
+        self.btn_pps_file.clicked.connect(lambda: self.analyze_pps_file())
+        self.btn_pps_save = QPushButton(tr("cal_pps_save"))
+        self.btn_pps_save.setToolTip(tr("cal_pps_save_tooltip"))
+        self.btn_pps_save.clicked.connect(lambda: self.save_pps())
+        row.addWidget(self.btn_pps_start)
+        row.addWidget(self.btn_pps_file)
+        row.addStretch()
+        row.addWidget(self.btn_pps_save)
+        lay.addLayout(row)
+        return page
+
+    def _build_manual_tab(self) -> QWidget:
+        tr = self._tr
+        page = QWidget()
+        lay = QVBoxLayout(page)
         form = QFormLayout()
         self.spn_ppm = QDoubleSpinBox()
         self.spn_ppm.setRange(-500.0, 500.0)
@@ -162,11 +297,34 @@ class CalibrationDialog(QDialog):
         form.addRow(tr("cal_sigma"), self.spn_sigma)
         form.addRow(tr("cal_note"), self.txt_note)
         form.addRow("", self.lbl_bias)
-        layout.addLayout(form)
+        lay.addLayout(form)
+        row = QHBoxLayout()
+        self.btn_live = QPushButton(tr("cal_use_live"))
+        self.btn_live.setEnabled(self.live is not None)
+        if self.live is not None:
+            self.btn_live.setToolTip(
+                tr("cal_live_tooltip").format(
+                    ppm=self.live.ppm, sigma=self.live.sigma_ppm, level=self.live.level
+                )
+            )
+        self.btn_live.clicked.connect(self._use_live)
+        self.btn_save = QPushButton(tr("cal_save"))
+        self.btn_save.clicked.connect(self.save)
+        row.addWidget(self.btn_live)
+        row.addStretch()
+        row.addWidget(self.btn_save)
+        lay.addLayout(row)
+        lay.addStretch()
+        return page
 
-        # Reference watch of known rate -> ppm
-        self.grp_ref = QGroupBox(tr("cal_ref_title"))
+    def _build_reference_tab(self, measured_rate_spd: float | None) -> QWidget:
+        """Reference watch of known rate -> ppm (copied to the manual tab)."""
+        tr = self._tr
+        self.grp_ref = QWidget()
         ref_layout = QVBoxLayout(self.grp_ref)
+        title = QLabel(tr("cal_ref_title"))
+        title.setObjectName("SectionHeader")
+        ref_layout.addWidget(title)
         ref_help = QLabel(tr("cal_ref_help"))
         ref_help.setWordWrap(True)
         ref_help.setObjectName("HelpText")
@@ -188,43 +346,187 @@ class CalibrationDialog(QDialog):
         ref_row.addStretch()
         ref_row.addWidget(self.btn_ref_apply)
         ref_layout.addLayout(ref_row)
+        ref_layout.addStretch()
         self.spn_ref_measured.valueChanged.connect(self._refresh_reference)
         self.spn_ref_known.valueChanged.connect(self._refresh_reference)
-        layout.addWidget(self.grp_ref)
+        return self.grp_ref
 
-        row = QHBoxLayout()
-        self.btn_live = QPushButton(tr("cal_use_live"))
-        self.btn_live.setEnabled(live is not None)
-        if live is not None:
-            self.btn_live.setToolTip(
-                tr("cal_live_tooltip").format(ppm=live.ppm, sigma=live.sigma_ppm, level=live.level)
+    # ------------------------------------------------------------------ GPS PPS
+    def _toggle_pps(self, on: bool) -> None:
+        if on:
+            self.start_pps()
+        else:
+            self.stop_pps()
+
+    def start_pps(self) -> bool:
+        """Start listening to the PPS on the device (live calibration)."""
+        if self.device_id is None or self.capture_busy:
+            return False
+        if self.pps_worker is not None and self.pps_worker.isRunning():
+            return True
+        worker = self._pps_factory(self.device_id, self.sample_rate)
+        worker.pps_updated.connect(self._on_pps)
+        worker.level_updated.connect(self._on_pps_level)
+        worker.error_occurred.connect(self._on_pps_error)
+        worker.session_finished.connect(self._on_pps_finished)
+        self.pps_worker = worker
+        self.pps_estimate = None
+        self.pps_source = ""
+        self._pps_listening = True
+        self._show_pps(None)
+        self.btn_pps_start.blockSignals(True)
+        self.btn_pps_start.setChecked(True)
+        self.btn_pps_start.blockSignals(False)
+        self.btn_pps_start.setText(self._tr("cal_pps_stop"))
+        self.btn_pps_file.setEnabled(False)
+        _dbg.state_change("calibración PPS", "PARADA", "ESCUCHANDO", device=self.device)
+        worker.start_stream()
+        return True
+
+    def stop_pps(self) -> None:
+        """Stop listening (the last estimate stays on screen and can be saved)."""
+        worker = self.pps_worker
+        if worker is not None and worker.isRunning():
+            worker.stop_stream()
+        self._on_pps_finished()
+
+    def _on_pps_finished(self) -> None:
+        self._pps_listening = False
+        self.btn_pps_start.blockSignals(True)
+        self.btn_pps_start.setChecked(False)
+        self.btn_pps_start.blockSignals(False)
+        self.btn_pps_start.setText(self._tr("cal_pps_start"))
+        self.btn_pps_file.setEnabled(True)
+        self._show_pps(self.pps_estimate)
+
+    def _on_pps(self, estimate: PpsEstimate) -> None:
+        self.pps_estimate = estimate
+        self._show_pps(estimate)
+
+    def _on_pps_level(self, peak_dbfs: float, _rms_dbfs: float, saturated: bool) -> None:
+        text = "—" if not math.isfinite(peak_dbfs) else f"{peak_dbfs:.0f} dBFS"
+        if saturated:
+            text += " · " + self._tr("cal_pps_clipping_ok")
+        self.lbl_pps_level.setText(text)
+
+    def _on_pps_error(self, message: str) -> None:
+        logger.error("Calibración PPS: %s", message)
+        self.lbl_pps_status.setText(self._tr("cal_pps_error").format(error=message))
+
+    def _show_pps(self, est: PpsEstimate | None) -> None:
+        """Refresh the GPS PPS tab from ``est`` (None = nothing yet)."""
+        tr = self._tr
+        listening = self._pps_listening
+        if est is None:
+            self.lbl_pps_status.setText(tr("cal_pps_waiting" if listening else "cal_pps_idle"))
+            self.lbl_pps_ppm.setText("—")
+            self.lbl_pps_pulses.setText("—")
+            self.lbl_pps_jitter.setText("—")
+            self._pps_curve.setData([], [])
+            self.btn_pps_save.setEnabled(False)
+            return
+        if est.valid:
+            d = est.drift
+            self.lbl_pps_ppm.setText(
+                tr("cal_pps_ppm").format(
+                    ppm=d.ppm, sigma=d.uncertainty_ppm, bias=d.rate_bias_s_per_day
+                )
             )
-        self.btn_live.clicked.connect(self._use_live)
-        self.btn_save = QPushButton(tr("cal_save"))
-        self.btn_save.clicked.connect(self.save)
-        self.btn_forget = QPushButton(tr("cal_forget"))
-        self.btn_forget.clicked.connect(self.forget)
-        row.addWidget(self.btn_live)
-        row.addStretch()
-        row.addWidget(self.btn_forget)
-        row.addWidget(self.btn_save)
-        layout.addLayout(row)
+            self.lbl_pps_jitter.setText(f"{est.jitter_us:.1f} µs")
+        else:
+            self.lbl_pps_ppm.setText("—")
+            self.lbl_pps_jitter.setText("—")
+        self.lbl_pps_pulses.setText(
+            tr("cal_pps_counts").format(
+                span=est.span_s, used=est.used, missing=est.missing, jumps=est.jumps,
+                rejected=est.rejected,
+            )
+        )  # fmt: skip
+        if est.used == 0 and listening:
+            status = tr("cal_pps_waiting")
+        elif not est.valid:
+            status = tr("cal_pps_collecting").format(n=est.used)
+        elif est.ready:
+            status = tr("cal_pps_ready")
+        else:
+            status = tr("cal_pps_converging").format(min_s=int(READY_SPAN_S))
+        if est.jumps:
+            status += " " + tr("cal_pps_jumped").format(n=est.jumps)
+        if self.pps_source:
+            status = f"{self.pps_source}: {status}"
+        self.lbl_pps_status.setText(status)
+        self._pps_curve.setData(est.t_s, est.residual_us)
+        self.btn_pps_save.setEnabled(est.valid)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(
-            [tr("cal_col_date"), "ppm", "± ppm", tr("cal_col_level"), tr("cal_col_note")]
-        )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        layout.addWidget(self.table)
+    def analyze_pps_file(self, path: Path | str | None = None) -> PpsEstimate | None:
+        """Calibrate from a recording of the PPS made with this device at this sample rate."""
+        tr = self._tr
+        if path is None:
+            chosen, _ = QFileDialog.getOpenFileName(
+                self, tr("cal_pps_file"), str(Path.home()), tr("cal_pps_file_filter")
+            )
+            if not chosen:
+                return None
+            path = chosen
+        path = Path(path)
+        try:
+            fs, x = read_mono(path)
+        except Exception as exc:  # unreadable / unsupported file
+            self._error(exc)
+            return None
+        if int(fs) != self.sample_rate:
+            self._error(ValueError(tr("cal_pps_file_rate").format(file_fs=fs, fs=self.sample_rate)))
+            return None
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            est = calibrate_samples(x, fs)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.pps_estimate = est
+        self.pps_source = path.name
+        _dbg.file_read(path, pulses=est.pulses, ppm=round(est.drift.ppm, 3))
+        self._show_pps(est)
+        return est
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self._refresh_bias()
-        self._refresh_reference()
+    def save_pps(self, confirm: bool = True) -> bool:
+        """Store the PPS estimate on screen (level 3, method ``pps``)."""
+        est = self.pps_estimate
+        if est is None or not est.valid:
+            return False
+        tr = self._tr
+        if confirm and not est.ready:
+            answer = QMessageBox.question(
+                self,
+                tr("cal_title"),
+                tr("cal_pps_not_ready").format(
+                    span=est.span_s, sigma=est.drift.uncertainty_ppm, min_s=int(READY_SPAN_S)
+                ),
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
+        note = tr("cal_pps_note").format(n=est.used, span=est.span_s, jitter=est.jitter_us)
+        if self.pps_source:
+            note += f" ({self.pps_source})"
+        drift = replace(est.drift, note=note)
+        try:
+            self.store.add(Calibration(self.device, self.sample_rate, drift, datetime.now(UTC)))
+        except (ValueError, CalibrationStoreError) as exc:
+            self._error(exc)
+            return False
+        _dbg.state_change(
+            "calibración PPS", "-", f"{drift.ppm:+.3f} ± {drift.uncertainty_ppm:.3f} ppm",
+            device=self.device, fs=self.sample_rate, pulses=est.used,
+        )  # fmt: skip
         self.refresh()
+        return True
+
+    def done(self, result: int) -> None:  # noqa: D102 - stop the capture with the window
+        self.stop_pps()
+        super().done(result)
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        self.stop_pps()
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------ helpers
     @staticmethod
@@ -251,6 +553,7 @@ class CalibrationDialog(QDialog):
         """Copy the reference-watch result to the form (saved with "Save")."""
         ppm = self.reference_ppm()
         self.spn_ppm.setValue(ppm)
+        self.tabs.setCurrentIndex(self.MANUAL_TAB)
         self.txt_note.setText(
             self._tr("cal_ref_note").format(
                 known=self.spn_ref_known.value(), measured=self.spn_ref_measured.value()

@@ -13,4 +13,6 @@
 * ``adc_clock``: layer 4, real ADC frequency (ppm +- sigma, confidence level) from the block
   log against the host clock (``ClockDriftTracker``) or from an external reference
   (``drift_from_ticks``, ``detect_pps_edges``).
+* ``pps``: layer 4, GPS PPS reference: pulse detector (``PpsDetector``) and live calibrator
+  (``PpsCalibrator``) of the ADC clock.
 """

@@ -182,20 +182,65 @@ automatically during each test using your computer's clock (synchronised over th
 and corrects the rate when the estimate is reliable. The **Clock Drift** line shows the
 correction applied and its confidence level (1–3).
 
-For a more precise correction, press **Calibrate clock…** (under the statistics):
+For a more precise correction, press **Calibrate clock…** (under the statistics). The window
+has three tabs, one per method, and below them the calibration that applies now and the
+history (**Delete all** clears it). Whatever the method, the calibration is stored for that
+microphone **and sample rate**, and is applied from the **next** test.
+
+### With a GPS PPS (most precise)
+
+A GPS module gives one pulse per second (PPS) accurate to a millionth of a millisecond. Made
+audible with a buzzer, the app times it with the same microphone it uses for watches and
+measures the card's error to a few hundredths of a ppm (about 0.003 s/d) in two minutes.
+
+**What you need:** a GPS module with a PPS output (e.g. boards with a u-blox NEO-6M, 7M or
+8M), a 5 V **active** buzzer (the kind that beeps on its own when powered), an NPN transistor
+(2N2222, BC547 or similar), a 1 kΩ resistor and a 5 V supply (USB).
+
+**Wiring:** GPS VCC and GND to 5 V and GND; GPS **PPS → 1 kΩ → transistor base**; emitter to
+GND; buzzer **+ to 5 V** and **− to the collector**. The transistor lets the PPS pin (often
+3.3 V and weak) drive the buzzer. Each pulse (usually 100 ms) becomes a short beep.
+
+**Calibrating live:**
+
+1. Put the GPS antenna where it sees the sky and wait for the fix: the module's LED starts
+   blinking once per second. Before the fix many modules give no PPS, or a free-running one.
+2. In the main window choose the **IN Device** and **Sample Rate** you measure watches with,
+   and do not start a test (the calibration needs the microphone).
+3. Put the buzzer against the microphone, open **Calibrate clock… → GPS PPS (live)** and press
+   **Start live calibration**. If the signal clips, that is fine: only the start of each beep
+   is used. Keep the room quiet and do not touch the microphone.
+4. Watch the window: **Clock error** (ppm ± uncertainty and what an uncorrected watch would
+   read), **Pulses** (time, missing, phase jumps, discarded clicks), **Pulse jitter** (usually
+   under 20 µs) and the plot of each pulse's timing (a flat, thin cloud is good).
+5. After **2 minutes or more** the status says **Ready**. Press **Stop** and **Save PPS
+   calibration**.
+
+A **phase jump** restarts the estimate: it happens when the GPS gets its fix during the
+calibration, or when audio is lost. Some jumps right at the start are normal; if they keep
+appearing, see [Troubleshooting](#troubleshooting).
+
+**From a recording:** if you recorded the PPS (WAV or FLAC, same microphone and sample rate),
+press **Analyze PPS recording…** in the same tab, or from a terminal:
+
+```bash
+python -m adv_tg.tools.adc_calibration pps pps.flac --device "<microphone name>" --save
+```
+
+### Manual
 
 - After a **long test (15 minutes or more)**, press **Use live estimate** and then **Save**.
-- **With a quartz watch of known rate** (checked against a time signal over several days):
-  measure it, open **Calibrate clock…** and, in **From a reference watch of known rate**, type
-  its **known rate**. The **measured rate** is already filled in with the last reading,
-  without any clock correction. The window computes `ppm = (known − measured) / 0.0864`;
-  press **Use this value** and then **Save**.
-- With another reference (e.g. a GPS with PPS output), type the clock error directly in
-  **Clock error** and its **Uncertainty**, add a note and press **Save**. A positive value
-  means the card's clock runs fast (watches look slow).
+- With a value you measured another way, type the **Clock error** and its **Uncertainty**, add
+  a note and press **Save**. A positive value means the card's clock runs fast (watches look
+  slow).
 
-The calibration is stored per microphone and is applied from the **next** test. The same window
-shows the history and lets you delete it.
+### With a reference watch
+
+With a **quartz watch of known rate** (checked against a time signal over several days):
+measure it, open **Calibrate clock… → Reference watch** and type its **known rate**. The
+**measured rate** is already filled in with the last reading, without any clock correction.
+The window computes `ppm = (known − measured) / 0.0864`; press **Use this value** (it goes to
+the **Manual** tab) and then **Save**.
 
 ## Saving results
 
@@ -286,6 +331,9 @@ If the app does not open at all, attach the files of the log folder instead:
 | Figures jump a lot | Noise (engines, voices, the table) or a watch whose rate really varies. Use foam under the stand and longer tests. |
 | Amplitude in grey and a *"tic and tac amplitude differ"* warning | The amplitude is only indicative for this beat; check the lift angle and the microphone contact. |
 | "Calibrate clock…" says it is not available | Choose a real microphone in **IN Device** (not the simulator). |
+| **Start live calibration** is greyed out | Stop the running test first (it is using the microphone), or choose a real microphone in **IN Device**. |
+| Live calibration: no pulses | Check that the GPS has a fix (LED blinking), the buzzer is against the microphone and the level moves. |
+| Live calibration: phase jumps keep appearing | The GPS loses its fix (move the antenna to see more sky) or audio is being lost (see the capture line under the statistics). |
 | **MOCK** badge on screen | The simulator is on: its figures are **not** measurements. Press **MOCK** to turn it off. |
 
 ## Beta limitations
@@ -497,21 +545,71 @@ aplicación lo estima sola durante cada prueba usando el reloj del ordenador (si
 Internet) y corrige la marcha cuando la estimación es fiable. La línea **Deriva de Reloj**
 muestra la corrección aplicada y su nivel de confianza (1–3).
 
-Para una corrección más precisa, pulsa **Calibrar reloj…** (bajo las estadísticas):
+Para una corrección más precisa, pulsa **Calibrar reloj…** (bajo las estadísticas). La ventana
+tiene tres pestañas, una por método, y debajo la calibración que se aplica ahora y el
+historial (**Borrar todas** lo vacía). Sea cual sea el método, la calibración se guarda para
+ese micrófono **y esa tasa de muestreo**, y se aplica desde la **siguiente** prueba.
+
+### Con el PPS de un GPS (lo más preciso)
+
+Un módulo GPS da un pulso por segundo (PPS) exacto a la millonésima de milisegundo. Si lo
+haces audible con un zumbador, la aplicación lo cronometra con el mismo micrófono que usa para
+los relojes y mide el error de la tarjeta con unas centésimas de ppm (unos 0.003 s/d) en dos
+minutos.
+
+**Qué necesitas:** un módulo GPS con salida PPS (p. ej. placas con u-blox NEO-6M, 7M u 8M),
+un zumbador **activo** de 5 V (de los que pitan solos al darles corriente), un transistor NPN
+(2N2222, BC547 o similar), una resistencia de 1 kΩ y una alimentación de 5 V (USB).
+
+**Conexión:** VCC y GND del GPS a 5 V y GND; **PPS del GPS → 1 kΩ → base del transistor**;
+emisor a GND; zumbador **+ a 5 V** y **− al colector**. El transistor permite que la patilla
+PPS (a menudo de 3.3 V y poca corriente) mueva el zumbador. Cada pulso (normalmente de
+100 ms) se convierte en un pitido corto.
+
+**Calibrar en vivo:**
+
+1. Pon la antena del GPS donde vea el cielo y espera a que tenga posición: el LED del módulo
+   empieza a parpadear una vez por segundo. Antes de eso muchos módulos no dan PPS, o dan uno
+   suelto que no está sincronizado.
+2. En la ventana principal elige el **Dispositivo IN** y la **Frec. Muestreo**
+   con que mides los relojes, y no inicies ninguna prueba (la calibración necesita el
+   micrófono).
+3. Pon el zumbador contra el micrófono, abre **Calibrar reloj… → GPS PPS (en vivo)** y pulsa
+   **Iniciar calibración en vivo**. Si la señal satura no pasa nada: solo se usa el inicio de
+   cada pitido. Mantén el lugar en silencio y no toques el micrófono.
+4. Mira la ventana: **Error del reloj** (ppm ± incertidumbre y lo que marcaría un reloj sin
+   corregir), **Pulsos** (tiempo, perdidos, saltos de fase, clics descartados), **Jitter de los
+   pulsos** (normalmente menos de 20 µs) y la gráfica con el tiempo de cada pulso (una nube
+   plana y estrecha es buena señal).
+5. Pasados **2 minutos o más** el estado dice **Lista**. Pulsa **Detener** y **Guardar
+   calibración PPS**.
+
+Un **salto de fase** reinicia la estimación: ocurre cuando el GPS consigue la posición durante
+la calibración o cuando se pierde audio. Algún salto justo al principio es normal; si siguen
+apareciendo, ver [Solución de problemas](#solución-de-problemas).
+
+**Desde una grabación:** si grabaste el PPS (WAV o FLAC, mismo micrófono y tasa de muestreo),
+pulsa **Analizar grabación del PPS…** en la misma pestaña, o desde una terminal:
+
+```bash
+python -m adv_tg.tools.adc_calibration pps pps.flac --device "<nombre del micrófono>" --save
+```
+
+### Manual
 
 - Tras una **prueba larga (15 minutos o más)**, pulsa **Usar la estimación en vivo** y después
   **Guardar**.
-- **Con un cuarzo de marcha conocida** (comprobada contra una señal horaria durante varios
-  días): mídelo, abre **Calibrar reloj…** y, en **Desde un reloj de referencia de marcha
-  conocida**, escribe su **marcha conocida**. La **marcha medida** ya viene rellenada con la
-  última lectura, sin corrección de reloj. La ventana calcula
-  `ppm = (conocida − medida) / 0.0864`; pulsa **Usar este valor** y después **Guardar**.
-- Con otra referencia (p. ej. un GPS con salida PPS), escribe directamente el error en
-  **Error del reloj** y su **Incertidumbre**, añade una nota y pulsa **Guardar**. Un valor
-  positivo significa que el reloj de la tarjeta adelanta (los relojes parecen atrasar).
+- Con un valor que mediste por otro medio, escribe el **Error del reloj** y su
+  **Incertidumbre**, añade una nota y pulsa **Guardar**. Un valor positivo significa que el
+  reloj de la tarjeta adelanta (los relojes parecen atrasar).
 
-La calibración se guarda por micrófono y se aplica desde la **siguiente** prueba. La misma
-ventana muestra el historial y permite borrarlo.
+### Con un reloj de referencia
+
+Con un **cuarzo de marcha conocida** (comprobada contra una señal horaria durante varios
+días): mídelo, abre **Calibrar reloj… → Reloj de referencia** y escribe su **marcha conocida**.
+La **marcha medida** ya viene rellenada con la última lectura, sin corrección de reloj. La
+ventana calcula `ppm = (conocida − medida) / 0.0864`; pulsa **Usar este valor** (pasa a la
+pestaña **Manual**) y después **Guardar**.
 
 ## Guardar resultados
 
@@ -605,6 +703,9 @@ su lugar los archivos de la carpeta de registros:
 | Las cifras saltan mucho | Ruido (motores, voces, la mesa) o un reloj cuya marcha varía de verdad. Usa espuma bajo el soporte y pruebas más largas. |
 | Amplitud en gris y aviso *"amplitud de tic y tac distinta"* | La amplitud es orientativa en esa medida; revisa el ángulo y el contacto con el micrófono. |
 | "Calibrar reloj…" dice que no está disponible | Elige un micrófono real en **Dispositivo IN** (no el simulador). |
+| **Iniciar calibración en vivo** aparece en gris | Detén antes la prueba en curso (está usando el micrófono), o elige un micrófono real en **Dispositivo IN**. |
+| Calibración en vivo: no aparecen pulsos | Comprueba que el GPS tiene posición (LED parpadeando), que el zumbador está contra el micrófono y que el nivel se mueve. |
+| Calibración en vivo: siguen apareciendo saltos de fase | El GPS pierde la posición (pon la antena donde vea más cielo) o se está perdiendo audio (ver la línea de captura bajo las estadísticas). |
 | Insignia **MOCK** en pantalla | El simulador está activo: sus cifras **no** son medidas. Pulsa **MOCK** para desactivarlo. |
 
 ## Limitaciones de la beta
