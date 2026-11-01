@@ -217,6 +217,16 @@ def test_cli_pps(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert rec[0].drift.ppm == pytest.approx(12.0, abs=0.1)
     short = write_audio(tmp_path / "short.flac", x[: 5 * PPS_FS], PPS_FS, subtype="PCM_24")
     assert tool.main(["pps", str(short)]) == tool.EXIT_ERROR
+    # --tag: the recording carries its own error and is marked as a reference
+    from adv_tg.core.adc_clock import REFERENCE_TAG
+
+    ref = write_audio(tmp_path / "ref.flac", x, PPS_FS, subtype="PCM_24")
+    assert tool.main(["pps", str(ref), "--tag"]) == tool.EXIT_OK
+    tags = read_tags(ref)
+    assert tags[REFERENCE_TAG] == "gps-pps"
+    tagged = drift_from_tags(tags)
+    assert tagged is not None and tagged.method == "pps"
+    assert tagged.ppm == pytest.approx(12.0, abs=0.1)
 
 
 def test_measure_resolves_drift(tmp_path: Path, tone_file: Path) -> None:

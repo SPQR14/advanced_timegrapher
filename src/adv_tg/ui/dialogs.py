@@ -53,7 +53,7 @@ from PyQt6.QtWidgets import (
 )
 
 from adv_tg import __version__
-from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY, AdcDrift
+from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY, REFERENCE_TAG, AdcDrift
 from adv_tg.core.pps import READY_SIGMA_PPM, READY_SPAN_S, PpsEstimate, calibrate_samples
 from adv_tg.i18n.translator import Translator
 from adv_tg.ui.pps_worker import PpsCalibrationWorker
@@ -64,7 +64,7 @@ from adv_tg.utils.adc_calibration import (
     config_dir,
     pick_best,
 )
-from adv_tg.utils.audio_files import read_mono
+from adv_tg.utils.audio_files import read_mono, read_tags
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
 from adv_tg.utils.report import ISSUES_URL, build_report, default_report_name
@@ -160,6 +160,9 @@ class CalibrationDialog(QDialog):
         self.pps_worker: PpsCalibrationWorker | None = None
         self.pps_estimate: PpsEstimate | None = None
         self.pps_source = ""  # "" = live, else the file name
+        # the file is a reference recording: it carries the error of the card that recorded
+        # it, which is only right for this device if it is that card (asks before saving)
+        self.pps_reference = False
         self._pps_listening = False
         tr = self._tr
         self.setWindowTitle(tr("cal_title"))
@@ -372,6 +375,7 @@ class CalibrationDialog(QDialog):
         self.pps_worker = worker
         self.pps_estimate = None
         self.pps_source = ""
+        self.pps_reference = False
         self._pps_listening = True
         self._show_pps(None)
         self.btn_pps_start.blockSignals(True)
@@ -454,6 +458,8 @@ class CalibrationDialog(QDialog):
             status += " " + tr("cal_pps_jumped").format(n=est.jumps)
         if self.pps_source:
             status = f"{self.pps_source}: {status}"
+        if self.pps_reference:
+            status += " " + tr("cal_pps_reference")
         self.lbl_pps_status.setText(status)
         self._pps_curve.setData(est.t_s, est.residual_us)
         self.btn_pps_save.setEnabled(est.valid)
@@ -484,16 +490,36 @@ class CalibrationDialog(QDialog):
             QApplication.restoreOverrideCursor()
         self.pps_estimate = est
         self.pps_source = path.name
+        try:
+            self.pps_reference = REFERENCE_TAG in read_tags(path)
+        except Exception:  # tags are optional: an unreadable tag block is not a reference
+            self.pps_reference = False
         _dbg.file_read(path, pulses=est.pulses, ppm=round(est.drift.ppm, 3))
         self._show_pps(est)
         return est
 
     def save_pps(self, confirm: bool = True) -> bool:
-        """Store the PPS estimate on screen (level 3, method ``pps``)."""
+        """Store the PPS estimate on screen (level 3, method ``pps``).
+
+        A reference recording is stored only after an explicit Yes (default No): it is right
+        only on the card that recorded it. Without ``confirm`` it is never stored.
+        """
         est = self.pps_estimate
         if est is None or not est.valid:
             return False
         tr = self._tr
+        if self.pps_reference:
+            if not confirm:
+                return False
+            answer = QMessageBox.question(
+                self,
+                tr("cal_title"),
+                tr("cal_pps_reference_confirm").format(device=self.device),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
         if confirm and not est.ready:
             answer = QMessageBox.question(
                 self,

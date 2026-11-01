@@ -181,6 +181,15 @@ class Translator:
                 "least {min_s} s). Save it anyway?"
             ),
             "cal_pps_note": "GPS PPS: {n} pulses in {span:.0f} s, jitter {jitter:.1f} µs",
+            "cal_pps_reference": (
+                "Reference recording: it carries the error of the sound card that recorded it. "
+                "Save it only if that card is this device."
+            ),
+            "cal_pps_reference_confirm": (
+                "This is a reference recording. Its result is only valid for the sound card "
+                "that recorded it (and on the same computer).\n\nWas it recorded with "
+                '"{device}" on this computer? Save it as its calibration?'
+            ),
             "normalize_audio": "Normalize audio",
             "normalize_audio_tooltip": (
                 "Enable it ONLY when the microphone gain cannot be adjusted (the input saturates "
@@ -530,6 +539,15 @@ class Translator:
                 "al menos {min_s} s). ¿Guardarla de todos modos?"
             ),
             "cal_pps_note": "GPS PPS: {n} pulsos en {span:.0f} s, jitter {jitter:.1f} µs",
+            "cal_pps_reference": (
+                "Grabación de referencia: lleva el error de la tarjeta con la que se grabó. "
+                "Guárdala solo si esa tarjeta es este dispositivo."
+            ),
+            "cal_pps_reference_confirm": (
+                "Es una grabación de referencia. Su resultado solo vale para la tarjeta de "
+                "sonido con la que se grabó (y en el mismo ordenador).\n\n¿Se grabó con "
+                "«{device}» en este ordenador? ¿Guardarla como su calibración?"
+            ),
             "normalize_audio": "Normalizar audio",
             "normalize_audio_tooltip": (
                 "Actívalo SOLO cuando no sea posible ajustar la ganancia del micrófono (la entrada "

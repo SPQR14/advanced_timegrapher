@@ -176,6 +176,7 @@ def snapshot_to_telemetry(snap: SessionSnapshot, fs: float) -> BeatTelemetry:
         tape_time_s=snap.tape_time_s,
         tape_offset_ms=snap.tape_offset_ms,
         tape_parity=snap.tape_parity,
+        tape_shift_ms=snap.tape_shift_ms,
     )
 
 

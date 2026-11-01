@@ -9,8 +9,10 @@ Subcommands::
     show  FILE                             ADV_TG_* tags of a recording
     tag   FILE --device D                  stamp the stored calibration on an existing
                                            recording (aged to its recording date)
-    pps   FILE [--device D --save]         ADC error from a recording of a GPS PPS (buzzer
-                                           or line input); --save stores it for the device
+    pps   FILE [--device D --save] [--tag]  ADC error from a recording of a GPS PPS (buzzer
+                                           or line input); --save stores it for the device,
+                                           --tag stamps it on the file itself (a reference
+                                           recording that carries the error of its own card)
 
 ``--device`` takes the PortAudio name (``capture_check --list``) or its index. The file lives
 in the user configuration folder (``adv_tg.utils.adc_calibration.config_dir``).
@@ -26,7 +28,13 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY, AdcDrift, drift_from_tags
+from adv_tg.core.adc_clock import (
+    PPM_TO_S_PER_DAY,
+    REFERENCE_TAG,
+    AdcDrift,
+    drift_from_tags,
+    drift_to_tags,
+)
 from adv_tg.core.pps import READY_SPAN_S, calibrate_samples
 from adv_tg.utils.adc_calibration import (
     Calibration,
@@ -174,13 +182,20 @@ def _cmd_pps(store: CalibrationStore, args: argparse.Namespace) -> int:
     )
     if not est.ready:
         print(f"AVISO: grabación corta o ruidosa; se recomiendan al menos {READY_SPAN_S:.0f} s.")
+    note = f"GPS PPS: {est.used} pulsos en {est.span_s:.0f} s, jitter {est.jitter_us:.1f} µs ({path.name})"
+    when = _parse_date(args.date) if args.date else datetime.now(UTC)
+    if args.tag:
+        tags = drift_to_tags(replace(d, note=note), calibrated_at=when.isoformat())
+        tags[REFERENCE_TAG] = "gps-pps"  # the calibration dialog asks before storing it
+        update_tags(path, tags)
+        print(
+            f"Etiquetado '{path}' con su propio error: {d.ppm:+.3f} ± {d.uncertainty_ppm:.3f} ppm"
+        )
     if not args.save:
         return EXIT_OK
     if not args.device:
         print("ERROR: --save necesita --device (el dispositivo con que se grabó).")
         return EXIT_ERROR
-    note = f"GPS PPS: {est.used} pulsos en {est.span_s:.0f} s, jitter {est.jitter_us:.1f} µs ({path.name})"
-    when = _parse_date(args.date) if args.date else datetime.now(UTC)
     cal = Calibration(resolve_device(args.device), int(fs), replace(d, note=note), when)
     store.add(cal)
     print(f"Guardada: {cal.device} — {_fmt(cal, datetime.now(UTC))}")
@@ -215,6 +230,7 @@ def _build_parser() -> argparse.ArgumentParser:
     s.add_argument("file", type=Path)
     s.add_argument("--device", default=None, help="dispositivo con que se grabó (para --save)")
     s.add_argument("--save", action="store_true", help="guarda la calibración del dispositivo")
+    s.add_argument("--tag", action="store_true", help="estampa el error en la propia grabación")
     s.add_argument("--date", default=None, help="fecha de la medida (ISO 8601; por defecto ahora)")
     return p
 

@@ -8,20 +8,30 @@ Signal chain it was designed for: PPS pin of a GPS module -> NPN transistor -> a
 (~2.7 kHz) -> the same microphone used for watches. An electrical PPS on a line input works
 the same way (the onset is the edge).
 
-Detector (validated on ``docs/samples/PPS.flac``: 44.1 kHz, 296 pulses, clipped bursts of
-110-130 ms):
+Reference recording: ``docs/samples/pps_48000Hz.flac`` (macOS, CM18 at 48 kHz, 150 pulses,
+bursts of ~110 ms peaking at -55 dBFS, 28 dB SNR). The design choices below were first made on
+an earlier, louder recording (40 dB SNR, clipped bursts) that is no longer in the repository.
 
+Detector:
+
+* Low-pass at ``LOWPASS_HZ`` (linear-phase FIR, streaming; its delay is subtracted, so the
+  instants stay in input samples). At low recording levels the noise is mostly above 15 kHz
+  (dither / noise shaping of the card); without it the first lobe sinks into that noise and
+  the onset jumps 0.2-0.5 ms LATE on a fraction of the pulses (one-sided, so it biases the
+  slope: 27 of 149 pulses and 12 µs on the reference; with it, 0 of 150 and 7.1 µs). On the
+  louder recording it changed nothing. Only a low-pass: a high-pass (1 kHz) lifted a pre-pulse
+  click there.
 * Coarse trigger: ``|x - dc| >= TRIGGER_SIGMA`` noise sigmas. The noise sigma and the DC
-  level are medians of the MAD / median of 100 ms blocks at absolute positions over the last
-  2 s, so they ignore the bursts (<15 % of the time) and the result does not depend on how the
-  audio is chunked.
+  level are medians of the MAD / median of 100 ms blocks at absolute positions, the last 2 s
+  of blocks FINISHED before the sample being searched, so they ignore the bursts (<15 % of the
+  time) and the result does not depend on how the audio is chunked.
 * Fine onset: baseline (median and MAD) over ``BASELINE_MS`` ending ``BASELINE_GAP_MS``
   before the trigger, then walk BACK from the trigger to the last stretch of ``QUIET_MS``
   below ``THRESHOLD_SIGMA`` local sigmas; the onset is the first crossing after it, with
   linear sub-sample interpolation.
 * Why the first departure from silence and not the burst: the amplitude build-up of an active
   buzzer varies from pulse to pulse (its oscillator start-up), its first cycles do not.
-  Residual timing scatter on the sample recording (std after a linear fit):
+  Residual timing scatter on the louder recording (std after a linear fit):
 
   ======================================================  ===========
   generic quartz ``BeatDetector`` at 3600 BPH (t_fine)     195 µs, lost lock 3 times
@@ -30,9 +40,13 @@ Detector (validated on ``docs/samples/PPS.flac``: 44.1 kHz, 296 pulses, clipped 
   waveform / envelope cross-correlation                    66-155 µs
   band-pass 1-10 kHz first (lifts a pre-pulse click)       79-308 µs
   this detector, 6-8 sigma                                 8.8 µs
+  this detector after the 9 kHz low-pass                   7.5 µs
   ======================================================  ===========
 
-  Clipping does not matter: only the first cycles, well below full scale, are used.
+  On the reference: 6.6-7.5 µs for any threshold from 5 to 12 sigma. Clipping does not
+  matter: only the first cycles, well below full scale, are used.
+* The buzzer must sound freely: damped with clay its start-up stopped being repeatable (whole
+  bursts moving by about one cycle, ~300 µs).
 
 Calibrator:
 
@@ -41,15 +55,19 @@ Calibrator:
   ``JUMP_CONFIRM`` such pulses in a row agree with each other, the phase has JUMPED and a new
   segment starts; isolated ones are stray clicks and are dropped.
 * Phase jumps happen when the GPS gets its fix (before it, the module free-runs on its own
-  oscillator: the first 18 pulses of the sample are 230 ms off the rest) and when the capture
-  loses samples (overflow). Only the LAST segment is fitted: an earlier one may come from an
+  oscillator: on the louder recording the first 18 pulses were 230 ms off the rest) and when
+  the capture loses samples (overflow). Only the LAST segment is fitted: an earlier one may come from an
   unlocked GPS.
 * The fit is ``drift_from_ticks`` (line ``t_k = a + P k``, robust). Its sigma assumes white
   timing noise; batch means of the residuals (blocks of ``BATCH_PULSES``) widen it by the
-  measured excess (x1.0-1.5 on the sample: the buzzer delay wanders ~0.1 ppm between minutes).
+  measured excess (x3 on the reference: the card clock wanders ~0.2 ppm per minute while it
+  warms up; let it run 10-15 min before calibrating).
 * ``ready``: at least ``READY_SPAN_S`` and a total uncertainty below ``READY_SIGMA_PPM``.
-  Sample recording: +22.21 ± 0.16 ppm at 30 s, +22.10 ± 0.05 at 60 s, +22.17 ± 0.02 at 120 s,
-  +22.19 ± 0.005 at 295 s (the card runs fast: uncorrected watches read 1.92 s/d slow).
+  Reference: +7.56 ± 0.14 ppm at 30 s, +7.59 ± 0.05 at 60 s, +7.47 ± 0.06 at 120 s,
+  +7.44 ± 0.04 at 149 s (the card runs fast: uncorrected watches read 0.64 s/d slow).
+* The error belongs to the card AND the computer: a USB card can take its clock from the
+  host (the same CM18 read +22 ppm on Linux, +24 on Windows and +7.4 on macOS, where 44.1
+  and 48 kHz agreed). Calibrate on each computer.
 """
 
 from __future__ import annotations
@@ -62,10 +80,12 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
 from adv_tg.core.adc_clock import AdcDrift, ClockLevel, drift_from_ticks
+from adv_tg.dsp.onset import MAD_TO_SIGMA, lowpass_fir, onset_after_quiet, robust_level
 
 __all__ = [
     "BATCH_PULSES",
     "JUMP_MS",
+    "LOWPASS_HZ",
     "READY_SIGMA_PPM",
     "READY_SPAN_S",
     "REFERENCE_SIGMA_PPM",
@@ -77,9 +97,12 @@ __all__ = [
     "calibrate_samples",
 ]
 
-#: Fine onset threshold, in local noise sigmas (6-8 give 8.8 µs on the sample; 5 starts to
-#: catch noise, 10+ skips the first lobe of the buzzer).
+#: Fine onset threshold, in local noise sigmas (on the louder recording 6-8 gave 8.8 µs, 5
+#: caught noise and 10+ skipped the first lobe; the reference takes 5-12).
 THRESHOLD_SIGMA = 8.0
+#: Low-pass before the detector (Hz); 7-12 kHz give the same result on both recordings.
+#: Skipped when it is above 0.45 fs.
+LOWPASS_HZ = 9000.0
 #: Coarse trigger, in noise sigmas.
 TRIGGER_SIGMA = 30.0
 #: Quiet stretch that must precede the onset (ms).
@@ -90,7 +113,7 @@ BASELINE_GAP_MS = 10.0
 #: The burst must reach this SNR (dB over the local noise) within ``CONFIRM_MS``.
 MIN_SNR_DB = 26.0
 CONFIRM_MS = 20.0
-#: No new pulse within this time after a pulse (bursts last ~130 ms).
+#: No new pulse within this time after a pulse (bursts last 110-130 ms).
 HOLDOFF_S = 0.2
 #: Noise tracker: block length and history (s).
 NOISE_BLOCK_S = 0.1
@@ -112,7 +135,6 @@ REFERENCE_SIGMA_PPM = 0.01
 READY_SPAN_S = 120.0
 READY_SIGMA_PPM = 0.05
 
-_MAD_TO_SIGMA = 1.4826
 _TINY = 1e-12
 
 
@@ -155,18 +177,23 @@ class PpsDetector:
         self._block = int(round(NOISE_BLOCK_S * self.fs))
         self._min_ratio = 10.0 ** (MIN_SNR_DB / 20.0)
         self._history = self._gap + self._base + self._quiet + 2
+        self._n_hist = max(1, int(round(NOISE_HISTORY_S / NOISE_BLOCK_S)))
+        self._fir = lowpass_fir(self.fs, LOWPASS_HZ)
+        self._delay = (self._fir.size - 1) // 2
         self.reset(0)
 
     def reset(self, start_index: int) -> None:
         """Forget everything; the next chunk starts at ``start_index`` (after a gap)."""
+        self._in_next = int(start_index)
+        self._tail: NDArray[np.float64] | None = None  # last fir.size - 1 input samples
+        # the detector works on the filtered stream, already moved back by the FIR delay
+        start = self._in_next - self._delay
         self._buf = np.empty(0)
-        self._buf_start = int(start_index)
-        self._scan = int(start_index)
-        self._blocks: deque[tuple[float, float]] = deque(
-            maxlen=max(1, int(round(NOISE_HISTORY_S / NOISE_BLOCK_S)))
-        )
-        self._next_block = (int(start_index) // self._block + 1) * self._block
-        self.pulses_found = 0
+        self._buf_start = start
+        self._scan = start
+        # (end, dc, sigma) of each finished block; pruned in _trim
+        self._blocks: deque[tuple[int, float, float]] = deque()
+        self._next_block = (start // self._block + 1) * self._block
         self.rejected = 0
 
     # ------------------------------------------------------------------ noise
@@ -177,14 +204,17 @@ class PpsDetector:
             if a >= self._buf_start:
                 b = self._buf[a - self._buf_start : self._next_block - self._buf_start]
                 med = float(np.median(b))
-                self._blocks.append((med, _MAD_TO_SIGMA * float(np.median(np.abs(b - med)))))
+                sg = MAD_TO_SIGMA * float(np.median(np.abs(b - med)))
+                self._blocks.append((self._next_block, med, sg))
             self._next_block += self._block
 
-    def _noise(self) -> tuple[float, float] | None:
-        if not self._blocks:
+    def _noise(self, at: int) -> tuple[float, float] | None:
+        """DC and sigma from the blocks finished at ``at`` (the last ``NOISE_HISTORY_S``)."""
+        done = [b for b in self._blocks if b[0] <= at][-self._n_hist :]
+        if not done:
             return None
-        arr = np.asarray(self._blocks)
-        return float(np.median(arr[:, 0])), max(float(np.median(arr[:, 1])), _TINY)
+        arr = np.asarray(done)
+        return float(np.median(arr[:, 1])), max(float(np.median(arr[:, 2])), _TINY)
 
     # ------------------------------------------------------------------ public
     def process(self, chunk: ArrayLike, start_index: int) -> list[PpsPulse]:
@@ -193,9 +223,13 @@ class PpsDetector:
         A chunk that does not follow the previous one resets the detector first.
         """
         x = np.asarray(chunk, dtype=np.float64).reshape(-1)
-        if int(start_index) != self._buf_start + self._buf.size:
+        if int(start_index) != self._in_next:
             self.reset(int(start_index))
-        self._buf = np.concatenate((self._buf, x)) if self._buf.size else x.copy()
+        if x.size == 0:
+            return []
+        self._in_next += x.size
+        y = self._lowpass(x)  # always a new array
+        self._buf = np.concatenate((self._buf, y)) if self._buf.size else y
         self._update_noise()
         out: list[PpsPulse] = []
         end = self._buf_start + self._buf.size
@@ -204,9 +238,19 @@ class PpsDetector:
         self._trim()
         return out
 
-    def flush(self) -> list[PpsPulse]:
-        """End of the stream: nothing is pending (a burst cut by the end is dropped)."""
-        return []
+    def _lowpass(self, x: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Causal FIR over the stream; output i belongs to input i - delay."""
+        n = self._fir.size - 1
+        if n == 0:
+            return x.copy()
+        if self._tail is None:  # start of the stream: hold the first sample (no step)
+            self._tail = np.full(n, x[0])
+        ext = np.concatenate((self._tail, x))
+        self._tail = ext[-n:].copy()
+        # row by row, not np.convolve: its rounding depends on the chunk length and the
+        # result must not depend on how the audio is chunked
+        win = np.lib.stride_tricks.sliding_window_view(ext, self._fir.size)
+        return np.sum(win * self._fir[::-1], axis=1)
 
     # ------------------------------------------------------------------ detection
     def _trim(self) -> None:
@@ -217,18 +261,29 @@ class PpsDetector:
         if cut > 0:
             self._buf = self._buf[cut:]
             self._buf_start += cut
+        while len(self._blocks) > self._n_hist and self._blocks[self._n_hist][0] <= self._scan:
+            self._blocks.popleft()
 
     def _next_pulse(self, end: int) -> PpsPulse | None:
         while True:
-            noise = self._noise()
-            if noise is None or self._scan >= end:
+            if self._scan >= end:
                 return None
+            noise = self._noise(self._scan)
+            if noise is None:  # start of the stream: wait for the first block
+                if not self._blocks:
+                    return None
+                self._scan = self._blocks[0][0]
+                continue
             dc, sigma = noise
+            # search only up to the next block end: past it the noise estimate changes, and
+            # this keeps the result independent of the chunking
+            stop = min(end, (self._scan // self._block + 1) * self._block)
             a = self._scan - self._buf_start
-            hit = np.flatnonzero(np.abs(self._buf[a:] - dc) >= TRIGGER_SIGMA * sigma)
+            seg = self._buf[a : stop - self._buf_start]
+            hit = np.flatnonzero(np.abs(seg - dc) >= TRIGGER_SIGMA * sigma)
             if hit.size == 0:
-                self._scan = end
-                return None
+                self._scan = stop
+                continue
             trig = self._scan + int(hit[0])
             if trig + self._confirm > end:  # wait for the rest of the burst
                 self._scan = trig
@@ -238,7 +293,6 @@ class PpsDetector:
                 self.rejected += 1
                 self._scan = trig + self._confirm
                 continue
-            self.pulses_found += 1
             self._scan = trig + self._holdoff
             return pulse
 
@@ -247,30 +301,18 @@ class PpsDetector:
         if b0 < self._buf_start:  # no clean history before it (start of the stream)
             return None
         o = self._buf_start
-        base = self._buf[b0 - o : trig - self._gap - o]
-        mu = float(np.median(base))
-        sg = max(_MAD_TO_SIGMA * float(np.median(np.abs(base - mu))), _TINY)
+        mu, sg = robust_level(self._buf[b0 - o : trig - self._gap - o])
         peak = float(np.max(np.abs(self._buf[trig - o : trig + self._confirm - o] - mu)))
         if peak < self._min_ratio * sg:
             return None
         # walk back from the trigger to the last quiet stretch
         lo = trig - self._gap
         r = np.abs(self._buf[lo - o : trig + 1 - o] - mu)
-        th = self.threshold_sigma * sg
-        act = np.flatnonzero(r >= th)
-        if act.size == 0:  # the local noise is far above the tracked one
+        # None: nothing crosses (local noise far above the tracked one) or not quiet before
+        j = onset_after_quiet(r, self.threshold_sigma * sg, self._quiet)
+        if j is None:
             return None
-        gaps = np.diff(act) - 1
-        long_gap = np.flatnonzero(gaps >= self._quiet)
-        if long_gap.size:
-            j = int(act[long_gap[-1] + 1])
-        elif act[0] >= self._quiet:
-            j = int(act[0])
-        else:
-            return None  # not quiet before the burst
-        frac = (th - r[j - 1]) / max(r[j] - r[j - 1], _TINY)
-        onset = lo + j - 1 + min(max(frac, 0.0), 1.0)
-        return PpsPulse(float(onset), 20.0 * math.log10(peak / sg), peak)
+        return PpsPulse(float(lo + j), 20.0 * math.log10(peak / sg), peak)
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,7 +452,7 @@ class PpsCalibrator:
         slope = float(np.dot(kc, t - t.mean()) / max(float(np.dot(kc, kc)), _TINY))
         res = (t - t.mean() - slope * kc) / self.fs * 1e6
         med = float(np.median(res))
-        jitter = _MAD_TO_SIGMA * float(np.median(np.abs(res - med)))
+        jitter = MAD_TO_SIGMA * float(np.median(np.abs(res - med)))
         excess = _batch_excess(res, max(float(np.std(res, ddof=2)), _TINY))
         if drift.level != ClockLevel.EXTERNAL:
             return PpsEstimate(
@@ -453,5 +495,4 @@ def calibrate_samples(
     step = max(1, int(chunk_s * sample_rate))
     for a in range(0, x.size, step):
         cal.add([p.index for p in det.process(x[a : a + step], a)])
-    cal.add([p.index for p in det.flush()])
     return cal.estimate()

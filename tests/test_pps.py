@@ -1,9 +1,9 @@
 """GPS PPS calibration: detector, calibrator, live worker and the calibration dialog.
 
 Truth: ``synth_pps`` (pulses at known instants of a card off by a known ppm). Each beep has a
-deterministic first lobe and a RANDOM amplitude build-up, like the active buzzer of
-``docs/samples/PPS.flac``, and clips; a detector that times the burst instead of its start
-fails here. The real recording is checked too when it is present.
+deterministic first lobe and a RANDOM amplitude build-up, like an active buzzer, and clips; a
+detector that times the burst instead of its start fails here. The real recording
+``docs/samples/pps_48000Hz.flac`` is checked too when it is present.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from adv_tg.core.adc_clock import ClockLevel
 from adv_tg.core.pps import PpsCalibrator, PpsDetector, calibrate_samples
 
 FS = 44_100
-SAMPLE = Path(__file__).resolve().parents[1] / "docs" / "samples" / "PPS.flac"
+SAMPLE = Path(__file__).resolve().parents[1] / "docs" / "samples" / "pps_48000Hz.flac"
 
 
 def synth_pps(
@@ -96,6 +96,23 @@ def test_detector_is_chunk_invariant() -> None:
     assert whole.size == small.size and np.array_equal(whole, small)
 
 
+def test_detector_ignores_high_frequency_noise() -> None:
+    # low recording level and noise mostly above 15 kHz (card dither), like
+    # docs/samples/pps_48000Hz.flac: without the low-pass the pulses are lost or timed late
+    rng = np.random.default_rng(8)
+    x, truth = synth_pps(60.0, ppm=0.0, jitter_us=0.0, noise=0.0, seed=8)
+    x *= 0.01
+    w = rng.normal(0.0, 1.0, x.size + 2)
+    hf = w[2:] - 2 * w[1:-1] + w[:-2]  # second difference: noise rising with frequency
+    x += 6e-5 * hf
+    det = PpsDetector(FS)
+    found = np.array([p.index for p in det.process(x, 0)])
+    assert found.size == truth.size
+    err_us = (found - truth) / FS * 1e6
+    err_us -= np.median(err_us)
+    assert np.sum(np.abs(err_us) > 50) == 0 and np.std(err_us) < 10.0
+
+
 def test_detector_validation() -> None:
     with pytest.raises(ValueError):
         PpsDetector(0)
@@ -159,16 +176,76 @@ def test_calibrator_counts_a_lone_click_before_the_first_pulse() -> None:
     assert est.jumps == 0 and est.rejected == 1 and est.used == 20
 
 
-@pytest.mark.skipif(not SAMPLE.is_file(), reason="docs/samples/PPS.flac no está")
+@pytest.mark.skipif(not SAMPLE.is_file(), reason="docs/samples/pps_48000Hz.flac no está")
 def test_real_recording() -> None:
+    # recorded 2026-11-01 on macOS, CM18 at 48 kHz, buzzer without clay, peaks at -55 dBFS
     from adv_tg.utils.audio_files import read_mono
 
     fs, x = read_mono(SAMPLE)
     est = calibrate_samples(x, fs)
-    # measured: +22.187 ± 0.016 ppm, 296 pulses after one phase jump (GPS fix), 6.8 µs
-    assert est.jumps == 1 and est.used >= 290 and est.missing == 0
-    assert est.drift.ppm == pytest.approx(22.19, abs=0.05)
-    assert est.jitter_us < 15 and est.ready
+    # measured: +7.443 ± 0.043 ppm, 150 pulses, 7.1 µs
+    assert est.jumps == 0 and est.used >= 148 and est.missing == 0
+    assert est.drift.ppm == pytest.approx(7.443, abs=0.05)
+    assert est.jitter_us < 12 and est.ready
+
+
+@pytest.mark.skipif(not SAMPLE.is_file(), reason="docs/samples/pps_48000Hz.flac no está")
+def test_reference_through_the_watch_engine() -> None:
+    """The PPS measured as a 1/s quartz: a perfect watch, so the rate is the card error.
+
+    Uncorrected it must read -7.443 ppm = -0.643 s/d; corrected with its own PPS, 0. Before
+    the quartz onset timing (beat detector, step 8b) it read -0.435 +- 0.108 s/d (190 µs).
+    """
+    from adv_tg.tools.measure import measure_file
+    from adv_tg.utils.audio_files import read_mono
+
+    raw = measure_file(SAMPLE, 3600, quartz=True).metrics
+    assert raw.rate_s_per_day == pytest.approx(-0.643, abs=0.012)
+    assert max(raw.sigma_even_us, raw.sigma_odd_us) < 20.0
+    assert not raw.rate_trend_flag and raw.confidence > 0.8
+    assert len(raw.windows) >= 4  # 25-s windows at 1 beat/s
+    fs, x = read_mono(SAMPLE)
+    d = calibrate_samples(x, fs).drift
+    m = measure_file(
+        SAMPLE, 3600, quartz=True, adc_drift_ppm=d.ppm, adc_drift_sigma_ppm=d.uncertainty_ppm
+    ).metrics
+    assert m.rate_calibrated
+    assert abs(m.rate_s_per_day) < max(0.01, 3.0 * m.rate_uncertainty_s_per_day)
+
+
+@pytest.mark.skipif(not SAMPLE.is_file(), reason="docs/samples/pps_48000Hz.flac no está")
+def test_reference_carries_its_own_card_error() -> None:
+    """Shipped as a reference: its tags hold the error of the card that recorded it (from its
+    own PPS), so measuring it anywhere gives ~0 s/d, and the calibration dialog will not
+    store it for another card (``REFERENCE_TAG``)."""
+    from adv_tg.core.adc_clock import REFERENCE_TAG, drift_from_tags
+    from adv_tg.tools.measure import resolve_adc_drift
+    from adv_tg.utils.audio_files import read_tags
+
+    tags = read_tags(SAMPLE)
+    assert tags.get(REFERENCE_TAG) == "gps-pps"
+    d = drift_from_tags(tags)
+    assert d is not None and d.method == "pps" and d.level == ClockLevel.EXTERNAL
+    assert d.ppm == pytest.approx(7.443, abs=0.01)
+    ppm, sigma, source = resolve_adc_drift(SAMPLE)
+    assert ppm == pytest.approx(d.ppm) and sigma > 0 and "etiquetas" in source
+
+
+def test_reference_check_tool(tmp_path) -> None:
+    from adv_tg.tools import reference_check as rc
+    from adv_tg.utils.audio_files import write_audio
+
+    x, _ = synth_pps(30.0, seed=11)
+    plain = write_audio(tmp_path / "plain.flac", x, FS, subtype="PCM_24")
+    with pytest.raises(ValueError):  # not a tagged reference
+        rc.check_reference(plain)
+    assert rc.main([str(plain)]) == rc.EXIT_ERROR
+    assert rc.main([str(tmp_path / "missing.flac")]) == rc.EXIT_ERROR
+    if SAMPLE.is_file():
+        result = rc.check_reference(SAMPLE)
+        assert result.passed, result.summary()
+        assert abs(result.rate_s_per_day) < 0.02 and result.sigma_us < 20.0
+        assert rc.main([str(SAMPLE)]) == rc.EXIT_OK
 
 
 # ---------------------------------------------------------------------- GUI
@@ -195,7 +272,7 @@ def test_live_worker_emits_estimates(qtbot) -> None:
     worker.shutdown()
 
 
-def test_dialog_pps_tab(qtbot, tmp_path) -> None:
+def test_dialog_pps_tab(qtbot, tmp_path, monkeypatch) -> None:
     pytest.importorskip("PyQt6")
     from adv_tg.i18n.translator import Translator
     from adv_tg.ui.dialogs import CalibrationDialog
@@ -230,6 +307,29 @@ def test_dialog_pps_tab(qtbot, tmp_path) -> None:
     assert rec.drift.method == "pps" and rec.drift.ppm == pytest.approx(-8.0, abs=0.1)
     assert "GPS PPS" in rec.drift.note and "pps.flac" in rec.drift.note
     assert dlg.table.rowCount() == 1 and f"{rec.drift.ppm:+.3f}" in dlg.lbl_current.text()
+    # a reference recording is stored only after an explicit Yes (it is right only on the
+    # card that recorded it)
+    from PyQt6.QtWidgets import QMessageBox
+
+    from adv_tg.core.adc_clock import REFERENCE_TAG
+    from adv_tg.utils.audio_files import update_tags
+
+    ref = write_audio(tmp_path / "ref.flac", x, FS, subtype="PCM_24")
+    update_tags(ref, {REFERENCE_TAG: "gps-pps"})
+    n_saved = len(store.records("Fake CM18", FS))
+    assert dlg.analyze_pps_file(ref) is not None and dlg.pps_reference
+    assert dlg.btn_pps_save.isEnabled()
+    assert dlg._tr("cal_pps_reference") in dlg.lbl_pps_status.text()
+    assert not dlg.save_pps(confirm=False)  # never without asking
+    asked = []
+    no, yes = QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: asked.append(a[2]) or no)
+    assert not dlg.save_pps() and "Fake CM18" in asked[-1]
+    assert len(store.records("Fake CM18", FS)) == n_saved
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: yes)
+    assert dlg.save_pps()
+    assert len(store.records("Fake CM18", FS)) == n_saved + 1
+    assert dlg.analyze_pps_file(wav) is not None and not dlg.pps_reference
     # a recording at another sample rate is refused (calibrations are per rate)
     other = CalibrationDialog(Translator("en"), "Fake CM18", 48000, store=store)
     qtbot.addWidget(other)

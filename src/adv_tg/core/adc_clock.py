@@ -63,6 +63,7 @@ from numpy.typing import ArrayLike, NDArray
 
 __all__ = [
     "DRIFT_TAG_PREFIX",
+    "REFERENCE_TAG",
     "PPM_TO_S_PER_DAY",
     "UNCALIBRATED_SIGMA_PPM",
     "AdcDrift",
@@ -87,6 +88,10 @@ UNCALIBRATED_SIGMA_PPM = 30.0
 
 #: Prefix of the recording tags written by ``drift_to_tags``.
 DRIFT_TAG_PREFIX = "ADV_TG_ADC_DRIFT_"
+#: Tag of a reference recording (value: what it is, e.g. ``gps-pps``): it carries the error
+#: of the card that recorded it, so it checks the program; the calibration dialog asks before
+#: storing it (it is right only on that card and computer).
+REFERENCE_TAG = "ADV_TG_REFERENCE"
 
 _MAD_TO_SIGMA = 1.4826
 _RESIDUAL_FLOOR_S = 20e-6  # robust sigma floor of the envelope minima (20 µs)
