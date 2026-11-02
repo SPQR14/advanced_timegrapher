@@ -142,6 +142,8 @@ class BeatTelemetry:
         tape_time_s, tape_offset_ms, tape_parity: Paper tape points of the beats detected
             since the previous telemetry (time in s, offset in ms against the nominal period,
             a gaining watch goes up; parity 0 = tic). Empty for engines without beats.
+        tape_shift_ms: ``(tic, tac)`` shift of every point of each row (ms), from the drop to
+            the point of ``beat_error_ms`` (P1); (0, 0) for engines without beats.
     """
 
     rate_spd: float
@@ -174,3 +176,4 @@ class BeatTelemetry:
     tape_time_s: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
     tape_offset_ms: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
     tape_parity: NDArray[np.int8] = field(default_factory=lambda: np.zeros(0, np.int8))
+    tape_shift_ms: tuple[float, float] = (0.0, 0.0)

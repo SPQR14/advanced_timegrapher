@@ -227,6 +227,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 window.close()
                 return 1
 
+            # 4. Numbers against the GPS PPS reference shipped with the program: the PPS
+            #    detector and the watch engine (corrected with the tagged card error) must agree
+            try:
+                from adv_tg.tools.reference_check import REFERENCE_NAME, check_reference
+
+                ref_file = _find_sample_file(REFERENCE_NAME)
+                if ref_file is None:
+                    logger.critical("Smoke test failed: reference %s not bundled", REFERENCE_NAME)
+                    window.close()
+                    return 1
+                result = check_reference(ref_file)
+                if not result.passed:
+                    logger.critical("Smoke test failed: GPS PPS reference: %s", result.summary())
+                    window.close()
+                    return 1
+                logger.info("Smoke test GPS PPS reference: %s", result.summary())
+            except Exception as exc:
+                logger.critical("Smoke test failed on the PPS reference: %s", exc, exc_info=True)
+                window.close()
+                return 1
+
             logger.info("Smoke test passed: application initialized and DSP verified successfully")
             window.close()
             return 0

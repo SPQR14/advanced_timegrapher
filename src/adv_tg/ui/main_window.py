@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
+from numpy.typing import NDArray
 from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
     QAction,
@@ -32,6 +33,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
+    QGraphicsItem,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -328,6 +330,9 @@ class MainWin(QMainWindow):
 
     COSC_MIN_SPD: float = -4.0
     COSC_MAX_SPD: float = +6.0
+    #: Green horizontal guides of the paper tape at the COSC figures (-4 / +6), in the units of
+    #: its axis (ms of offset): a visual reference, fixed whatever the trace does.
+    TAPE_GUIDES_MS: tuple[float, float] = (COSC_MIN_SPD, COSC_MAX_SPD)
     # Real engine: figures whose timing confidence is below CONFIDENCE_HIDE are not shown;
     # below CONFIDENCE_DIM they are greyed out (the amplitude also when the overall
     # confidence, which includes the tic/tac mismatch, is below it). Real takes range 0.23
@@ -362,13 +367,22 @@ class MainWin(QMainWindow):
 
         # Telemetry history for statistics & horizontal paper tape trace
         self._rate_history: list[float] = []
+        # running sum / extremes of _rate_history: the statistics without a pass over it
+        self._rate_sum = 0.0
+        self._rate_max = -math.inf
+        self._rate_min = math.inf
         self._tape_x_even: list[float] = []
         self._tape_ms_even: list[float] = []
         self._tape_x_odd: list[float] = []
         self._tape_ms_odd: list[float] = []
-        # Drawn rows (running median of the raw ones above, same x)
+        # Drawn rows (running median of the raw ones above, same x). Raw and drawn values are
+        # at the drop; _tape_rows subtracts the origin and adds the per-row shift to P1.
         self._tape_disp_even: list[float] = []
         self._tape_disp_odd: list[float] = []
+        self._tape_shift: tuple[float, float] = (0.0, 0.0)  # (tic, tac) ms, to the P1 point
+        # _tape_rows result until the rows change (one conversion per update, not one per use)
+        self._tape_version = 0
+        self._tape_rows_memo: tuple[tuple, tuple] | None = None
         self._tape_window_s: float = TAPE_WINDOW_S
         self._tape_zoom_index: int = 0  # into TAPE_ZOOM_HALF_SPANS_MS
         self._mock_tape_last: tuple[float, float] | None = None  # (t, offset ms), MOCK only
@@ -387,7 +401,8 @@ class MainWin(QMainWindow):
         self._last_saturated_monotonic: float = -math.inf
         self._last_warning: str = ""
         self._tape_autoscale: bool = True
-        self._tape_y0: float | None = None  # offset of the first tape point (trace starts at 0)
+        # origin of the trace: mid point of the first tic and tac (the rows start around 0)
+        self._tape_y0: float | None = None
         self._osc_span_ms: float | None = None
         self._silence_since: float | None = None
         self._silence_warned: bool = False
@@ -812,6 +827,14 @@ class MainWin(QMainWindow):
         self._sync_combo_popup_width(combo, min_width)
 
     @staticmethod
+    def _cache_axes(plot: pg.PlotWidget) -> None:
+        """Keep each axis as a cached image, redrawn only when its range changes. Without it
+        every repaint of a plot (the waveform ~30 times/s) drew the tick labels again: the
+        three plots took 8.9 ms per repaint, 3.6 ms with it."""
+        for axis in plot.getPlotItem().axes.values():
+            axis["item"].setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
+
+    @staticmethod
     def _optimize_high_freq_curve(curve: pg.PlotDataItem) -> None:
         """Dense, often-redrawn curve: view clipping, peak-preserving auto-downsampling and no
         antialiasing (with 1-px pens). Antialiased pens wider than 1 px on ~1500-point curves
@@ -1231,6 +1254,7 @@ class MainWin(QMainWindow):
         center_layout.setSpacing(6)
 
         self.paper_tape_plot = pg.PlotWidget()
+        self._cache_axes(self.paper_tape_plot)
         self.paper_tape_plot.showGrid(x=True, y=True, alpha=0.25)
         # Elapsed time starts at 0: no padding and no panning or zooming into negative seconds
         self.paper_tape_plot.getPlotItem().setDefaultPadding(0.0)
@@ -1242,29 +1266,33 @@ class MainWin(QMainWindow):
             self._on_paper_tape_manual_range
         )
 
-        # Zero-deviation horizontal reference line
+        # Zero-deviation reference: solid, thicker and near-white, above the grid and the COSC
+        # guides but below the beat dots
         self.tape_zero_line = pg.InfiniteLine(
-            pos=0.0,
-            angle=0,
-            pen=pg.mkPen(color="#3b4659", width=1.2, style=Qt.PenStyle.DashLine),
+            pos=0.0, angle=0, pen=pg.mkPen(color=(225, 228, 232, 210), width=2.2)
         )
+        self.tape_zero_line.setZValue(-1)
         self.paper_tape_plot.addItem(self.tape_zero_line)
 
-        # COSC limits (-4 / +6 s/d) as slopes from the origin: on a paper tape the rate is the
-        # slope of the rows (1 s/d = 1/86.4 ms per second); see _update_cosc_slopes
-        cosc_pen = pg.mkPen(color=(0, 230, 118, 135), width=1.0, style=Qt.PenStyle.DashLine)
-        self.cosc_lower_line = self.paper_tape_plot.plot([], [], pen=cosc_pen)
-        self.cosc_upper_line = self.paper_tape_plot.plot([], [], pen=cosc_pen)
-        self.cosc_lower_label = pg.TextItem("-4 s/d", color=(0, 230, 118, 220), anchor=(1, 0))
-        self.cosc_upper_label = pg.TextItem("+6 s/d", color=(0, 230, 118, 220), anchor=(1, 1))
-        self.paper_tape_plot.addItem(self.cosc_lower_label)
-        self.paper_tape_plot.addItem(self.cosc_upper_label)
-        self._update_cosc_slopes(0.0, 0.0, TAPE_WINDOW_S)
+        # Green horizontal guides at -4 and +6 (TAPE_GUIDES_MS), fixed in the data: the
+        # trace may leave them
+        guide_pen = pg.mkPen(color=(0, 230, 118, 170), width=1.2)
+        self.cosc_lower_line, self.cosc_upper_line = (
+            pg.InfiniteLine(
+                pos=v, angle=0, pen=guide_pen, label=f"{v:+g}",
+                labelOpts={"position": 0.99, "color": (0, 230, 118), "anchors": [(1, 1), (1, 1)]},
+            )
+            for v in self.TAPE_GUIDES_MS
+        )  # fmt: skip
+        for guide in (self.cosc_lower_line, self.cosc_upper_line):
+            guide.setZValue(-1)
+            self.paper_tape_plot.addItem(guide)
 
-        # Paper tape: one dot per beat, tic (even k) and tac (odd k) rows timed at the drop
-        # (P3, the point of t_fine): their distance is the tic/tac offset at P3, which differs
-        # from the beat error card (measured at P1). Dots, no connecting lines, like the pixel
-        # columns of a hardware timegrapher; rows smoothed by a running median (_append_tape).
+        # Paper tape: one dot per beat, tic (even k) and tac (odd k) rows. They are timed at
+        # the drop (t_fine, steady) and drawn at the point of the beat error card (P1): each
+        # row is moved by the session's tape_shift_ms, so their distance is the figure shown.
+        # Dots, no connecting lines, like the pixel columns of a hardware timegrapher; rows
+        # smoothed by a running median (_append_tape).
         self.paper_tape_plot.addLegend(offset=(10, 10))
         self.tape_curve_even = self.paper_tape_plot.plot(
             [],
@@ -1274,7 +1302,7 @@ class MainWin(QMainWindow):
             symbolSize=4,
             symbolBrush="#00e5ff",
             symbolPen=None,
-            name="Tic (P3)",
+            name="Tic",
         )
         self.tape_curve_odd = self.paper_tape_plot.plot(
             [],
@@ -1284,7 +1312,7 @@ class MainWin(QMainWindow):
             symbolSize=4,
             symbolBrush="#ffab00",
             symbolPen=None,
-            name="Tac (P3)",
+            name="Tac",
         )
         # Long tests (1 h = 14 400 dots per row): peak downsampling and view clipping keep a
         # redraw bounded by the plot width, not by the test length.
@@ -1340,6 +1368,7 @@ class MainWin(QMainWindow):
         right_layout.setContentsMargins(8, 8, 8, 8)
 
         self.oscilloscope_plot = pg.PlotWidget()
+        self._cache_axes(self.oscilloscope_plot)
         self.oscilloscope_plot.showGrid(x=True, y=True, alpha=0.25)
         self.oscilloscope_plot.setYRange(-1.1, 1.1)
         self.oscilloscope_plot.addLegend(offset=(10, 10))
@@ -1402,6 +1431,7 @@ class MainWin(QMainWindow):
         waveform_layout.setContentsMargins(8, 8, 8, 8)
 
         self.waveform_plot = pg.PlotWidget()
+        self._cache_axes(self.waveform_plot)
         self.waveform_plot.showGrid(x=True, y=True, alpha=0.25)
         self.waveform_plot.setYRange(-1.1, 1.1)
 
@@ -1790,21 +1820,6 @@ class MainWin(QMainWindow):
         self.btn_global_stats.setText(f"{arrow} {self.translator.tr('btn_global_stats')}")
         logger.debug("Global statistics panel visibility set to %s", checked)
 
-    def _update_cosc_slopes(self, x0: float, y0: float, x1: float) -> None:
-        """Draw the COSC limits as rows of a watch at -4 / +6 s/d, from ``(x0, y0)`` to ``x1``.
-
-        On a paper tape the rate is the slope of the rows (1 s/d = 1/86.4 ms per second). The
-        guides start at the left edge of the view, at the height of the trace there.
-        """
-        span = max(1.0, float(x1) - float(x0))
-        for line, label, rate in (
-            (self.cosc_lower_line, self.cosc_lower_label, self.COSC_MIN_SPD),
-            (self.cosc_upper_line, self.cosc_upper_label, self.COSC_MAX_SPD),
-        ):
-            y_end = y0 + rate * span / 86.4
-            line.setData([x0, x0 + span], [y0, y_end])
-            label.setPos(x0 + span, y_end)
-
     def _append_tape(self, telemetry: BeatTelemetry | TelemetryResult, t_meas: float) -> None:
         """Add the new beats to the paper tape (after the stabilization time).
 
@@ -1824,14 +1839,17 @@ class MainWin(QMainWindow):
             if not np.any(keep):
                 return
             x, y, par = x[keep], y[keep], par[keep]
-            if self._tape_y0 is None:
-                self._tape_y0 = float(y[0])
-            y = y - self._tape_y0
             even = par == 0
             self._tape_x_even.extend(x[even].tolist())
             self._tape_ms_even.extend(y[even].tolist())
             self._tape_x_odd.extend(x[~even].tolist())
             self._tape_ms_odd.extend(y[~even].tolist())
+            shift = getattr(telemetry, "tape_shift_ms", (0.0, 0.0))
+            self._tape_shift = (float(shift[0]), float(shift[1]))
+            if self._tape_ms_even and self._tape_ms_odd:
+                self._tape_y0 = 0.5 * (self._tape_ms_even[0] + self._tape_ms_odd[0])
+            else:  # provisional until both rows have a point (the whole trace is redrawn)
+                self._tape_y0 = (self._tape_ms_even or self._tape_ms_odd)[0]
             self._smooth_tape_rows()
             return
         rate = float(telemetry.rate_spd)
@@ -1853,8 +1871,33 @@ class MainWin(QMainWindow):
         self._tape_ms_odd.append(y + half_be)
         self._smooth_tape_rows()
 
+    def _tape_rows(
+        self, raw: bool = False
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+        """``(x_tic, y_tic, x_tac, y_tac)`` as drawn: origin subtracted, rows moved to P1.
+
+        ``raw`` = one value per beat (export) instead of the running median (display).
+        """
+        y0 = self._tape_y0 or 0.0
+        se, so = self._tape_shift
+        ye = self._tape_ms_even if raw else self._tape_disp_even
+        yo = self._tape_ms_odd if raw else self._tape_disp_odd
+        key = (self._tape_version, raw, y0, se, so, len(self._tape_x_even), len(ye),
+               len(self._tape_x_odd), len(yo))  # fmt: skip
+        if self._tape_rows_memo is not None and self._tape_rows_memo[0] == key:
+            return self._tape_rows_memo[1]
+        rows = (
+            np.asarray(self._tape_x_even, dtype=np.float64),
+            np.asarray(ye, dtype=np.float64) - y0 + se,
+            np.asarray(self._tape_x_odd, dtype=np.float64),
+            np.asarray(yo, dtype=np.float64) - y0 + so,
+        )
+        self._tape_rows_memo = (key, rows)
+        return rows
+
     def _smooth_tape_rows(self) -> None:
         """Extend the drawn rows with a causal running median of the new raw points."""
+        self._tape_version += 1  # the rows changed: _tape_rows converts them again
         for raw, disp in (
             (self._tape_ms_even, self._tape_disp_even),
             (self._tape_ms_odd, self._tape_disp_odd),
@@ -1871,27 +1914,26 @@ class MainWin(QMainWindow):
         x_hi = max(self._tape_window_s, x_last + TAPE_LEAD_S)
         return max(0.0, x_hi - self._tape_window_s), x_hi
 
-    def _visible_tape_y(self, x_lo: float, x_hi: float) -> list[float]:
+    def _visible_tape_y(self, x_lo: float, x_hi: float) -> NDArray[np.float64]:
         """Drawn row values inside ``[x_lo, x_hi]``."""
-        out: list[float] = []
-        for xs, ys in (
-            (self._tape_x_even, self._tape_disp_even),
-            (self._tape_x_odd, self._tape_disp_odd),
-        ):
+        xe, ye, xo, yo = self._tape_rows()
+        parts = []
+        for xs, ys in ((xe, ye), (xo, yo)):
             i0 = int(np.searchsorted(xs, x_lo, side="left"))
             i1 = int(np.searchsorted(xs, x_hi, side="right"))
-            out.extend(ys[i0:i1])
-        return out
+            parts.append(ys[i0:i1])
+        return np.concatenate(parts)
 
     def _paper_tape_target_range(self) -> tuple[float, float] | None:
         """Y range that centres the visible part of the drawn trace (None without data)."""
         visible = self._visible_tape_y(*self._tape_x_window())
-        if not visible:
-            visible = self._tape_disp_even + self._tape_disp_odd
-        if not visible:
+        if not visible.size:
+            _, ye, _, yo = self._tape_rows()
+            visible = np.concatenate((ye, yo))
+        if not visible.size:
             return None
-        y_min = float(min(visible))
-        y_max = float(max(visible))
+        y_min = float(visible.min())
+        y_max = float(visible.max())
         y_center = 0.5 * (y_min + y_max)
         half_span = max(self._tape_min_half_span(), 0.6 * (y_max - y_min) + 0.2)
         return y_center - half_span, y_center + half_span
@@ -1915,13 +1957,14 @@ class MainWin(QMainWindow):
         if target is None:
             return
         (lo, hi) = self.paper_tape_plot.getViewBox().viewRange()[1]
-        visible = self._visible_tape_y(x_lo, x_hi) or [0.5 * (target[0] + target[1])]
+        visible = self._visible_tape_y(x_lo, x_hi)
+        if not visible.size:
+            visible = np.array([0.5 * (target[0] + target[1])])
         margin = 0.05 * (hi - lo)
-        outside = min(visible) < lo + margin or max(visible) > hi - margin
+        outside = float(visible.min()) < lo + margin or float(visible.max()) > hi - margin
         too_wide = (hi - lo) > 3.0 * (target[1] - target[0])
         if outside or too_wide:
             self.paper_tape_plot.setYRange(*target, padding=0.0)
-        self._update_cosc_slopes(x_lo, 0.5 * (target[0] + target[1]), x_hi)
 
     def center_paper_tape_trace(self) -> None:
         """Resume following the trace and centre the view on its newest part."""
@@ -1933,7 +1976,6 @@ class MainWin(QMainWindow):
             half = self._tape_min_half_span()
             target = (-half, half)
         self.paper_tape_plot.setYRange(*target, padding=0.0)
-        self._update_cosc_slopes(x_lo, 0.5 * (target[0] + target[1]), x_hi)
         logger.info("Paper tape centered on [%.3f, %.3f] ms", *target)
 
     def _tape_min_half_span(self) -> float:
@@ -2444,9 +2486,9 @@ class MainWin(QMainWindow):
 
         try:
             if ext == ".csv":
-                # the stored points, not the curves (which may be downsampled for display)
-                x_even, y_even = self._tape_x_even, self._tape_ms_even
-                x_odd, y_odd = self._tape_x_odd, self._tape_ms_odd
+                # the stored points (one per beat, at the P1 point shown), not the curves
+                # (smoothed and maybe downsampled for display)
+                x_even, y_even, x_odd, y_odd = self._tape_rows(raw=True)
                 x_osc, y_osc = self.osc_wave_curve.getData()
                 x_wav, y_wav = self.audio_waveform_curve.getData()
 
@@ -2852,6 +2894,8 @@ class MainWin(QMainWindow):
 
         logger.info("Starting telemetry capture session")
         self._rate_history.clear()
+        self._rate_sum = 0.0
+        self._rate_max, self._rate_min = -math.inf, math.inf
         self._session_records.clear()
         self._tape_x_even.clear()
         self._tape_ms_even.clear()
@@ -2859,6 +2903,7 @@ class MainWin(QMainWindow):
         self._tape_ms_odd.clear()
         self._tape_disp_even.clear()
         self._tape_disp_odd.clear()
+        self._tape_version += 1
         self._recorded_audio = None
         # a reading of a previous session must not be saved as this session's position
         self._last_telemetry = None
@@ -2902,8 +2947,8 @@ class MainWin(QMainWindow):
         self._tape_window_s = min(TAPE_WINDOW_S, max(10.0, float(duration_s)))
         self.paper_tape_plot.setXRange(0.0, self._tape_window_s, padding=0.0)
         self._tape_y0 = None
+        self._tape_shift = (0.0, 0.0)
         self._mock_tape_last = None
-        self._update_cosc_slopes(0.0, 0.0, self._tape_window_s)
         half = self._tape_min_half_span()
         self.paper_tape_plot.setYRange(-half, half, padding=0.0)
 
@@ -3199,6 +3244,9 @@ class MainWin(QMainWindow):
         )
         if should_record_tape:
             self._rate_history.append(rate_spd)
+            self._rate_sum += rate_spd
+            self._rate_max = max(self._rate_max, rate_spd)
+            self._rate_min = min(self._rate_min, rate_spd)
             self._session_records.append(
                 {
                     "test_name": self.txt_test_name.text().strip() or "watch_test",
@@ -3217,10 +3265,9 @@ class MainWin(QMainWindow):
                 }
             )
 
-            r_max = max(self._rate_history)
-            r_min = min(self._rate_history)
+            r_max, r_min = self._rate_max, self._rate_min
             r_delta = r_max - r_min
-            r_mean = float(np.mean(self._rate_history))
+            r_mean = self._rate_sum / len(self._rate_history)
 
             self.lbl_stat_max_val.setText(f"{r_max:+.2f} s/d")
             self.lbl_stat_min_val.setText(f"{r_min:+.2f} s/d")
@@ -3229,8 +3276,9 @@ class MainWin(QMainWindow):
 
         if self._capture_start_monotonic is None or elapsed_s >= stab_s:
             self._append_tape(telemetry, t_meas)
-            self.tape_curve_even.setData(self._tape_x_even, self._tape_disp_even)
-            self.tape_curve_odd.setData(self._tape_x_odd, self._tape_disp_odd)
+            xe, ye, xo, yo = self._tape_rows()
+            self.tape_curve_even.setData(xe, ye)
+            self.tape_curve_odd.setData(xo, yo)
             self._autoscale_paper_tape()
 
         if isinstance(telemetry, BeatTelemetry):

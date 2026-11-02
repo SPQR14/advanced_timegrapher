@@ -227,6 +227,17 @@ press **Analyze PPS recording…** in the same tab, or from a terminal:
 python -m adv_tg.tools.adc_calibration pps pps.flac --device "<microphone name>" --save
 ```
 
+**Reference recording:** the program ships `docs/samples/pps_48000Hz.flac`, a GPS PPS recorded
+with a CM18 on macOS. It carries that card's error, so it **checks the program, it does not
+calibrate yours**: the calibration window asks for confirmation before saving it (only right on
+the card and computer that recorded it). Measured as a 1/s
+quartz (3600 BPH), the program must read **0.00 s/d**; every packaged build checks this when it
+is made. From a terminal:
+
+```bash
+python -m adv_tg.tools.reference_check
+```
+
 ### Manual
 
 - After a **long test (15 minutes or more)**, press **Use live estimate** and then **Save**.
@@ -593,6 +604,16 @@ pulsa **Analizar grabación del PPS…** en la misma pestaña, o desde una termi
 
 ```bash
 python -m adv_tg.tools.adc_calibration pps pps.flac --device "<nombre del micrófono>" --save
+```
+
+**Grabación de referencia:** el programa incluye `docs/samples/pps_48000Hz.flac`, un PPS de GPS
+grabado con un CM18 en macOS. Lleva el error de esa tarjeta, así que **sirve para comprobar el
+programa, no para calibrar la tuya**: la ventana de calibración pide confirmación antes de
+guardarla (solo vale en la tarjeta y el ordenador con que se grabó). Medida como un cuarzo de 1/s (3600 BPH), el programa debe marcar **0,00 s/d**; cada
+paquete publicado lo comprueba al generarse. Desde una terminal:
+
+```bash
+python -m adv_tg.tools.reference_check
 ```
 
 ### Manual

@@ -36,6 +36,9 @@ Model and conventions
   timing noise (lobe changes, template evolution) that a white-noise covariance ignores; with
   two 10 s windows on a 30 s take, a slope of window rates flagged clean watches (Miyota,
   H-50) at -23 and -39 s/d/min. The trend is flagged when ``|trend| > trend_sigma * sigma``
+  and ``|trend| >= trend_min_s_per_day_per_min``: on a precise take a tiny trend is
+  significant without meaning anything (the GPS PPS reference at 44.1 kHz: the warm-up of
+  the card, 0.016 s/d per minute, at 5 sigma)
   (3 sigma by default).
 * **Uncertainties.** Each figure has a covariance sigma (``*_sigma_*``, white-noise model, the
   one the synthetic coverage test checks) and a block-jackknife sigma (``*_sigma_block_*``,
@@ -108,6 +111,7 @@ __all__ = [
     "WindowRate",
     "amplitude_from_templates",
     "beat_error_from_fit",
+    "effective_window_s",
     "compute_metrics",
     "fit_parity_weighted",
     "format_beat_error_ms",
@@ -142,6 +146,8 @@ class MetricsConfig:
             consecutive windows). A smaller step gives overlapping windows for plotting; the
             trend does not use the windows, so it is not affected.
         trend_sigma: The trend is flagged beyond this many sigmas of its slope (default 3).
+        trend_min_s_per_day_per_min: ... and only from this size on (default 0.1 s/d per
+            minute, 0.2 s/d over a 2-minute take).
         trend_blocks: Contiguous time blocks of the jackknife (default 6).
         amplitude_range_deg: Valid amplitudes (default 90-400°).
         amplitude_mismatch_deg: Tic/tac amplitude difference that raises a warning (20°).
@@ -161,6 +167,7 @@ class MetricsConfig:
     window_s: float = 10.0
     window_step_s: float | None = None
     trend_sigma: float = 3.0
+    trend_min_s_per_day_per_min: float = 0.1
     trend_blocks: int = 6
     amplitude_range_deg: tuple[float, float] = (90.0, 400.0)
     amplitude_mismatch_deg: float = 20.0
@@ -186,6 +193,8 @@ class MetricsConfig:
             raise ValueError("window_step_s debe estar en (0, window_s]")
         if not self.trend_sigma > 0:
             raise ValueError("trend_sigma debe ser positivo")
+        if not self.trend_min_s_per_day_per_min >= 0:
+            raise ValueError("trend_min_s_per_day_per_min no puede ser negativo")
         if self.trend_blocks < 3:
             raise ValueError("trend_blocks debe ser >= 3")
         lo, hi = self.amplitude_range_deg
@@ -469,6 +478,13 @@ def format_beat_error_ms(value: float) -> str:
     return f"{value:.1f} ms"
 
 
+def effective_window_s(config: MetricsConfig) -> float:
+    """``window_s``, or the shortest window with room for ``min_beats_per_parity`` beats per
+    parity plus 25 % of missed beats when that is longer."""
+    need = 2.5 * config.min_beats_per_parity * beat_period_s(config.bph)
+    return max(config.window_s, need)
+
+
 def window_rates(
     k: NDArray[np.float64], t: NDArray[np.float64], config: MetricsConfig
 ) -> list[WindowRate]:
@@ -476,15 +492,17 @@ def window_rates(
 
     Windows start at the first valid beat and must fit in the span (a single window covers
     everything when the span is shorter); a window whose parities do not reach
-    ``min_beats_per_parity`` beats is skipped.
+    ``min_beats_per_parity`` beats is skipped. At low beat rates a window is lengthened to
+    ``effective_window_s`` so that it can hold them (a 1/s quartz: 25 s instead of 10).
     """
     if t.size == 0:
         return []
     fs = config.sample_rate
     t0 = float(t.min())
     t_end = float(t.max())
-    w = config.window_s * fs
-    step = (config.window_step_s or config.window_s) * fs
+    w_s = effective_window_s(config)
+    w = w_s * fs
+    step = (config.window_step_s if config.window_step_s is not None else w_s) * fs
     out: list[WindowRate] = []
     n_win = max(1, int(math.floor((t_end - t0 - w) / step + 1e-9)) + 1)
     for i in range(n_win):
@@ -671,6 +689,7 @@ def compute_metrics(
         math.isfinite(m.rate_trend_sigma_s_per_day_per_min)
         and abs(m.rate_trend_s_per_day_per_min)
         > config.trend_sigma * m.rate_trend_sigma_s_per_day_per_min
+        and abs(m.rate_trend_s_per_day_per_min) >= config.trend_min_s_per_day_per_min
     ):
         m.rate_trend_flag = True
         m.warnings.append(
