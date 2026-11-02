@@ -69,6 +69,19 @@ Pipeline
    the same physical point (no spurious beat error) with much less jitter than the per-beat
    onsets. Templates survive relocks (same watch); they only depend on the beats in order,
    so chunk invariance holds.
+8b. **Quartz: onset of each step** (``quartz_onset``). On a quartz the template alignment
+   follows the centroid of the whole step (+-25 ms of smoothed envelope), which moves with
+   the ringing and the build-up of the sound: 190 µs per beat and steps of ~300 µs on the
+   GPS PPS reference (``docs/samples/pps_48000Hz.flac``: -0.435 s/d instead of -0.643),
+   0.8-1 ms on the Citizen H874. When the steps of a parity are clean (median SNR of its
+   first 4 beats around the provisional template onset >= ``quartz_onset_snr_db``), each beat is timed by its
+   own first departure from silence instead, as the PPS detector does (low-pass, local
+   baseline, last quiet stretch, threshold crossing; ``adv_tg.dsp.onset``) around
+   ``t_fine``: 7 µs and -0.642 s/d on the PPS, 0.25 ms on the Citizen. A beat without a
+   clean onset gets ``t_fine`` plus the median offset of the recent clean ones, so the
+   parity keeps a single timing point. The choice is made once per parity, on its first 4
+   beats (while the template warms up and ``t_fine`` is NaN anyway), and never changes: a noisy quartz (TMI
+   VH31, Bulova NM10: 15 dB) keeps the template for the whole take.
 9. **Losses**: a beat without anchor leaves a gap in ``k`` (``round(dt / P)``); after
    ``max_missed`` consecutive losses the lock is dropped and re-acquired, ``k`` continuing
    from the last beat. Stream overruns (``advance``) and runs of digital silence are data
@@ -119,6 +132,7 @@ from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
 from adv_tg.dsp.engine import compute_cell_envelope, detect_cell_candidates, sosfilt
 from adv_tg.dsp.filters import butter_bandpass_sos, sosfilt_zi, sosfiltfilt_padlen
 from adv_tg.dsp.normalizer import AudioNormalizer, NormalizerConfig
+from adv_tg.dsp.onset import lowpass_fir, onset_after_quiet, robust_level
 from adv_tg.utils.debugger import Debugger
 
 __all__ = [
@@ -140,6 +154,9 @@ ONSET_BIAS_NOTE = (
 )
 
 _P2_FRACTION = 0.45
+#: Quartz onset timing: first beats of a parity whose median SNR decides (measured around
+#: the template onset, provisional while the template warms up).
+_Q_DECIDE_BEATS = 4
 _TINY = 1e-12
 
 
@@ -251,6 +268,15 @@ class BeatDetectorConfig:
             spans +-``quartz_template_ms`` around the step, all of it used for the alignment;
             its timing point is the onset of the step (first rise of the template).
         quartz_template_ms: Half-width of the quartz template (default 25 ms).
+        quartz_onset: Quartz mode only: time clean steps by their own onset (pipeline step
+            8b, default True). Off = template timing for every beat, as before.
+        quartz_onset_snr_db: Median SNR the first 4 beats of a parity need for onset timing (default 26 dB; the PPS reference has 44, the Citizen H874
+            28, the TMI VH31 and the Bulova NM10 15-16).
+        quartz_onset_beat_snr_db: SNR a single beat needs for its own onset (default 20 dB);
+            weaker beats get ``t_fine`` plus the offset of the clean ones.
+        quartz_onset_sigma: Onset threshold in sigmas of the local noise (default 6).
+        quartz_onset_lowpass_hz: Low-pass before the onset search (default 9 kHz): at low
+            levels the noise of a card is mostly above 15 kHz.
         normalize: Software level normalization of the input (``adv_tg.dsp.normalizer``),
             default off. For inputs whose gain cannot be lowered: the peaks are brought to
             -6 dBFS before the analysis, so beats that reached full scale at the input are no
@@ -317,6 +343,11 @@ class BeatDetectorConfig:
     template_anchor: bool | None = None
     quartz: bool = False
     quartz_template_ms: float = 25.0
+    quartz_onset: bool = True
+    quartz_onset_snr_db: float = 26.0
+    quartz_onset_beat_snr_db: float = 20.0
+    quartz_onset_sigma: float = 6.0
+    quartz_onset_lowpass_hz: float = 9000.0
     normalize: bool = False
 
     def __post_init__(self) -> None:
@@ -384,6 +415,8 @@ class BeatDetectorConfig:
             )
         if not self.quartz_template_ms > 0:
             raise ValueError("quartz_template_ms debe ser positivo")
+        if not (self.quartz_onset_sigma > 0 and self.quartz_onset_lowpass_hz > 0):
+            raise ValueError("quartz_onset_sigma y quartz_onset_lowpass_hz deben ser positivos")
         if not 1 <= self.template_min_beats <= self.template_beats:
             raise ValueError("se requiere 1 <= template_min_beats <= template_beats")
         for name in ("template_search_ms", "template_post_ms", "template_p1_min_ms"):
@@ -537,6 +570,11 @@ class _Tpl:
         self.anchor: NDArray | None = None
         self.onset_anchor = math.nan
         self.lag = 0.0
+        # quartz onset timing (step 8b): SNR of the first beats, the choice (None = not
+        # made yet) and onset - t_fine of the recent beats timed by their onset
+        self.q_snr: list[float] = []
+        self.q_onset: bool | None = None
+        self.q_off: deque[float] = deque(maxlen=16)
 
     @property
     def onset_ref(self) -> float:
@@ -615,6 +653,15 @@ class BeatDetector:
             self.tpl_pre = int(math.ceil(self.tmax + 2.0 * ms))
             self.tpl_post = int(math.ceil(c.template_post_ms * ms))
             self.tpl_burst = int(round(3.0 * ms))  # alignment from 3 ms before the anchor
+        # quartz onset timing (step 8b): baseline 15-4 ms before t_fine, onset searched
+        # within +-3 ms and before t_fine + 1 ms; off when a beat is too short for that
+        self._q_on = c.quartz and c.quartz_onset and self.period_nom >= 40.0 * ms
+        self._q_fir = lowpass_fir(fs, c.quartz_onset_lowpass_hz)
+        self._q_pad = (self._q_fir.size - 1) // 2
+        self._q_base = (int(round(15.0 * ms)), int(round(4.0 * ms)))
+        self._q_win = int(round(3.0 * ms))
+        self._q_cen = int(round(1.0 * ms))
+        self._q_quiet = max(2, int(round(0.5 * ms)))
         n_al = max(1, int(round(c.template_align_smooth_ms * ms)))
         self._align_kernel = np.full(n_al, 1.0 / n_al)
         self._normalizer = (
@@ -658,6 +705,7 @@ class BeatDetector:
         self._tl_fwd: deque[float] = deque(maxlen=8)
         self._after_gap = False
         self._tpl = [_Tpl(self.config.template_beats), _Tpl(self.config.template_beats)]
+        self._fine_center = math.nan  # template onset of the last beat (see _fine)
         self._start_run(0)
 
     def process(self, chunk: ArrayLike, start_index: int) -> list[Beat]:
@@ -1492,7 +1540,10 @@ class BeatDetector:
             self._missed += max(0, k - self._last_k - 1)
         self._last_k = k
         self._last_ref = t_ref
+        self._fine_center = math.nan
         t_fine = self._fine(k, a, tp)
+        if self._q_on:
+            t_fine = self._quartz_fine(k, t_fine)
         conf = self._confidence(snr, p1, p2, p3, residual, flags)
         self._emitted += 1
         self._n_p[0] += not math.isnan(p1)
@@ -1578,9 +1629,67 @@ class BeatDetector:
             if full and anchor:
                 self._anchor_frame(t)
         ref = t.onset_ref
+        # the template onset even while the template warms up (quartz onset timing, 8b)
+        self._fine_center = origin + ref
         if len(t.segs) < c.template_min_beats or math.isnan(ref):
             return math.nan
         return origin + ref
+
+    def _quartz_fine(self, k: int, t_fine: float) -> float:
+        """Quartz: ``t_fine`` from the onset of the step when the parity is clean (step 8b)."""
+        c = self.config
+        t = self._tpl[k & 1]
+        # searched around the template onset, also while the template warms up (t_fine NaN)
+        center = t_fine if math.isfinite(t_fine) else self._fine_center
+        if not math.isfinite(center):
+            return t_fine
+        snr, onset = self._step_onset(center)
+        if t.q_onset is None:
+            if math.isfinite(snr):
+                t.q_snr.append(snr)
+            if len(t.q_snr) < _Q_DECIDE_BEATS:
+                return math.nan  # not decided yet: no beat on a timing point that may change
+            t.q_onset = float(np.median(t.q_snr)) >= c.quartz_onset_snr_db
+        if not t.q_onset or not math.isfinite(t_fine):
+            return t_fine
+        if onset is not None:
+            t.q_off.append(onset - t_fine)
+            return onset
+        if len(t.q_off) < 3:
+            return math.nan
+        return t_fine + float(np.median(t.q_off))
+
+    def _step_onset(self, center: float) -> tuple[float, float | None]:
+        """``(snr_db, onset)`` of the step around ``center``; onset None when it is not clean.
+
+        Every bound is an absolute index and the filtered span has a fixed length, so the
+        result does not depend on the chunking.
+        """
+        c = self.config
+        ci = int(round(center))
+        b0, b1 = ci - self._q_base[0], ci - self._q_base[1]
+        lo, hi = ci - self._q_win, ci + self._q_win
+        a, b = b0 - self._q_pad, hi + self._q_pad + 1
+        if a < self._raw.start or b > self._raw.end or self._in_dropout(a, b):
+            return math.nan, None
+        y = np.convolve(self._raw.get(a, b), self._q_fir, mode="valid")  # y[0] at b0
+        mu, sg = robust_level(y[: b1 - b0])
+        r = np.abs(y[lo - b0 : hi - b0 + 1] - mu)
+        snr = 20.0 * math.log10(max(float(np.max(r)), _TINY) / sg)
+        if snr < c.quartz_onset_beat_snr_db:
+            return snr, None
+        j = onset_after_quiet(r[: self._q_win + self._q_cen + 1], c.quartz_onset_sigma * sg,
+                              self._q_quiet)  # fmt: skip
+        return snr, None if j is None else lo + j
+
+    @property
+    def quartz_timing(self) -> tuple[str, str]:
+        """Timing point of each parity in quartz mode: "onset", "template" or "—" (not
+        decided yet, or not quartz)."""
+        if not self._q_on:
+            return ("template", "template") if self.config.quartz else ("—", "—")
+        names = {None: "—", True: "onset", False: "template"}
+        return names[self._tpl[0].q_onset], names[self._tpl[1].q_onset]
 
     def _align_window(self, t: _Tpl) -> tuple[int, int]:
         """Template span ``[b0, b1)`` a beat is correlated on to align it."""

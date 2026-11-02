@@ -81,6 +81,11 @@ def test_real_engine_in_the_gui(window, qtbot, tmp_path, monkeypatch) -> None:
     assert m, real
     assert float(m.group(1).replace(" ", "")) == pytest.approx(28801.3, abs=0.5)
     assert float(m.group(2)) == pytest.approx(0.005, abs=0.002)
+    # Rate statistics (kept incrementally): max >= mean >= min, mean = mean of the history
+    hist = window._rate_history
+    assert _number(window.lbl_stat_max_val.text()) == pytest.approx(max(hist), abs=0.006)
+    assert _number(window.lbl_stat_min_val.text()) == pytest.approx(min(hist), abs=0.006)
+    assert _number(window.lbl_stat_mean_val.text()) == pytest.approx(np.mean(hist), abs=0.006)
     # Quality bar now reflects detection (SNR and share of usable beats).
     assert "SNR" in window.lbl_snr_value.text() and window.prg_snr.value() > 50
     # Paper tape: one point per beat (tic and tac rows), slope = rate (+4 s/d = 4/86.4 ms/s),
@@ -96,9 +101,12 @@ def test_real_engine_in_the_gui(window, qtbot, tmp_path, monkeypatch) -> None:
     de, do = np.array(window._tape_disp_even), np.array(window._tape_disp_odd)
     assert lo <= min(de.min(), do.min()) and max(de.max(), do.max()) <= hi
     assert x_lo == pytest.approx(0.0, abs=1e-6) and x_hi == pytest.approx(60.0)
-    # COSC limits drawn as slopes (+6 s/d = 6/86.4 ms per second) across the view
-    cx, cy = window.cosc_upper_line.getData()
-    assert (cy[-1] - cy[0]) / (cx[-1] - cx[0]) == pytest.approx(6.0 / 86.4)
+    # COSC guides: green horizontal lines at +6 and -4 that never move
+    assert window.cosc_upper_line.value() == 6.0 and window.cosc_lower_line.value() == -4.0
+    assert window.cosc_upper_line.angle == 0 and window.cosc_lower_line.angle == 0
+    # the drawn rows start around 0 (origin = mid point of the first tic and tac)
+    xe_d, ye_d, xo_d, yo_d = window._tape_rows()
+    assert abs(0.5 * (ye_d[0] + yo_d[0])) < 0.5
     # Oscilloscope markers at the real instants, inside the drawn beat.
     t, y = window.osc_wave_curve.getData()
     assert t is not None and len(t) > 0

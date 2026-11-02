@@ -373,3 +373,35 @@ def test_config_is_validated(kw: dict) -> None:
 def test_tracker_span_is_validated() -> None:
     with pytest.raises(ValueError):
         MetricsTracker(_cfg(), span_s=0.0)
+
+
+def test_trend_flag_needs_a_meaningful_size() -> None:
+    """A significant but tiny trend (a card warming up, on a very precise take) is no warning."""
+    from adv_tg.core.metrics import compute_metrics
+
+    fs, bph = 48000.0, 3600.0
+    k = np.arange(240, dtype=np.float64)
+    p = fs * (1.0 + 0.7e-6)
+    # rate change of 0.02 s/d per minute: t = a + P k + q k^2 with tiny white noise
+    q = 0.02 / 86400.0 * p / 60.0 / 2.0 * (p / fs)
+    rng = np.random.default_rng(1)
+    t = 1000.0 + p * k + q * k**2 + rng.normal(0.0, 0.05, k.size)
+    beats = [
+        Beat(int(i), math.nan, math.nan, float(v), 1, -6.0, 30.0, 0.0, 0.9, BeatFlags.NONE,
+             t_fine=float(v))
+        for i, v in zip(k, t, strict=True)
+    ]  # fmt: skip
+    loose = compute_metrics(
+        beats, (None, None), MetricsConfig(fs, bph, quartz=True, trend_min_s_per_day_per_min=0.0)
+    )
+    strict = compute_metrics(beats, (None, None), MetricsConfig(fs, bph, quartz=True))
+    assert loose.rate_trend_flag  # significant...
+    assert abs(strict.rate_trend_s_per_day_per_min) < 0.1 and not strict.rate_trend_flag
+
+
+def test_windows_are_lengthened_at_low_beat_rates() -> None:
+    from adv_tg.core.metrics import effective_window_s
+
+    assert effective_window_s(MetricsConfig(48000.0, 3600.0)) == pytest.approx(25.0)
+    assert effective_window_s(MetricsConfig(48000.0, 14400.0)) == pytest.approx(10.0)
+    assert effective_window_s(MetricsConfig(48000.0, 28800.0, window_s=5.0)) == pytest.approx(5.0)

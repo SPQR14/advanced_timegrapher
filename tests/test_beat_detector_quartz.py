@@ -90,10 +90,34 @@ def test_frame_anchoring_with_a_variable_step_shape() -> None:
         jitter_us=20,
         quartz_precursor=(6.0, 0.2, 1.2),
     )
-    anchored = _rate(*_run(x, 14400), 14400)
-    live = _rate(*_run(x, 14400, template_anchor=False), 14400)
+    # template timing only: at 30 dB the steps are clean enough for onset timing (8b)
+    anchored = _rate(*_run(x, 14400, quartz_onset=False), 14400)
+    live = _rate(*_run(x, 14400, quartz_onset=False, template_anchor=False), 14400)
     assert anchored == pytest.approx(TRUE_RATE, abs=0.02)
     assert abs(anchored - TRUE_RATE) < abs(live - TRUE_RATE)
+
+
+@pytest.mark.parametrize(("snr_db", "timing"), [(30.0, "onset"), (14.0, "template")])
+def test_quartz_timing_choice_follows_the_snr(snr_db: float, timing: str) -> None:
+    """Step 8b: clean steps are timed by their own onset, noisy ones by the template; the
+    choice is made once per parity and the rate is right either way."""
+    x, _ = synth_watch(
+        bph=3600, rate_s_per_day=TRUE_RATE, seconds=120, snr_db=snr_db, seed=5, quartz=True,
+        jitter_us=20,
+    )  # fmt: skip
+    beats, det = _run(x, 3600)
+    assert det.quartz_timing == (timing, timing)
+    # the choice costs no beat: the same beats have a t_fine as with the template alone
+    plain = _run(x, 3600, quartz_onset=False)[0]
+    assert [math.isfinite(b.t_fine) for b in beats] == [math.isfinite(b.t_fine) for b in plain]
+    assert _rate(beats, det, 3600) == pytest.approx(TRUE_RATE, abs=0.03 if snr_db > 20 else 0.1)
+
+
+def test_quartz_onset_timing_can_be_turned_off() -> None:
+    x, _ = synth_watch(bph=3600, seconds=40, snr_db=30, seed=6, quartz=True, jitter_us=20)
+    assert _run(x, 3600, quartz_onset=False)[1].quartz_timing == ("template", "template")
+    det = BeatDetector(BeatDetectorConfig(sample_rate=FS, bph=28800))
+    assert det.quartz_timing == ("—", "—")  # mechanical: not applicable
 
 
 def test_change_of_step_sound_stays_within_the_documented_limit() -> None:

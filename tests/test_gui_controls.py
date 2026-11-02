@@ -425,9 +425,8 @@ def test_paper_tape_window_starts_at_zero_then_scrolls(window) -> None:
     newest = max(window._tape_x_even[-1], window._tape_x_odd[-1])
     assert x_hi == pytest.approx(newest + mw.TAPE_LEAD_S)
     assert x_hi - x_lo == pytest.approx(mw.TAPE_WINDOW_S)
-    # COSC guides start at the left edge of the view
-    cx, _ = window.cosc_upper_line.getData()
-    assert cx[0] == pytest.approx(x_lo) and cx[-1] == pytest.approx(x_hi)
+    # COSC guides are horizontal and do not scroll or move
+    assert (window.cosc_lower_line.value(), window.cosc_upper_line.value()) == (-4.0, 6.0)
 
 
 def test_paper_tape_rows_are_smoothed_but_export_stays_raw(window) -> None:
@@ -523,3 +522,48 @@ def test_analyze_recording_button(window, tmp_path) -> None:
     assert dlg is not None and dlg.report is not None
     assert dlg.report.series.bph == 28800 and dlg.report.escape_period_s == 3.75
     dlg.close()
+
+
+def test_paper_tape_zero_line_stands_out(window) -> None:
+    pen = window.tape_zero_line.pen
+    from PyQt6.QtCore import Qt
+
+    assert pen.widthF() >= 2.0 and pen.style() == Qt.PenStyle.SolidLine
+    c = pen.color()
+    assert min(c.red(), c.green(), c.blue()) >= 200  # near white
+
+
+def test_cosc_guides_stay_fixed_when_the_trace_scrolls(window) -> None:
+    _fill_tape(window, 150.0, rate_spd=12.0)  # the trace climbs past +6 and leaves the guides
+    window._autoscale_paper_tape()
+    assert window.paper_tape_plot.getViewBox().viewRange()[0][0] > 0.0  # scrolled
+    for line, value in ((window.cosc_upper_line, 6.0), (window.cosc_lower_line, -4.0)):
+        assert line.value() == value and line.angle == 0
+        assert line.label.format == f"{value:+g}"
+        pen = line.pen
+        assert pen.color().green() > 200 and pen.color().red() < 50  # green
+
+
+def test_paper_tape_rows_are_converted_once_per_change(window, monkeypatch) -> None:
+    """Drawing and autoscaling share one conversion of the rows (it grew with the test)."""
+    _fill_tape(window, 600.0)
+    calls = []
+    real = np.asarray
+    monkeypatch.setattr(mw.np, "asarray", lambda *a, **k: calls.append(1) or real(*a, **k))
+    window._tape_rows()
+    window._autoscale_paper_tape()
+    window._tape_rows()
+    assert len(calls) == 0  # memoised since the last change
+    window._tape_x_even.append(600.5)
+    window._tape_ms_even.append(0.0)
+    window._smooth_tape_rows()
+    window._tape_rows()
+    assert len(calls) == 4
+
+
+def test_plot_axes_are_cached(window) -> None:
+    from PyQt6.QtWidgets import QGraphicsItem
+
+    for plot in (window.paper_tape_plot, window.oscilloscope_plot, window.waveform_plot):
+        for axis in plot.getPlotItem().axes.values():
+            assert axis["item"].cacheMode() == QGraphicsItem.CacheMode.DeviceCoordinateCache

@@ -15,9 +15,24 @@ Calibraciones del reloj de la tarjeta (ppm ± σ) guardadas por dispositivo y ta
 `set` (manual, nivel 3), `forget`, `show FILE` y `tag FILE --device D` (estampa la calibración
 en una grabación antigua). `--device` acepta el nombre PortAudio o su índice.
 
+`pps FILE [--device D --save] [--tag]`: error del reloj a partir de una grabación de un PPS de
+GPS; `--save` lo guarda para el dispositivo y `--tag` lo estampa en la propia grabación, con la
+marca `ADV_TG_REFERENCE=gps-pps` (grabación de referencia: el diálogo de calibración pide
+confirmación antes de guardarla, porque solo vale para la tarjeta que la grabó).
+
 Se aplica la calibración de menor incertidumbre después de sumar el envejecimiento del cristal
 (1 ppm/año en cuadratura): una medida con PPS de la semana pasada gana a una estimación NTP de
 hoy, pero no una de hace un año.
+
+## `reference_check`
+
+Comprueba el programa con la grabación de referencia `docs/samples/pps_48000Hz.flac` (PPS de
+GPS con zumbador, CM18 a 48 kHz en macOS, etiquetada con `adc_calibration pps --tag`): el
+detector PPS debe reproducir el error de la etiqueta (± 0.05 ppm) y el motor de relojes, como
+cuarzo de 3600 BPH y corregido con ese error, marcar 0 s/d (± 0.02 o 4 σ) con ≤ 30 µs por
+batimiento. Medido: +7.443 ± 0.043 ppm; +0.001 ± 0.006 s/d, 8 µs. Lo ejecuta también
+`adv-tg --smoke-test` en cada paquete. Códigos de salida: 0 = pasa, 1 = falla, 2 = falta la
+referencia.
 
 ## `gil_probe`
 

@@ -32,7 +32,12 @@ Paper tape (``SessionSnapshot.tape_*``). For each new beat with a fine instant: 
 seconds and its offset in ms against a grid of nominal periods corrected by the applied clock
 drift, ``-(t_fine - t0 - (k - k0) P_nom (1 + ppm 1e-6)) / fs`` (sign: a gaining watch goes
 up). A healthy watch draws two straight rows (tic and tac): the slope is the rate
-(1 s/d = 1/86.4 ms per second) and their distance the tic/tac offset.
+(1 s/d = 1/86.4 ms per second) and their distance the tic/tac offset. The offsets are at the
+drop (``t_fine``, the precise and steady point); ``tape_shift_ms`` moves each row to the point
+of the beat error shown (P1): by ``(t_fine - P1)`` of its parity, from the templates
+(``beat_error_point`` "p1") or the median over the window of each beat's own P1 ("p1_beat"),
+minus the mean of the two (the mid line stays), and through the same median of
+``BE_DISPLAY_UPDATES`` updates as the figure. Without P1 (point "t_fine") it is (0, 0).
 
 Displayed figures (``SessionSnapshot.display``). In live mode a parity template can give a
 wrong P1 onset for one or two refreshes (Miyota: tac amplitude 295° -> 127° -> 295° within
@@ -170,6 +175,8 @@ class SessionSnapshot:
         display: Figures to show (median of the last updates, see module docstring).
         tape_time_s, tape_offset_ms, tape_parity: Paper tape points of the new beats (see
             module docstring): ADC time in s, offset in ms, parity of ``k`` (0 = tic).
+        tape_shift_ms: ``(tic, tac)`` shift (ms) that moves the rows from the drop to the
+            point of the beat error shown (module docstring); for every point of the row.
     """
 
     metrics: Metrics
@@ -193,6 +200,7 @@ class SessionSnapshot:
     tape_time_s: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
     tape_offset_ms: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
     tape_parity: NDArray[np.int8] = field(default_factory=lambda: np.zeros(0, np.int8))
+    tape_shift_ms: tuple[float, float] = (0.0, 0.0)
 
 
 class MeasurementSession:
@@ -234,6 +242,7 @@ class MeasurementSession:
         self._be_history: deque[float] = deque(maxlen=BE_DISPLAY_UPDATES)
         self._be_p3_history: deque[float] = deque(maxlen=BE_DISPLAY_UPDATES)
         self._tape_origin: tuple[int, float] | None = None  # (k0, t0) of the tape grid
+        self._tape_shift_history: deque[tuple[float, float]] = deque(maxlen=BE_DISPLAY_UPDATES)
         lo, hi = self._detector.config.band_hz
         self._sos = butter_bandpass_sos(4, (lo, hi), fs)
         self._zi = sosfilt_zi(self._sos)
@@ -362,6 +371,34 @@ class MeasurementSession:
         parity = (np.array([b.k for b in good]) & 1).astype(np.int8)
         return t / self._fs, offset_ms, parity
 
+    def _tape_shift(self, metrics: Metrics) -> tuple[float, float]:
+        """``(tic, tac)`` shift of the rows from the drop to the P1 point shown (ms)."""
+        fs = self._fs
+        off = (math.nan, math.nan)
+        if metrics.beat_error_point == "p1":
+            tic, tac = self._detector.templates()
+            if tic is not None and tac is not None:
+                off = (
+                    (tic.onset_ref - tic.onset_p1) / fs * 1e3,
+                    (tac.onset_ref - tac.onset_p1) / fs * 1e3,
+                )
+        elif metrics.beat_error_point == "p1_beat":
+            d: tuple[list[float], list[float]] = ([], [])
+            for b in self._tracker.beats:
+                if math.isfinite(b.t_fine) and math.isfinite(b.p1):
+                    d[b.k & 1].append((b.t_fine - b.p1) / fs * 1e3)
+            if d[0] and d[1]:
+                off = (float(np.median(d[0])), float(np.median(d[1])))
+        if all(math.isfinite(v) for v in off):
+            mid = 0.5 * (off[0] + off[1])
+            self._tape_shift_history.append((off[0] - mid, off[1] - mid))
+        elif metrics.beat_error_point == "t_fine":
+            self._tape_shift_history.clear()
+        if not self._tape_shift_history:
+            return (0.0, 0.0)
+        arr = np.asarray(self._tape_shift_history)
+        return float(np.median(arr[:, 0])), float(np.median(arr[:, 1]))
+
     # ------------------------------------------------------------------ update
     def update(self, stream: SampleStream) -> SessionSnapshot:
         """Process the audio that arrived since the previous call and recompute the figures."""
@@ -378,6 +415,7 @@ class MeasurementSession:
         del self._recent_snr[:-SNR_BEATS]
         metrics = self._tracker.result()
         tape = self._tape(beats)
+        tape_shift = self._tape_shift(metrics)
 
         window = self._tracker.beats
         det_ratio = math.nan
@@ -424,6 +462,7 @@ class MeasurementSession:
             tape_time_s=tape[0],
             tape_offset_ms=tape[1],
             tape_parity=tape[2],
+            tape_shift_ms=tape_shift,
         )
 
     @property

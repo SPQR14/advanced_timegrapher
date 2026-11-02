@@ -242,3 +242,46 @@ def test_drop_wander_live_beat_error() -> None:
     settled = be[len(be) // 3 :]
     assert np.median(settled) == pytest.approx(0.2, abs=0.05)
     assert settled.max() < 0.4
+
+
+@pytest.mark.parametrize(
+    ("name", "bph", "la"), [("SeagullST1901.flac", 21600, 47.0), ("4r36.flac", 21600, 53.0)]
+)
+def test_paper_tape_rows_follow_the_beat_error_shown(name: str, bph: float, la: float) -> None:
+    """The rows are timed at the drop and moved by ``tape_shift_ms`` to the P1 point of the
+    figure shown: their distance is that figure, not the one at the drop (4R36: 0.39 ms shown,
+    2.3 ms between the rows at P3; Seagull: 0.49 / 0.26)."""
+    from pathlib import Path
+
+    from adv_tg.utils.audio_files import read_mono
+
+    path = Path(__file__).resolve().parents[1] / "docs" / "samples" / name
+    if not path.is_file():
+        pytest.skip(f"no está {path}")
+    fs, x = read_mono(path)
+    snaps = feed(MeasurementSession(SessionConfig(sample_rate=fs, bph=bph, lift_angle_deg=la)),
+                 x, wall=False)  # fmt: skip
+    t = np.concatenate([q.tape_time_s for q in snaps])
+    y = np.concatenate([q.tape_offset_ms for q in snaps])
+    par = np.concatenate([q.tape_parity for q in snaps])
+    last = snaps[-1]
+    keep = t > t[0] + 10.0
+    t, y, par = t[keep], y[keep], par[keep]
+    r = y - np.polyfit(t, y, 1)[0] * t
+    gap_p3 = np.median(r[par == 1]) - np.median(r[par == 0])
+    se, so = last.tape_shift_ms
+    assert se == pytest.approx(-so)  # the mid line of the rows does not move
+    gap_p1 = abs(gap_p3 + so - se)
+    shown = last.display.beat_error_ms
+    assert gap_p1 == pytest.approx(shown, abs=0.15)
+    assert abs(abs(gap_p3) - shown) > 0.2  # at the drop they would not match
+
+
+def test_paper_tape_shift_is_zero_without_a_p1_point() -> None:
+    x, _ = synth_watch(bph=28800, rate_s_per_day=6.0, beat_error_ms=0.5, amplitude_deg=270,
+                       lift_angle_deg=52, seconds=20, seed=12)  # fmt: skip
+    s = MeasurementSession(SessionConfig(sample_rate=FS, bph=28800, lift_angle_deg=52))
+    snaps = feed(s, x, wall=False)
+    assert snaps[0].tape_shift_ms == (0.0, 0.0)  # nothing measured yet
+    se, so = snaps[-1].tape_shift_ms
+    assert abs(so - se) < 0.05  # same lift time in tic and tac: no shift between the rows
