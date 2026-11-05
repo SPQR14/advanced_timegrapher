@@ -94,7 +94,7 @@ def test_quartz_mode_toggle(window) -> None:
         "16/s",
     ]
     assert not window.spn_lift.isEnabled() and not window.cmb_caliber.isEnabled()
-    assert not window.cmb_bph.isEnabled() and window.cmb_bph.currentText() == "1/s"
+    assert window.cmb_bph.isEnabled() and window.cmb_bph.currentText() == "1/s"
     window.cmb_bph.setCurrentText("16/s")
     cfg = window.current_watch_config()
     assert cfg.quartz and cfg.bph == 57600
@@ -109,7 +109,7 @@ def test_quartz_lock_survives_the_end_of_a_session(window) -> None:
     window.chk_quartz.setChecked(True)
     window._set_capture_state("MIDIENDO")
     window._on_session_finished()  # re-enables the top bar
-    assert not window.cmb_bph.isEnabled()
+    assert window.cmb_bph.isEnabled()  # steps per second stay selectable
     assert not window.spn_lift.isEnabled() and not window.cmb_caliber.isEnabled()
     assert window.cmb_srate.isEnabled() and window.cmb_device.isEnabled()
 

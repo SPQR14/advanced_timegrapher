@@ -70,6 +70,7 @@ from adv_tg.utils.logger_setup import LoggerSetup
 from adv_tg.utils.report import ISSUES_URL, build_report, default_report_name
 
 __all__ = [
+    "BUY_ME_A_COFFEE_URL",
     "REPO_URL",
     "AboutDialog",
     "CalibrationDialog",
@@ -82,6 +83,8 @@ _dbg = Debugger.get(__name__)
 logger = _dbg.logger
 
 REPO_URL = "https://github.com/SPQR14/advanced_timegrapher"
+#: Page opened by the "Buy me a coffee" button of the About dialog.
+BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/sqpr14"
 #: Colour of the PPS residual points.
 PPS_COLOR = "#4FC3F7"
 
@@ -686,6 +689,7 @@ class AboutDialog(QDialog):
     def __init__(self, translator: Translator, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         tr = translator.tr
+        self._tr = tr
         self.setWindowTitle(tr("about_title"))
         self.setMinimumWidth(480)
         layout = QVBoxLayout(self)
@@ -720,9 +724,41 @@ class AboutDialog(QDialog):
         folder_layout.addWidget(btn_open_config)
         layout.addLayout(folder_layout)
 
+        # Support the project (opens BUY_ME_A_COFFEE_URL)
+        self.btn_buy_coffee = QPushButton(tr("btn_buy_coffee"))
+        self.btn_buy_coffee.setObjectName("CoffeeButton")
+        self.btn_buy_coffee.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_buy_coffee.setToolTip(tr("coffee_tooltip").format(url=BUY_ME_A_COFFEE_URL))
+        self.btn_buy_coffee.clicked.connect(self.open_buy_coffee)
+        layout.addWidget(self.btn_buy_coffee, alignment=Qt.AlignmentFlag.AlignHCenter)
+        # Shown only if the browser can't be opened, so the URL can be copied
+        self.lbl_coffee_failed = QLabel()
+        self.lbl_coffee_failed.setWordWrap(True)
+        self.lbl_coffee_failed.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.lbl_coffee_failed.setVisible(False)
+        layout.addWidget(self.lbl_coffee_failed)
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def open_buy_coffee(self) -> bool:
+        """Open the 'Buy me a coffee' page in the default browser.
+
+        Returns:
+            True if the system accepted the URL; otherwise the URL is shown in the dialog so
+            the user can copy it.
+        """
+        ok = bool(QDesktopServices.openUrl(QUrl(BUY_ME_A_COFFEE_URL)))
+        if ok:
+            logger.info("Opened '%s' in the default browser", BUY_ME_A_COFFEE_URL)
+        else:
+            logger.warning("Could not open '%s' in a browser", BUY_ME_A_COFFEE_URL)
+            self.lbl_coffee_failed.setText(
+                self._tr("coffee_open_failed").format(url=BUY_ME_A_COFFEE_URL)
+            )
+            self.lbl_coffee_failed.setVisible(True)
+        return ok
 
 
 class ReportDialog(QDialog):

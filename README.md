@@ -166,9 +166,10 @@ Terminal app (or your IDE) will ask for microphone access.
 
 ## Quartz watches
 
-1. Tick **Quartz** next to the BPH. **Caliber**, **BPH** (shown as **Steps**, fixed at **1/s**,
-   the step rate of almost every quartz watch) and **Lift Angle** are disabled; only the
-   **rate** is measured.
+1. Tick **Quartz** next to the BPH. The BPH selector becomes **Steps**: pick the motor steps
+   per second (**1/s** by default, the step rate of almost every quartz watch; 2, 4, 8 or 16/s
+   for sweep-hand calibers). **Caliber** and **Lift Angle** are disabled; only the **rate** is
+   measured.
 2. If the watch is so loud that the signal clips even at the minimum gain, see
    **Normalize audio** in [Tips](#tips-for-a-good-measurement).
 3. Many quartz movements correct their rate in jumps every few seconds or minutes
@@ -361,7 +362,7 @@ If the app does not open at all, attach the files of the log folder instead:
 ## Support the project
 
 If you find it useful, you can buy me a coffee: <https://buymeacoffee.com/sqpr14> (also from
-the ☕ button in the app).
+the ☕ button in the app's **About** dialog).
 
 ## Licence and technical documentation
 
@@ -743,7 +744,7 @@ su lugar los archivos de la carpeta de registros:
 ## Apoya el proyecto
 
 Si te resulta útil, puedes invitarme a un café: <https://buymeacoffee.com/sqpr14> (también
-desde el botón ☕ de la aplicación).
+desde el botón ☕ del diálogo **Acerca de** de la aplicación).
 
 ## Licencia y documentación técnica
 
