@@ -67,10 +67,10 @@ def test_late_telemetry_after_stop_is_ignored(qtbot) -> None:
     window.close()
 
 
-def test_buy_coffee_button_opens_url(qtbot, monkeypatch) -> None:
+def test_buy_coffee_button_lives_in_about_dialog(qtbot, monkeypatch) -> None:
     from PyQt6.QtCore import Qt
 
-    from adv_tg.ui import main_window as mw
+    from adv_tg.ui import dialogs
 
     opened: list[str] = []
     result = {"ok": True}
@@ -79,12 +79,15 @@ def test_buy_coffee_button_opens_url(qtbot, monkeypatch) -> None:
         opened.append(url.toString())
         return result["ok"]
 
-    monkeypatch.setattr(mw.QDesktopServices, "openUrl", fake_open)
+    monkeypatch.setattr(dialogs.QDesktopServices, "openUrl", fake_open)
     window = MainWin()
     qtbot.addWidget(window)
-    qtbot.mouseClick(window.btn_buy_coffee, Qt.MouseButton.LeftButton)
+    assert not hasattr(window, "btn_buy_coffee")  # not in the top bar any more
+    about = window.open_about_dialog(exec_dialog=False)
+    qtbot.addWidget(about)
+    qtbot.mouseClick(about.btn_buy_coffee, Qt.MouseButton.LeftButton)
     assert opened == ["https://buymeacoffee.com/sqpr14"]
-    assert "buymeacoffee.com/sqpr14" in window.btn_buy_coffee.toolTip()
+    assert "buymeacoffee.com/sqpr14" in about.btn_buy_coffee.toolTip()
     result["ok"] = False
-    assert window._on_buy_coffee_clicked() is False
-    assert "buymeacoffee.com/sqpr14" in window.statusBar().currentMessage()
+    assert about.open_buy_coffee() is False
+    assert "buymeacoffee.com/sqpr14" in about.lbl_coffee_failed.text()
