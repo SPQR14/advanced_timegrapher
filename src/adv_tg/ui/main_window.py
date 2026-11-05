@@ -13,11 +13,10 @@ from pathlib import Path
 import numpy as np
 import pyqtgraph as pg
 from numpy.typing import NDArray
-from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
+from PyQt6.QtCore import QRectF, QSize, Qt, QTimer
 from PyQt6.QtGui import (
     QAction,
     QColor,
-    QDesktopServices,
     QFont,
     QIcon,
     QImage,
@@ -28,6 +27,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStyledItemDelegate,
     QTableWidget,
@@ -70,6 +71,7 @@ from adv_tg.ui.dialogs import (
     ReportDialog,
     open_folder,
 )
+from adv_tg.ui.flow_layout import FlowLayout
 from adv_tg.ui.measure_worker import MeasureStreamWorker
 from adv_tg.ui.measure_worker import device_name as measure_device_name
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
@@ -145,11 +147,14 @@ def _resolve_assets_dir() -> Path:
 
 ASSETS_DIR = _resolve_assets_dir()
 APP_ICON_PATH = ASSETS_DIR / "adv-tg.svg"
-#: Page opened by the "Buy me a coffee" button.
-BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/sqpr14"
 
 
 #: Mechanical beats per hour offered in the top bar.
+#: Preferred minimum window size (logical px); shrunk to fit smaller (scaled) screens.
+MIN_WINDOW_SIZE: tuple[int, int] = (1360, 840)
+#: Widest the caliber and audio device combos get in the top bar (popups show full names).
+CALIBER_COMBO_MAX_W: int = 200
+DEVICE_COMBO_MAX_W: int = 280
 MECHANICAL_BPH: tuple[int, ...] = (18000, 19800, 21600, 25200, 28800, 36000)
 #: Quartz motor steps per second (Citizen 1/s, TMI 4/s, Bulova Precisionist 16/s...).
 QUARTZ_STEPS_PER_S: tuple[int, ...] = (1, 2, 4, 8, 16)
@@ -420,7 +425,7 @@ class MainWin(QMainWindow):
         # Saved positional telemetry records (starts clean with no pre-populated data)
         self._saved_positions: dict[str, TelemetryResult] = {}
 
-        self.setMinimumSize(1360, 840)
+        self._fit_minimum_size_to_screen()
         self._apply_industrial_theme()
         self._build_ui()
 
@@ -469,6 +474,27 @@ class MainWin(QMainWindow):
                 background-color: #161b22;
                 border: 1px solid #28303d;
                 border-radius: 6px;
+            }}
+            QWidget#TopBarFields, QWidget#TopBarField {{
+                background: transparent;
+            }}
+            QScrollArea#ControlPanelScroll, QScrollArea#ControlPanelScroll > QWidget > QWidget {{
+                background: transparent;
+                border: none;
+            }}
+            QScrollArea#ControlPanelScroll QScrollBar:vertical {{
+                background: #11161d;
+                width: 10px;
+                margin: 0px;
+            }}
+            QScrollArea#ControlPanelScroll QScrollBar::handle:vertical {{
+                background: #303947;
+                border-radius: 4px;
+                min-height: 24px;
+            }}
+            QScrollArea#ControlPanelScroll QScrollBar::add-line:vertical,
+            QScrollArea#ControlPanelScroll QScrollBar::sub-line:vertical {{
+                height: 0px;
             }}
             QFrame#HudCard {{
                 background-color: #11161d;
@@ -815,6 +841,21 @@ class MainWin(QMainWindow):
             """
         )
 
+    def _fit_minimum_size_to_screen(self) -> None:
+        """Minimum window size, but never larger than the screen's available area.
+
+        With display scaling (1920x1080 at 150 % gives 1280x720 logical px) a fixed
+        1360x840 minimum didn't fit on screen and the layouts were squeezed below what
+        their widgets need, so they overlapped.
+        """
+        width, height = MIN_WINDOW_SIZE
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            width = min(width, avail.width())
+            height = min(height, avail.height())
+        self.setMinimumSize(width, height)
+
     def _configure_combo_box(self, combo: QComboBox, min_width: int = 90) -> None:
         """Configure a QComboBox with a QListView popup and sufficient item space on macOS."""
         list_view = QListView(combo)
@@ -844,15 +885,21 @@ class MainWin(QMainWindow):
         curve.opts["antialias"] = False
 
     @staticmethod
-    def _sync_combo_popup_width(combo: QComboBox, min_width: int = 90) -> None:
-        """Ensure both the combo box and its dropdown popup fit the longest option text."""
+    def _sync_combo_popup_width(
+        combo: QComboBox, min_width: int = 90, max_width: int | None = None
+    ) -> None:
+        """Ensure both the combo box and its dropdown popup fit the longest option text.
+
+        ``max_width`` caps the box itself (the popup still shows the full text), so a long
+        device name doesn't make the top bar wider than the screen.
+        """
         fm = combo.fontMetrics()
         max_text_w = max(
             (fm.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())),
             default=min_width,
         )
         target_w = max(min_width, max_text_w + 52)
-        combo.setMinimumWidth(target_w)
+        combo.setMinimumWidth(target_w if max_width is None else min(target_w, max_width))
         if combo.view() is not None:
             combo.view().setMinimumWidth(target_w + 16)
 
@@ -885,6 +932,8 @@ class MainWin(QMainWindow):
         self.cmb_caliber = QComboBox()
         self.cmb_caliber.addItems(list(CALIBER_PRESETS.keys()))
         self._configure_combo_box(self.cmb_caliber, min_width=185)
+        self.cmb_caliber.setMaximumWidth(CALIBER_COMBO_MAX_W)
+        self._sync_combo_popup_width(self.cmb_caliber, 185, max_width=CALIBER_COMBO_MAX_W)
         self.cmb_caliber.setCurrentText("Custom")
         self.cmb_caliber.currentTextChanged.connect(self._on_caliber_changed)
 
@@ -928,6 +977,8 @@ class MainWin(QMainWindow):
         self.cmb_device = QComboBox()
         self._populate_audio_devices()
         self._configure_combo_box(self.cmb_device, min_width=230)
+        self.cmb_device.setMaximumWidth(DEVICE_COMBO_MAX_W)
+        self._sync_combo_popup_width(self.cmb_device, min_width=230, max_width=DEVICE_COMBO_MAX_W)
 
         # Sample Rate (default 48 kHz; 44.1 kHz for devices that PipeWire/ALSA open at 44.1)
         self.lbl_srate = QLabel()
@@ -967,6 +1018,13 @@ class MainWin(QMainWindow):
         self.cmb_lang.setCurrentIndex(idx_lang)
         self.cmb_lang.currentIndexChanged.connect(self._on_language_changed)
 
+        # Each label + control pair is one block of the flow; blocks wrap to a new row when
+        # the window is narrow (high-DPI scaling) instead of overlapping.
+        self.top_fields = QWidget()
+        self.top_fields.setObjectName("TopBarFields")
+        fields_flow = FlowLayout(self.top_fields, h_spacing=10, v_spacing=6)
+        fields_flow.setContentsMargins(0, 0, 0, 0)
+        control_h = self.cmb_bph.sizeHint().height()
         for lbl, widget in (
             (self.lbl_test_name, self.txt_test_name),
             (self.lbl_caliber, self.cmb_caliber),
@@ -980,13 +1038,25 @@ class MainWin(QMainWindow):
             (self.lbl_duration, self.cmb_duration),
             (self.lbl_lang, self.cmb_lang),
         ):
-            pair = QVBoxLayout()
+            block = QWidget()
+            block.setObjectName("TopBarField")
+            pair = QVBoxLayout(block)
+            pair.setContentsMargins(0, 0, 0, 0)
             pair.setSpacing(2)
             pair.addWidget(lbl)
-            pair.addWidget(widget)
-            top_layout.addLayout(pair)
-
-        top_layout.addStretch()
+            if isinstance(widget, QCheckBox):
+                # Same height as the combo boxes, so labels and controls line up
+                holder = QWidget()
+                holder.setObjectName("TopBarField")
+                holder.setFixedHeight(control_h)
+                holder_layout = QHBoxLayout(holder)
+                holder_layout.setContentsMargins(0, 0, 0, 0)
+                holder_layout.addWidget(widget, alignment=Qt.AlignmentFlag.AlignCenter)
+                pair.addWidget(holder)
+            else:
+                pair.addWidget(widget)
+            fields_flow.addWidget(block)
+        top_layout.addWidget(self.top_fields, stretch=1)
 
         # MOCK toggle: simulated engine to test the whole GUI (kept in sync with cmb_device)
         self.btn_mock = QPushButton("MOCK")
@@ -1008,13 +1078,6 @@ class MainWin(QMainWindow):
         self.btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_report.clicked.connect(lambda: self.open_report_dialog())
         top_layout.addWidget(self.btn_report, alignment=Qt.AlignmentFlag.AlignVCenter)
-
-        # "Buy me a coffee" button in the top-right corner (opens BUY_ME_A_COFFEE_URL)
-        self.btn_buy_coffee = QPushButton("☕ Buy me a coffee")
-        self.btn_buy_coffee.setObjectName("CoffeeButton")
-        self.btn_buy_coffee.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_buy_coffee.clicked.connect(self._on_buy_coffee_clicked)
-        top_layout.addWidget(self.btn_buy_coffee, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         root_layout.addWidget(self.top_bar)
 
@@ -1467,7 +1530,15 @@ class MainWin(QMainWindow):
         self.graphs_splitter.setSizes([380, 380])
 
         # Add Left Panel and Right Transposed Graphs Splitter to the main splitter
-        self.splitter.addWidget(self.left_panel)
+        self.left_scroll = QScrollArea()
+        self.left_scroll.setObjectName("ControlPanelScroll")
+        self.left_scroll.setWidget(self.left_panel)
+        self.left_scroll.setWidgetResizable(True)
+        self.left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.left_scroll.setMinimumWidth(self.left_panel.minimumWidth())
+        self.left_scroll.setMaximumWidth(self.left_panel.maximumWidth() + 14)
+        self.splitter.addWidget(self.left_scroll)
         self.splitter.addWidget(self.graphs_splitter)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
@@ -1559,7 +1630,7 @@ class MainWin(QMainWindow):
         finally:
             self.cmb_device.blockSignals(was_blocked)
 
-        self._sync_combo_popup_width(self.cmb_device, min_width=230)
+        self._sync_combo_popup_width(self.cmb_device, min_width=230, max_width=DEVICE_COMBO_MAX_W)
         logger.info(
             "Populated audio input devices: %d total (1 synthetic + %d hardware)",
             len(devices),
@@ -1756,13 +1827,16 @@ class MainWin(QMainWindow):
             self.cmb_bph.blockSignals(was_blocked)
 
     def _apply_quartz_lock(self) -> None:
-        """Quartz mode: caliber, BPH (steps) and lift angle are fixed, so they are disabled."""
+        """Quartz mode: caliber and lift angle don't apply, so they are disabled.
+
+        The BPH combo stays enabled: in quartz mode it picks the motor steps per second.
+        """
         mechanical = not self.chk_quartz.isChecked()
-        for widget in (self.cmb_caliber, self.cmb_bph, self.spn_lift):
+        for widget in (self.cmb_caliber, self.spn_lift):
             widget.setEnabled(mechanical)
 
     def _on_quartz_toggled(self, checked: bool) -> None:
-        """Quartz: 1 step/s, no lift angle, BPH nor caliber choice; figures rate only."""
+        """Quartz: steps/s instead of BPH, no lift angle nor caliber choice; figures rate only."""
         if checked:
             self._last_mechanical_bph = int(self.cmb_bph.currentData() or 21600)
             self.cmb_caliber.setCurrentText("Custom")
@@ -2406,22 +2480,6 @@ class MainWin(QMainWindow):
             self.statusBar().showMessage(f"{self.translator.tr(label_key)}: {path}", 8000)
         return ok
 
-    def _on_buy_coffee_clicked(self) -> bool:
-        """Open the 'Buy me a coffee' page in the default browser.
-
-        Returns:
-            True if the system accepted the URL; otherwise the URL is shown in the status bar
-            so the user can copy it.
-        """
-        ok = QDesktopServices.openUrl(QUrl(BUY_ME_A_COFFEE_URL))
-        if ok:
-            logger.info("Opened '%s' in the default browser", BUY_ME_A_COFFEE_URL)
-        else:
-            logger.warning("Could not open '%s' in a browser", BUY_ME_A_COFFEE_URL)
-            msg = self.translator.tr("coffee_open_failed").format(url=BUY_ME_A_COFFEE_URL)
-            self.statusBar().showMessage(msg, 10000)
-        return bool(ok)
-
     def _render_traces_image(self) -> QImage:
         """Render the three acoustic/telemetry trace graphs and metadata banner into a QImage."""
         self.graphs_splitter.repaint()
@@ -2749,7 +2807,9 @@ class MainWin(QMainWindow):
 
         if self.cmb_device.count() > 0:
             self.cmb_device.setItemText(0, tr("synthetic_device"))
-            self._sync_combo_popup_width(self.cmb_device, min_width=230)
+            self._sync_combo_popup_width(
+                self.cmb_device, min_width=230, max_width=DEVICE_COMBO_MAX_W
+            )
 
         self.card_rate.set_title(tr("rate"))
         self.card_beat_error.set_title(tr("beat_error"))
@@ -2780,7 +2840,6 @@ class MainWin(QMainWindow):
         self._update_save_position_enabled()
         self.btn_save_csv.setText(tr("btn_save_csv"))
         self.btn_export_test_results.setText(tr("btn_export_test_results"))
-        self.btn_buy_coffee.setText(tr("btn_buy_coffee"))
         self.btn_about.setText(tr("btn_about"))
         self.btn_report.setText(tr("btn_report"))
         self.btn_report.setToolTip(tr("btn_report_tooltip"))
@@ -2793,7 +2852,6 @@ class MainWin(QMainWindow):
         self.action_about.setText(tr("btn_about"))
         self.btn_calibrate.setText(tr("btn_calibrate"))
         self.btn_calibrate.setToolTip(tr("btn_calibrate_tooltip"))
-        self.btn_buy_coffee.setToolTip(tr("coffee_tooltip").format(url=BUY_ME_A_COFFEE_URL))
         arrow = "▼" if self.btn_global_stats.isChecked() else "▶"
         self.btn_global_stats.setText(f"{arrow} {tr('btn_global_stats')}")
         self.tbl_global_stats.setHorizontalHeaderLabels(
@@ -3037,7 +3095,7 @@ class MainWin(QMainWindow):
         ):
             widget.setEnabled(enabled)
         if enabled:
-            self._apply_quartz_lock()  # keep caliber / BPH / lift angle off in quartz mode
+            self._apply_quartz_lock()  # keep caliber / lift angle off in quartz mode
 
     def _set_real_bph(self, real_bph: float, declared_bph: float) -> None:
         """Observed BPH box: value and difference from the declared BPH, in percent."""
