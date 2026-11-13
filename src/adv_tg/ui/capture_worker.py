@@ -558,11 +558,13 @@ class _CaptureReader(QObject):
             start = end - size * WAVEFORM_BINS
             if start >= stream.oldest_available and end > start:
                 try:
-                    x = stream.read(start, end, np.float64)
+                    # float32 as stored: the min/max of a bin are the same values, and the
+                    # conversion of the whole window to float64 was half the cost
+                    x = stream.read(start, end, np.float32)
                 except SamplesOverwritten:
                     x = None
         if x is None:  # young stream (window not full yet), tiny window or reader lapped
-            _, x = stream.read_latest(n, np.float64)
+            _, x = stream.read_latest(n, np.float32)
             if x.size > 2 * WAVEFORM_BINS:
                 # minmax_decimate drops the tail remainder; drop the oldest samples instead.
                 x = x[x.size % WAVEFORM_BINS :]

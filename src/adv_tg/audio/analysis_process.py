@@ -118,6 +118,10 @@ def analysis_child_main(conn: Any) -> None:  # pragma: no cover - runs in the ch
 
 
 # ---------------------------------------------------------------------- parent side
+#: Clock-log records looked at first by ``_Forwarder.chunk`` (0.7 s of 1024-sample blocks).
+_RECENT_BLOCKS = 32
+
+
 class _Forwarder:
     """Tracks what part of the parent's stream was already handed to the analysis."""
 
@@ -125,7 +129,12 @@ class _Forwarder:
         self.sent = 0
 
     def chunk(self, stream: SampleStream) -> tuple[int, np.ndarray, tuple] | None:
-        log = stream.clock_log()
+        # the newest records are enough unless all of them are new (first call, or the GUI
+        # thread fell far behind): copying the whole log 30 times a second was 1 % of a core
+        log = stream.clock_log(_RECENT_BLOCKS)
+        ends = log.end_indices
+        if ends.size >= _RECENT_BLOCKS and ends[0] > self.sent:
+            log = stream.clock_log()
         new = log.end_indices > self.sent
         if not np.any(new):
             return None

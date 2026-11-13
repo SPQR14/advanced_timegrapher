@@ -19,6 +19,17 @@ Pipeline
    filter memory is ~5.6 ms (269 samples at 48 kHz), so the margin is ~18 ms (883 samples).
    The margin only controls accuracy versus filtering the whole file at once; invariance to
    chunking is exact by construction because every window is fixed.
+2b. **Interference filter** (``interference_filter``, ``adv_tg.dsp.interference``). Before
+   the band-pass, the audio of each cell goes through an adaptive notch: the spectrum of the
+   silences between beats (25th percentile over the frames of the last 2 s, on the fixed
+   grid) shows what the room adds, and the frequencies whose noise stands more than
+   ``interference_excess_db`` above the typical level of the band are brought down to it. A
+   flat noise floor leaves the audio untouched (the filter is skipped). It removes what a
+   fixed band-pass cannot, because it sits in the band of the beat: the whine of a switching
+   supply, mains harmonics in the kHz range. Linear phase with the delay compensated, so the
+   instants do not move; only the envelope path uses it (the raw samples kept for the
+   saturation flag and the quartz onset are not filtered). The margin of step 2 grows by half
+   the filter length so the output still does not depend on the chunking.
 3. **Envelope** = magnitude of the analytic signal, computed with a finite (Blackman-windowed)
    Hilbert FIR (``2 * ceil(1.5 fs / f_low) + 1`` taps, |H| = 1.000 from 1 to 15 kHz) instead
    of an FFT, so it is strictly local (no circular edge effects), then a
@@ -145,6 +156,7 @@ from adv_tg.core.beat_types import (
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
 from adv_tg.dsp.engine import compute_cell_envelope, detect_cell_candidates, sosfilt
 from adv_tg.dsp.filters import butter_bandpass_sos, sosfilt_zi, sosfiltfilt_padlen
+from adv_tg.dsp.interference import InterferenceFilter
 from adv_tg.dsp.normalizer import AudioNormalizer, NormalizerConfig
 from adv_tg.dsp.onset import lowpass_fir, onset_after_quiet, robust_level
 from adv_tg.utils.debugger import Debugger
@@ -171,6 +183,8 @@ _P2_FRACTION = 0.45
 #: Quartz onset timing: first beats of a parity whose median SNR decides (measured around
 #: the template onset, provisional while the template warms up).
 _Q_DECIDE_BEATS = 4
+#: A line this far above the noise floor of the band is reported once (dB).
+_INTERFERENCE_WARN_DB = 25.0
 _TINY = 1e-12
 
 
@@ -291,6 +305,29 @@ class BeatDetectorConfig:
         quartz_onset_sigma: Onset threshold in sigmas of the local noise (default 6).
         quartz_onset_lowpass_hz: Low-pass before the onset search (default 9 kHz): at low
             levels the noise of a card is mostly above 15 kHz.
+        interference_filter: Adaptive notch of stationary interference before the band-pass
+            (pipeline step 2b; default True). Real takes with interference added (6 mechanical
+            + 2 quartz, 90 s; level of the interference against the peak of the beats; error
+            of the rate against the clean take, rms, and takes left without a figure).
+            A 8.3 kHz tone with its harmonic (the whine of a switching supply) at -20 dB:
+            0.30 -> 0.09 s/d, and the P1 fronts stay usable (beat-to-beat scatter 158 ->
+            87 µs; without the filter 4 of the 6 watches fell back to the drop); at -10 dB:
+            1.4 s/d, 2 lost -> 0.3 s/d, none; at 0 dB: all 8 lost -> 0.2 s/d, 1 lost; at
+            +10 dB: all lost -> 0.5 s/d, 3 lost. Mains harmonics up to 2 kHz at 0 dB: 1.6 ->
+            0.6 s/d; at +10 dB: figures off by thousands of s/d on four takes -> 1.0 s/d,
+            2 lost. Clean takes: every gain is 1 and the beats are identical, except the two
+            H-50 takes, which have real lines (16 dB above the floor at 1.95 kHz in the
+            first: rate +0.04 s/d, drop scatter 182 -> 137 µs). Broadband noise (pink,
+            speech) is not its job: those takes measure the same with and without it.
+        interference_ms: Length of its frames and of the filter (default 40 ms, rounded to a
+            power of two: 2048 samples at 44.1/48 kHz, 23 Hz per bin, which separates the
+            harmonics of the mains).
+        interference_excess_db: Noise above the band's typical level that is tolerated
+            (default 12 dB): the coloured floor of a quiet room is left alone. At 6 dB the
+            filter also reshaped clean takes a little (Seagull beat error 0.52 -> 0.39 ms).
+        interference_max_db: Largest attenuation of a frequency (default 40 dB).
+        interference_history_s: Seconds of audio the noise spectrum comes from (default 2).
+        interference_percentile: Percentile over the frames taken as the noise (default 25).
         p1_onset: Mechanical mode: time the unlocking front of each beat (step 8c,
             ``Beat.t_p1``; default True).
         p1_onset_sigma: First rise above this many sigmas of the noise before the window (6).
@@ -373,6 +410,12 @@ class BeatDetectorConfig:
     quartz_onset_beat_snr_db: float = 20.0
     quartz_onset_sigma: float = 6.0
     quartz_onset_lowpass_hz: float = 9000.0
+    interference_filter: bool = True
+    interference_ms: float = 40.0
+    interference_excess_db: float = 12.0
+    interference_max_db: float = 40.0
+    interference_history_s: float = 2.0
+    interference_percentile: float = 25.0
     p1_onset: bool = True
     p1_onset_sigma: float = 6.0
     p1_onset_fraction: float = 0.4
@@ -452,6 +495,12 @@ class BeatDetectorConfig:
             raise ValueError("quartz_onset_sigma y quartz_onset_lowpass_hz deben ser positivos")
         if not 1 <= self.template_min_beats <= self.template_beats:
             raise ValueError("se requiere 1 <= template_min_beats <= template_beats")
+        if not (self.interference_ms > 0 and self.interference_history_s > 0):
+            raise ValueError("interference_ms e interference_history_s deben ser positivos")
+        if not (self.interference_excess_db >= 0 and self.interference_max_db > 0):
+            raise ValueError("interference_excess_db >= 0 e interference_max_db > 0")
+        if not 0.0 <= self.interference_percentile <= 100.0:
+            raise ValueError("interference_percentile fuera de [0, 100]")
         if not 0.0 < self.p1_onset_fraction < 1.0:
             raise ValueError(f"p1_onset_fraction fuera de (0, 1): {self.p1_onset_fraction}")
         for name in (
@@ -504,6 +553,9 @@ class DetectorStats:
         period_samples: Observed beat period (phase model), NaN before lock.
         nominal_period_samples: ``3600 / BPH * fs``.
         warnings: Human-readable warnings (Spanish), e.g. a probable wrong BPH.
+        interference_db: Largest attenuation the interference filter is applying now (0 =
+            nothing stands out of the noise floor, or the filter is off).
+        interference_hz: Frequency of the strongest line it sees (NaN when none).
     """
 
     samples_processed: int
@@ -521,6 +573,8 @@ class DetectorStats:
     period_samples: float
     nominal_period_samples: float
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    interference_db: float = 0.0
+    interference_hz: float = math.nan
 
     @property
     def period_deviation(self) -> float:
@@ -682,6 +736,21 @@ class BeatDetector:
         big = np.flatnonzero(np.abs(imp) > 1e-6 * np.max(np.abs(imp)))
         self.filter_memory = int(big[-1]) + 1 if big.size else 1
         self.margin = 3 * self.filter_memory + self._hk.size // 2 + sm // 2 + 1
+        # interference filter (step 2b): its half length is added to the margin, so the part
+        # of a cell window the band-pass needs is filtered with real samples on both sides
+        self._interf: InterferenceFilter | None = None
+        if c.interference_filter:
+            nfft = 1 << max(6, int(round(math.log2(c.interference_ms * ms))))
+            self._interf = InterferenceFilter(
+                fs,
+                c.band_hz,
+                nfft=nfft,
+                history_s=c.interference_history_s,
+                percentile=c.interference_percentile,
+                excess_db=c.interference_excess_db,
+                max_attenuation_db=c.interference_max_db,
+            )
+            self.margin += nfft // 2
         self._padlen = sosfiltfilt_padlen(self.sos)
         self.OV = int(round(0.04 * fs))
         self.period_nom = beat_period_s(c.bph) * fs
@@ -908,6 +977,8 @@ class BeatDetector:
             period_samples=self._period if self._ever_locked else math.nan,
             nominal_period_samples=self.period_nom,
             warnings=tuple(self._warnings),
+            interference_db=0.0 if self._interf is None else self._interf.max_attenuation_db,
+            interference_hz=math.nan if self._interf is None else self._interf.peak_hz,
         )
 
     def templates(self) -> tuple[ParityTemplate | None, ParityTemplate | None]:
@@ -976,6 +1047,8 @@ class BeatDetector:
         self._run_start = int(start)
         self._raw.reset(start)
         self._env.reset(start)
+        if self._interf is not None:
+            self._interf.reset(start)
         self._next_cell = start // self.S
         self._first_cell = self._next_cell
         self._cand_cell = self._next_cell
@@ -1073,6 +1146,21 @@ class BeatDetector:
         c0 = max(m * S, self._run_start)
         c1 = min((m + 1) * S, self._raw.end)
         x = self._raw.get(a, b)
+        f = self._interf
+        if f is not None:
+            # noise frames that ended before this cell (fixed grid), then its gains
+            while True:
+                fa, fb = f.next_frame()
+                if fb > c0:
+                    break
+                if fa < self._raw.start:
+                    f.skip_frame()
+                else:
+                    f.add_frame(self._raw.get(fa, fb))
+            g = f.gains(c0)
+            if g is not None:
+                x = f.apply(x, g)
+                self._warn_interference(f)
         e = compute_cell_envelope(
             x,
             self.sos,
@@ -1256,6 +1344,20 @@ class BeatDetector:
             period=round(self._period, 2),
             members=int(np.count_nonzero(member)),
         )
+
+    def _warn_interference(self, f: InterferenceFilter) -> None:
+        """Say once that a strong line is being filtered (and where it is)."""
+        if f.peak_excess_db < _INTERFERENCE_WARN_DB or any(
+            w.startswith("interferencia") for w in self._warnings
+        ):
+            return
+        msg = (
+            f"interferencia a {f.peak_hz / 1000.0:.1f} kHz, {f.peak_excess_db:.0f} dB sobre el "
+            "ruido de fondo (filtrada): aleja el micrófono de cargadores, pantallas o "
+            "reguladores de luz"
+        )
+        self._warnings.append(msg)
+        _dbg.logger.warning("BeatDetector: %s", msg)
 
     def _warn_no_lock(self, end: float) -> None:
         if self._ever_locked or end - self._first_index < max(5.0 * self.fs, 2.0 * self.W_acq):

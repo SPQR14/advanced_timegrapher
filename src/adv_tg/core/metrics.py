@@ -111,6 +111,7 @@ hysteresis of the timing point between consecutive results).
 from __future__ import annotations
 
 import math
+import threading
 from collections import deque
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field, replace
@@ -149,6 +150,10 @@ __all__ = [
 
 DEFAULT_LIFT_ANGLE_DEG = 52.0
 _EXCLUDE = BeatFlags.SATURATED
+#: ``int.__and__(b.flags, _EXCLUDE_BITS)`` is the same test as ``b.flags & _EXCLUDE`` without
+#: building an ``IntFlag`` per beat (that was 8 % of a live update).
+_EXCLUDE_BITS = int(_EXCLUDE)
+_bits = int.__and__
 _SIGMA_FLOOR = 1e-3  # samples: avoids infinite weights on noiseless synthetic data
 
 
@@ -333,7 +338,7 @@ def select_beats(beats: Iterable[Beat]) -> tuple[NDArray[np.float64], NDArray[np
     ts: list[float] = []
     excluded = 0
     for b in beats:
-        if math.isnan(b.t_fine) or b.flags & _EXCLUDE:
+        if math.isnan(b.t_fine) or _bits(b.flags, _EXCLUDE_BITS):
             excluded += 1
             continue
         ks.append(float(b.k))
@@ -348,13 +353,33 @@ def _median(a: NDArray[np.float64]) -> float:
     n = a.size
     if n == 0:
         return math.nan
-    s = np.sort(a)
+    s = a.copy()
+    s.sort()
     h = n >> 1
     return float(s[h]) if n & 1 else float(0.5 * (s[h - 1] + s[h]))
 
 
 def _mad_sigma(r: NDArray[np.float64]) -> float:
     return 1.4826 * _median(np.abs(r - _median(r)))
+
+
+def _std(a: NDArray[np.float64]) -> float:
+    """``float(np.std(a))`` of a 1-D array, same operations (pairwise sums) and so the same
+    value bit for bit, without the ~8 µs of wrappers."""
+    n = a.size
+    if n == 0:
+        return math.nan
+    d = a - np.add.reduce(a) / n
+    return math.sqrt(np.add.reduce(d * d) / n)
+
+
+class _FitMemo(threading.local):
+    """Fits already done inside one ``compute_metrics`` call (None outside it)."""
+
+    fits: dict[tuple[object, ...], ParityFit | None] | None = None
+
+
+_memo = _FitMemo()
 
 
 #: A parity leaves ``t_fine`` for ``t_p1`` (and the beat error leaves the template P1 for another
@@ -403,7 +428,7 @@ def _line_scatter(
     n = int(np.count_nonzero(keep))
     if n < 3:
         return math.inf, 0.0
-    return max(float(np.std(r[keep])), _SIGMA_FLOOR), n / k.size
+    return max(_std(r[keep]), _SIGMA_FLOOR), n / k.size
 
 
 def select_timing(
@@ -423,7 +448,7 @@ def select_timing(
     k = np.fromiter((b.k for b in bl), dtype=np.int64, count=n)
     tf = np.fromiter((b.t_fine for b in bl), dtype=np.float64, count=n)
     tp = np.fromiter((b.t_p1 for b in bl), dtype=np.float64, count=n)
-    good = np.fromiter((not b.flags & _EXCLUDE for b in bl), dtype=bool, count=n)
+    good = np.fromiter((not _bits(b.flags, _EXCLUDE_BITS) for b in bl), dtype=bool, count=n)
     odd = (k & 1) == 1
     use = good & np.isfinite(tf)
     t = tf.copy()
@@ -468,15 +493,51 @@ def fit_parity_weighted(
     used to show why the weighting is needed). ``quadratic=True`` adds ``q (k - k_ref)^2``
     (``period`` is then the period at ``k_ref``). Returns None when a parity has fewer than
     ``min_per_parity`` beats (before or after trimming).
+
+    Inside ``compute_metrics`` a fit of the same data with the same options is done once: the
+    rate, its block jackknife and the beat-error candidates repeat up to a fifth of them.
     """
+    fits = _memo.fits
+    if fits is None:
+        return _fit_parity_weighted(
+            k, t, outlier_sigma, max_iterations, min_per_parity, weighted, quadratic
+        )
+    key = (
+        k.tobytes(),
+        t.tobytes(),
+        outlier_sigma,
+        max_iterations,
+        min_per_parity,
+        weighted,
+        quadratic,
+    )
+    try:
+        return fits[key]
+    except KeyError:
+        fit = fits[key] = _fit_parity_weighted(
+            k, t, outlier_sigma, max_iterations, min_per_parity, weighted, quadratic
+        )
+        return fit
+
+
+def _fit_parity_weighted(
+    k: NDArray[np.float64],
+    t: NDArray[np.float64],
+    outlier_sigma: float,
+    max_iterations: int,
+    min_per_parity: int,
+    weighted: bool,
+    quadratic: bool,
+) -> ParityFit | None:
     if k.size == 0:
         return None
     even = (k.astype(np.int64) % 2) == 0
-    if min(np.count_nonzero(even), np.count_nonzero(~even)) < min_per_parity:
+    odd = ~even
+    if min(np.count_nonzero(even), np.count_nonzero(odd)) < min_per_parity:
         return None
-    k_ref = float(np.round(np.median(k)))
+    k_ref = float(np.round(_median(k)))
     kk = k - k_ref
-    t_ref = float(np.median(t))
+    t_ref = _median(t)
     y = t - t_ref  # re-centring keeps the normal equations well conditioned
     cols = [np.ones(k.size), kk, np.where(even, 1.0, -1.0)]
     if quadratic:
@@ -486,17 +547,19 @@ def fit_parity_weighted(
     w = np.ones(k.size)
     sig = {0: 1.0, 1: 1.0}
     coef = np.zeros(X.shape[1])
+    parities = ((0, even), (1, odd))
+    keep_even, keep_odd = even, odd
     for _ in range(max_iterations):
-        if min(np.count_nonzero(keep & even), np.count_nonzero(keep & ~even)) < min_per_parity:
+        if min(np.count_nonzero(keep_even), np.count_nonzero(keep_odd)) < min_per_parity:
             return None
         sw = np.sqrt(w[keep])
         coef, *_ = np.linalg.lstsq(X[keep] * sw[:, None], y[keep] * sw, rcond=None)
         r = y - X @ coef
         new_keep = np.zeros(k.size, dtype=bool)
-        for parity, m in ((0, even), (1, ~even)):
-            rp = r[m & keep]
-            s = max(_mad_sigma(rp), _SIGMA_FLOOR)
+        for parity, m in parities:
+            rp = r[keep_odd if parity else keep_even]
             center = _median(rp)
+            s = max(1.4826 * _median(np.abs(rp - center)), _SIGMA_FLOOR)  # MAD sigma
             new_keep[m] = np.abs(r[m] - center) <= outlier_sigma * s
             sig[parity] = s
         if weighted:
@@ -504,14 +567,16 @@ def fit_parity_weighted(
         if np.array_equal(new_keep, keep):
             break
         keep = new_keep
-    if min(np.count_nonzero(keep & even), np.count_nonzero(keep & ~even)) < min_per_parity:
+        keep_even, keep_odd = keep & even, keep & odd
+    n_even, n_odd = int(np.count_nonzero(keep_even)), int(np.count_nonzero(keep_odd))
+    if min(n_even, n_odd) < min_per_parity:
         return None
     # final fit on the kept set with the final weights
     sw = np.sqrt(w[keep])
     coef, *_ = np.linalg.lstsq(X[keep] * sw[:, None], y[keep] * sw, rcond=None)
     r = y - X @ coef
-    s_even = max(float(np.std(r[keep & even])), _SIGMA_FLOOR)
-    s_odd = max(float(np.std(r[keep & ~even])), _SIGMA_FLOOR)
+    s_even = max(_std(r[keep_even]), _SIGMA_FLOOR)
+    s_odd = max(_std(r[keep_odd]), _SIGMA_FLOOR)
     # covariance with the per-parity variances actually observed on the kept set
     var = np.where(even, s_even**2, s_odd**2)[keep]
     Xk = X[keep]
@@ -529,8 +594,8 @@ def fit_parity_weighted(
         k_ref=k_ref,
         sigma_even=s_even,
         sigma_odd=s_odd,
-        n_even=int(np.count_nonzero(keep & even)),
-        n_odd=int(np.count_nonzero(keep & ~even)),
+        n_even=n_even,
+        n_odd=n_odd,
         n_trimmed=int(np.count_nonzero(~keep)),
         q=float(coef[3]) if quadratic else math.nan,
         q_sigma=math.sqrt(max(float(cov[3, 3]), 0.0)) if quadratic else math.nan,
@@ -772,6 +837,21 @@ def compute_metrics(
     ``previous_points``: ``Metrics.rate_point`` of the previous update of a live reading (see
     ``select_timing``); None in batch mode.
     """
+    if _memo.fits is not None:  # nested call: the outer one owns the memo
+        return _compute_metrics(beats, templates, config, previous_points)
+    _memo.fits = {}
+    try:
+        return _compute_metrics(beats, templates, config, previous_points)
+    finally:
+        _memo.fits = None
+
+
+def _compute_metrics(
+    beats: Sequence[Beat],
+    templates: tuple[ParityTemplate | None, ParityTemplate | None],
+    config: MetricsConfig,
+    previous_points: tuple[str, str] | None,
+) -> Metrics:
     fs = config.sample_rate
     k, t, excluded, points = select_timing(beats, config, previous_points)
     n = len(beats)
@@ -916,12 +996,9 @@ def _beat_error(
         if res is not None:
             candidates.append(("p1", res))
     # each beat's own P1 onset: exact where P1 is a clean front, noisy where it is weak
-    kb = np.asarray(
-        [b.k for b in beats if math.isfinite(b.p1) and not b.flags & _EXCLUDE], dtype=np.float64
-    )
-    tb = np.asarray(
-        [b.p1 for b in beats if math.isfinite(b.p1) and not b.flags & _EXCLUDE], dtype=np.float64
-    )
+    own = [b for b in beats if math.isfinite(b.p1) and not _bits(b.flags, _EXCLUDE_BITS)]
+    kb = np.asarray([b.k for b in own], dtype=np.float64)
+    tb = np.asarray([b.p1 for b in own], dtype=np.float64)
     res = _beat_error_candidate(kb, tb, config) if kb.size else None
     if res is not None:
         candidates.append(("p1_beat", res))

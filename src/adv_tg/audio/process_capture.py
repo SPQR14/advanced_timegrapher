@@ -81,7 +81,8 @@ class ProcessAudioCapture:
         sample_rate: Requested sample rate in Hz; must match ``stream.sample_rate``.
         blocksize: Frames per callback (0 lets PortAudio choose).
         latency: ``"high"`` or ``"low"``.
-        fake_source: ``None`` for real audio, or ``"ramp"`` / ``"tone"`` for a fake source
+        fake_source: ``None`` for real audio, or ``"ramp"`` / ``"tone"`` / ``"tone2"`` (two
+            channels, the tone in the second) for a fake source
             (tests and CI, no ``sounddevice`` needed).
         open_timeout_s: Max wait for the child's ``opened`` event.
         stop_timeout_s: Max wait for the child to stop before ``terminate()``/``kill()``.
@@ -108,8 +109,10 @@ class ProcessAudioCapture:
             raise ValueError(f"blocksize must be >= 0, got {blocksize}")
         if latency not in ("high", "low"):
             raise ValueError(f"latency must be 'high' or 'low', got {latency!r}")
-        if fake_source not in (None, "ramp", "tone"):
-            raise ValueError(f"fake_source must be None, 'ramp' or 'tone', got {fake_source!r}")
+        if fake_source not in (None, "ramp", "tone", "tone2"):
+            raise ValueError(
+                f"fake_source must be None, 'ramp', 'tone' or 'tone2', got {fake_source!r}"
+            )
         if abs(stream.sample_rate - sample_rate) > SAMPLE_RATE_TOLERANCE * sample_rate:
             raise ValueError(
                 f"sample_rate {sample_rate} does not match SampleStream rate {stream.sample_rate}"

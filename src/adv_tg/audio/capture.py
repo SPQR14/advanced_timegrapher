@@ -1,6 +1,7 @@
-"""``AudioCapture``: mono float32 ``sounddevice.InputStream`` that feeds a ``SampleStream``.
+"""``AudioCapture``: float32 ``sounddevice.InputStream`` that feeds a ``SampleStream``.
 
-The PortAudio callback only writes ``indata[:, 0]`` into the ``SampleStream`` together with
+The device is opened with all its inputs and the loudest one is kept
+(``adv_tg.audio.channel_select``). The PortAudio callback only writes that channel into the ``SampleStream`` together with
 its clock stamps (``perf_counter_ns``, the driver's capture time of the block end and
 ``time.time_ns()``, for layer 4) and updates a few integer counters. It never logs, blocks, takes locks or
 does I/O, and any exception inside it is swallowed and counted (an exception escaping the
@@ -27,7 +28,8 @@ from bisect import bisect_right
 from types import ModuleType
 from typing import Any, Literal
 
-from adv_tg.audio.capture_process import adc_end_ns
+from adv_tg.audio.capture_process import _device_channels, adc_end_ns
+from adv_tg.audio.channel_select import ChannelSelector
 from adv_tg.audio.gil_stats import GIL_WAIT_EDGES_MS, hist_percentile_ms
 from adv_tg.audio.gil_stats import GIL_WAIT_EDGES_US as _GIL_WAIT_EDGES_US
 from adv_tg.core.sample_stream import SampleStream
@@ -57,7 +59,7 @@ def load_sounddevice() -> ModuleType:
 
 
 class AudioCapture:
-    """Wrapper around a 1-channel float32 ``sounddevice.InputStream``.
+    """Wrapper around a float32 ``sounddevice.InputStream`` (one channel is delivered).
 
     Args:
         stream: Destination ``SampleStream`` (this object is its only producer).
@@ -102,6 +104,8 @@ class AudioCapture:
         self.latency = latency
         self.actual_sample_rate: float | None = None
         self._sd_stream: Any = None
+        self.channels = 1
+        self._selector: ChannelSelector | None = None
         self.callbacks = 0
         self.status_flags = 0
         self.callback_errors = 0
@@ -166,7 +170,9 @@ class AudioCapture:
             if status:
                 self.status_flags += 1
             adc = adc_end_ns(time_info, frames, self.sample_rate)
-            self._stream.write(indata[:, 0], t0, adc_ns=adc, wall_ns=wall)
+            sel = self._selector
+            ch = 0 if sel is None else sel.pick(indata)
+            self._stream.write(indata[:, ch], t0, adc_ns=adc, wall_ns=wall)
         except Exception:
             self.callback_errors += 1
         dt = time.perf_counter_ns() - t0
@@ -235,17 +241,35 @@ class AudioCapture:
                 )
             except Exception as exc:
                 _dbg.logger.warning("query_devices(%s) falló: %s", self.device, exc)
-            sd.check_input_settings(
-                device=self.device, channels=1, dtype="float32", samplerate=self.sample_rate
-            )
-            sd_stream = sd.InputStream(
-                device=self.device,
-                channels=1,
-                samplerate=self.sample_rate,
-                blocksize=self.blocksize,
-                dtype="float32",
-                latency=self.latency,
-                callback=self._callback,
+            sd_stream = None
+            last: Exception | None = None
+            for channels in dict.fromkeys((_device_channels(sd, self.device), 1)):
+                try:
+                    sd.check_input_settings(
+                        device=self.device,
+                        channels=channels,
+                        dtype="float32",
+                        samplerate=self.sample_rate,
+                    )
+                    sd_stream = sd.InputStream(
+                        device=self.device,
+                        channels=channels,
+                        samplerate=self.sample_rate,
+                        blocksize=self.blocksize,
+                        dtype="float32",
+                        latency=self.latency,
+                        callback=self._callback,
+                    )
+                except Exception as exc:
+                    last = exc
+                    continue
+                self.channels = channels
+                break
+            if sd_stream is None:
+                assert last is not None
+                raise last
+            self._selector = (
+                ChannelSelector(self.channels, self.sample_rate) if self.channels > 1 else None
             )
             self.actual_sample_rate = float(sd_stream.samplerate)
             self._pa_clock = sd_stream

@@ -97,6 +97,7 @@ DISPLAY_UPDATES = 7
 BE_DISPLAY_UPDATES = 20
 #: The oscilloscope window shows P1 for amplitudes down to this value.
 DISPLAY_MIN_AMPLITUDE_DEG = 150.0
+_SATURATED_BITS = int(BeatFlags.SATURATED)  # plain int test: no IntFlag built per beat
 
 
 @dataclass(frozen=True)
@@ -458,7 +459,7 @@ class MeasurementSession:
         if window:
             span_k = window[-1].k - window[0].k + 1
             det_ratio = len(window) / span_k if span_k > 0 else math.nan
-            saturated = sum(1 for b in window if b.flags & BeatFlags.SATURATED)
+            saturated = sum(1 for b in window if int.__and__(b.flags, _SATURATED_BITS))
         usable = det_ratio * (1.0 - metrics.excluded_fraction) if window else math.nan
 
         wave, w0 = np.zeros(0), math.nan

@@ -7,10 +7,11 @@ callback is never delayed by the GUI.
 
 ``capture_child_main`` is the child's entry point (``multiprocessing`` "spawn" context). It:
 
-* opens ``sounddevice.InputStream`` (1 channel, float32) in the child's main thread, or a
-  pure-Python fake source for tests;
+* opens ``sounddevice.InputStream`` (float32; every input of the device, see
+  ``adv_tg.audio.channel_select``) in the child's main thread, or a pure-Python fake source
+  for tests;
 * runs a callback that only stamps ``time.perf_counter_ns()``, ``time.time_ns()`` and the
-  driver's capture time (``adc_end_ns``), appends ``indata[:, 0]`` as bytes to a
+  driver's capture time (``adc_end_ns``), appends the loudest channel as bytes to a
   ``collections.deque`` (thread-safe ``append``) and updates cheap counters (no logging, no
   locks, exceptions only counted);
 * runs a sender thread that drains the deque into ``data_conn.send_bytes`` frames
@@ -42,6 +43,7 @@ from typing import Any
 
 import numpy as np
 
+from adv_tg.audio.channel_select import ChannelSelector, channels_to_open
 from adv_tg.audio.gil_stats import GilWaitRecorder
 from adv_tg.utils.debugger import Debugger
 
@@ -88,11 +90,13 @@ class _OpenFailure(Exception):
 class _FakeStream:
     """Real-time paced pure-Python source with the bits of ``InputStream`` the child uses.
 
-    ``kind`` is ``"ramp"`` (sample k = k mod 2**24, to check continuity) or ``"tone"``.
+    ``kind`` is ``"ramp"`` (sample k = k mod 2**24, to check continuity), ``"tone"`` or
+    ``"tone2"`` (two channels: silence in the first, the tone in the second).
     """
 
     def __init__(self, kind: str, samplerate: float, blocksize: int, callback: Any) -> None:
         self.kind = kind
+        self.channels = 2 if kind == "tone2" else 1
         self.samplerate = float(samplerate)
         self.blocksize = int(blocksize) or FAKE_BLOCKSIZE
         self._callback = callback
@@ -138,7 +142,10 @@ class _FakeStream:
                 host_ns=t0_ns + (k + 1) * n * 10**9 // int(fs),
                 inputBufferAdcTime=pa_t0 + first / fs,
             )
-            self._callback(x.reshape(-1, 1), n, info, 0)
+            block = x.reshape(-1, 1)
+            if self.channels == 2:
+                block = np.concatenate([np.zeros_like(block), block], axis=1)
+            self._callback(block, n, info, 0)
             k += 1
 
     def stop(self) -> None:
@@ -160,6 +167,8 @@ class _ChildCapture:
         self.queue: collections.deque[tuple[int, int, int, bytes]] = collections.deque()
         self.stream: Any = None
         self._pa_clock: Any = None
+        self.channels = 1  # channels the device was opened with
+        self.selector: ChannelSelector | None = None  # None with a single channel
         # Callback counters (written only by the audio thread)
         self.callbacks = 0
         self.status_flags = 0
@@ -189,7 +198,9 @@ class _ChildCapture:
             # The fake source supplies its scheduled time; real hardware does not.
             stamp = getattr(time_info, "host_ns", None) or t0
             adc = adc_end_ns(time_info, frames, self.fs)
-            self.queue.append((stamp, adc, wall, indata[:, 0].tobytes()))
+            sel = self.selector
+            ch = 0 if sel is None else sel.pick(indata)
+            self.queue.append((stamp, adc, wall, indata[:, ch].tobytes()))
             backlog = len(self.queue)
             if backlog > self.backlog_max:
                 self.backlog_max = backlog
@@ -209,6 +220,7 @@ class _ChildCapture:
         fake = p.get("fake_source")
         if fake:
             self.stream = _FakeStream(str(fake), self.fs, int(p["blocksize"]), self.callback)
+            self.channels = self.stream.channels
         else:
             try:
                 import sounddevice as sd
@@ -217,26 +229,43 @@ class _ChildCapture:
                     "import",
                     f"No se pudo cargar sounddevice/PortAudio en el proceso de captura: {exc}",
                 ) from exc
-            try:
-                sd.check_input_settings(
-                    device=p["device"], channels=1, dtype="float32", samplerate=self.fs
-                )
-                self.stream = sd.InputStream(
-                    device=p["device"],
-                    channels=1,
-                    samplerate=self.fs,
-                    blocksize=int(p["blocksize"]),
-                    dtype="float32",
-                    latency=p["latency"],
-                    callback=self.callback,
-                )
-            except Exception as exc:
+            wanted = _device_channels(sd, p["device"])
+            last: Exception | None = None
+            # all the inputs first; one channel (what was always opened) if the device or
+            # its host API refuses that
+            for channels in dict.fromkeys((wanted, 1)):
+                try:
+                    sd.check_input_settings(
+                        device=p["device"], channels=channels, dtype="float32", samplerate=self.fs
+                    )
+                    self.stream = sd.InputStream(
+                        device=p["device"],
+                        channels=channels,
+                        samplerate=self.fs,
+                        blocksize=int(p["blocksize"]),
+                        dtype="float32",
+                        latency=p["latency"],
+                        callback=self.callback,
+                    )
+                except Exception as exc:
+                    last = exc
+                    continue
+                self.channels = channels
+                break
+            else:
                 raise _OpenFailure(
                     "open",
                     f"No se pudo abrir el dispositivo de audio {p['device']} a {self.fs:.0f} Hz: "
-                    f"{exc}",
-                ) from exc
+                    f"{last}",
+                ) from last
+        if self.channels > 1:
+            self.selector = ChannelSelector(self.channels, self.fs)
         self._pa_clock = self.stream
+
+    @property
+    def channel(self) -> int:
+        """Channel being delivered."""
+        return 0 if self.selector is None else self.selector.channel
 
     def start(self) -> None:
         self._sender = threading.Thread(target=self._send_loop, name="CaptureSender", daemon=True)
@@ -294,9 +323,20 @@ class _ChildCapture:
             "backlog_max": self.backlog_max,
             "backlog_now": len(self.queue),
             "seq_sent": self.seq_sent,
+            "channels": self.channels,
+            "channel": self.channel,
         }
         out.update(self.gil.snapshot())
         return out
+
+
+def _device_channels(sd: Any, device: Any) -> int:
+    """Channels to open on ``device`` (1 when the device cannot be queried)."""
+    try:
+        info = sd.query_devices(device, "input")
+        return channels_to_open(int(info["max_input_channels"]))
+    except Exception:
+        return 1
 
 
 def _send_event(evt_conn: Any, kind: str, payload: dict[str, Any]) -> bool:
@@ -342,8 +382,10 @@ def capture_child_main(
                 "child_ns": time.perf_counter_ns(),
                 "qt_loaded": any(m.startswith(("PyQt6", "pyqtgraph")) for m in sys.modules),
                 "fake_source": params.get("fake_source"),
+                "channels": cap.channels,
             },
         )
+        channel = 0
         dbg.state_change("capture_child", "ABRIENDO", "CAPTURANDO")
         next_stats = time.monotonic() + STATS_PERIOD_S
         while True:
@@ -359,6 +401,9 @@ def capture_child_main(
                 break
             if time.monotonic() >= next_stats:
                 next_stats += STATS_PERIOD_S
+                if cap.channel != channel:  # logged here, never in the callback
+                    channel = cap.channel
+                    log.info("Canal de entrada %d de %d (el de más señal)", channel, cap.channels)
                 if not _send_event(evt_conn, "stats", cap.stats()):
                     reason = "parent_gone"
                     break
