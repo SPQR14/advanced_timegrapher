@@ -642,6 +642,21 @@ def _runs(mask: NDArray[np.bool_]) -> tuple[NDArray, NDArray]:
     return np.flatnonzero(d == 1), np.flatnonzero(d == -1)
 
 
+def _median_inplace(v: NDArray[np.float64]) -> float:
+    """``float(np.median(v))`` for a 1-D, non-empty, NaN-free array, bit for bit.
+
+    Reorders ``v`` in place (no copy): pass a scratch array. Same partition and same
+    ``(a + b) / 2`` of the two middle values as numpy's median.
+    """
+    n = v.size
+    h = n // 2
+    if n % 2:
+        v.partition(h)
+        return float(v[h])
+    v.partition((h - 1, h))
+    return (float(v[h - 1]) + float(v[h])) / 2.0
+
+
 # ====================================================================== detector
 class BeatDetector:
     """Incremental beat detector (see module docstring). Not thread-safe.
@@ -1127,12 +1142,14 @@ class BeatDetector:
             keep[max(0, int(za) - lo) : max(0, int(math.ceil(zb)) - lo)] = False
         if np.count_nonzero(keep) < 0.25 * e.size:
             keep = e > 0.0
-        v = e[keep]
+        v = e[keep]  # boolean indexing: already a private copy, safe to reorder in place
         if v.size == 0:
             res = (_TINY, _TINY)
         else:
-            med = float(np.median(v))
-            mad = float(np.median(np.abs(v - med)))
+            med = _median_inplace(v)
+            np.subtract(v, med, out=v)
+            np.abs(v, out=v)
+            mad = _median_inplace(v)
             res = (max(med, _TINY), max(1.4826 * mad, 0.05 * med, _TINY))
         self._floors[cell] = res
         return res
@@ -1671,7 +1688,8 @@ class BeatDetector:
         t.pending += 1
         full = len(t.segs) == c.template_beats
         if t.env is None or not full or t.pending >= self.tpl_refresh:
-            t.env = np.median(np.stack(t.segs), axis=0)
+            # beats as columns: the median runs over contiguous rows (same values, ~30 % faster)
+            t.env = np.median(np.stack(t.segs, axis=1), axis=1)
             if c.quartz:
                 t.onset_p3, t.onset_p1 = self._quartz_onset(t.env), math.nan
                 t.onset_front = math.nan
