@@ -24,8 +24,10 @@ shows up as a spurious beat error and a jittery residual. The detector therefore
 envelope template per parity of ``k`` (median of the last aligned beats) and aligns each
 beat to the template of its parity by cross-correlation. ``t_fine`` is the P3 onset of the
 template carried to that beat; ``ParityTemplate`` gives the P1 and P3 onsets measured on the
-(clean, averaged) template. Layer 3 computes the rate from ``t_fine``, the beat error from
-the template P1 onsets and the amplitude from the template t_lift (P1 onset -> P3 onset).
+(clean, averaged) template. ``Beat.t_p1`` is the unlocking front of each beat, timed on the
+beat itself (first sound after the silence between beats). Layer 3 computes the rate from
+``t_p1`` where that front is clean and from ``t_fine`` elsewhere, the beat error at P1 and the
+amplitude from the template t_lift (P1 onset -> P3 onset).
 """
 
 from __future__ import annotations
@@ -139,6 +141,10 @@ class Beat:
             placed on this beat by cross-correlation of the envelope. Same physical point for
             tic and tac and much less jitter than ``p3``. NaN while the template of that
             parity is not mature yet or when the beat does not match it.
+        t_p1: Fine instant of the unlocking: the first departure of this beat's own envelope
+            from the silence before it (``BeatDetector``, pipeline step 8c). On most calibres
+            it is the sharpest front of the beat (15-60 µs from beat to beat on the real
+            takes, against 100-700 µs for ``t_fine``). NaN when no clean front was found.
     """
 
     k: int
@@ -152,6 +158,7 @@ class Beat:
     confidence: float
     flags: BeatFlags
     t_fine: float = math.nan
+    t_p1: float = math.nan
 
     @property
     def reference(self) -> float:

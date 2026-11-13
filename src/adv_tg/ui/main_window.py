@@ -23,6 +23,7 @@ from PyQt6.QtGui import (
     QPageLayout,
     QPageSize,
     QPainter,
+    QPixmapCache,
     QSurfaceFormat,
 )
 from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
@@ -123,6 +124,37 @@ def configure_pyqtgraph_gpu(enable_opengl: bool = False) -> bool:
 
 
 configure_pyqtgraph_gpu()
+
+#: Bounds of Qt's pixmap cache (KiB), see ``configure_pixmap_cache``.
+PIXMAP_CACHE_MIN_KB: int = 64 * 1024
+PIXMAP_CACHE_MAX_KB: int = 512 * 1024
+
+
+def configure_pixmap_cache() -> int:
+    """Give Qt's pixmap cache room for the plots on high-DPI screens; returns the limit (KiB).
+
+    The axes of the three plots are kept as cached images (``MainWin._cache_axes``) in
+    ``QPixmapCache``, whose default limit is 10 MB for the whole application (style sheet
+    borders and gradients live there too). In device pixels that is not enough on a scaled
+    screen: at 200 % (1600x950 window) the cache overflowed and every telemetry update (4/s)
+    evicted the axes, which were then drawn again from scratch on the next repaint: 25 % of a
+    core and 53 event-loop stalls over 16 ms in 15 s, against 15 % and 2 with room (at 100 %
+    the 10 MB were enough, which is why it only stuttered on some screens). The limit is only
+    a ceiling: 3 frames of the largest screen in device pixels, within
+    [``PIXMAP_CACHE_MIN_KB``, ``PIXMAP_CACHE_MAX_KB``]. Needs a ``QApplication``.
+    """
+    app = QApplication.instance()
+    need_kb = 0
+    if isinstance(app, QApplication):
+        for screen in app.screens():
+            size = screen.size()
+            dpr = float(screen.devicePixelRatio())
+            need_kb = max(need_kb, int(3 * 4 * size.width() * size.height() * dpr * dpr / 1024))
+    limit = int(min(PIXMAP_CACHE_MAX_KB, max(PIXMAP_CACHE_MIN_KB, need_kb)))
+    if QPixmapCache.cacheLimit() < limit:
+        QPixmapCache.setCacheLimit(limit)
+        logger.info("QPixmapCache limit raised to %d MB", limit // 1024)
+    return QPixmapCache.cacheLimit()
 
 
 def _resolve_assets_dir() -> Path:
@@ -326,8 +358,12 @@ class HudCard(QFrame):
 
     def set_sub(self, text: str) -> None:
         """Secondary line under the value; an empty text hides it."""
+        if text == self.sub_label.text():
+            return
         self.sub_label.setText(text)
-        self.sub_label.setVisible(bool(text))
+        visible = bool(text)
+        if visible != (not self.sub_label.isHidden()):
+            self.sub_label.setVisible(visible)
 
 
 class MainWin(QMainWindow):
@@ -361,6 +397,7 @@ class MainWin(QMainWindow):
         super().__init__()
         logger.info("Initializing MainWin UI")
         self._gpu_enabled: bool = configure_pyqtgraph_gpu()
+        configure_pixmap_cache()
         self.translator = translator if translator is not None else Translator("en")
         # Engine per device (create_worker): MockStreamWorker or MeasureStreamWorker
         self.dsp_worker: BaseStreamWorker | None = None
@@ -419,6 +456,8 @@ class MainWin(QMainWindow):
         self._save_audio_on_finish: bool = False
         # The quality bar follows the input level until the engine reports detection quality
         self._telemetry_seen: bool = False
+        self._quality_kind: str | None = None  # colour class of the quality bar (None = default)
+        self._capture_health_bad: bool = False
         self._perf_waveform = SlotProfiler("waveform_ready")
         self._perf_level = SlotProfiler("level_updated")
 
@@ -1351,8 +1390,9 @@ class MainWin(QMainWindow):
             guide.setZValue(-1)
             self.paper_tape_plot.addItem(guide)
 
-        # Paper tape: one dot per beat, tic (even k) and tac (odd k) rows. They are timed at
-        # the drop (t_fine, steady) and drawn at the point of the beat error card (P1): each
+        # Paper tape: one dot per beat, tic (even k) and tac (odd k) rows. Each row is timed
+        # at the point that times its parity in the rate (the unlocking front where it is
+        # clean, else the drop) and drawn at the point of the beat error card (P1): each
         # row is moved by the session's tape_shift_ms, so their distance is the figure shown.
         # Dots, no connecting lines, like the pixel columns of a hardware timegrapher; rows
         # smoothed by a running median (_append_tape).
@@ -2990,7 +3030,7 @@ class MainWin(QMainWindow):
         self._perf_waveform.reset()
         self._perf_level.reset()
         self.prg_snr.setValue(0)
-        self.prg_snr.setStyleSheet("")
+        self._set_quality_bar_kind(None)
         self.lbl_snr_value.setText("-- dB")
         if isinstance(self.dsp_worker, CaptureStreamWorker):
             for card in (self.card_rate, self.card_beat_error, self.card_amplitude):
@@ -3144,8 +3184,13 @@ class MainWin(QMainWindow):
         text = f"SNR {snr:.0f} dB | {100.0 * share:.0f} %"
         return pct, kind, f"{text} ⚠" if saturated else text
 
-    def _set_quality_bar(self, pct: int, kind: str | None, text: str) -> None:
-        self.prg_snr.setValue(pct)
+    def _set_quality_bar_kind(self, kind: str | None) -> None:
+        """Colour class of the quality bar. A style sheet is parsed and the widget polished
+        again on every ``setStyleSheet``, even with the same text, so it is only set when the
+        class changes (it was set 4-10 times per second)."""
+        if kind == self._quality_kind:
+            return
+        self._quality_kind = kind
         if kind is None:
             self.prg_snr.setStyleSheet("")
         else:
@@ -3153,6 +3198,11 @@ class MainWin(QMainWindow):
                 f"QProgressBar::chunk {{ background-color: {self._LEVEL_BAR_COLORS[kind]};"
                 " border-radius: 3px; }"
             )
+
+    def _set_quality_bar(self, pct: int, kind: str | None, text: str) -> None:
+        if pct != self.prg_snr.value():
+            self.prg_snr.setValue(pct)
+        self._set_quality_bar_kind(kind)
         self.lbl_snr_value.setText(text)
 
     def _clear_oscilloscope_markers(self) -> None:
@@ -3256,7 +3306,7 @@ class MainWin(QMainWindow):
         else:
             if not self._telemetry_seen:
                 self._telemetry_seen = True
-                self.prg_snr.setStyleSheet("")
+                self._set_quality_bar_kind(None)
             if raw_snr_db <= 0.0 and confidence > 0.0:
                 raw_snr_db = 38.0 * confidence
             quality_pct = int(round(np.clip((raw_snr_db / 45.0) * 100.0 * confidence, 0.0, 100.0)))
@@ -3544,7 +3594,10 @@ class MainWin(QMainWindow):
                 pct=pct, ovf=self._last_capture_overflows
             )
         )
-        self.lbl_capture_health.setStyleSheet("color: #ff1744;" if pct < 98.0 else "")
+        bad = pct < 98.0
+        if bad != self._capture_health_bad:  # a style sheet is costly to set: only on change
+            self._capture_health_bad = bad
+            self.lbl_capture_health.setStyleSheet("color: #ff1744;" if bad else "")
 
     def _on_worker_error(self, message: str) -> None:
         """Slot logging any error emitted by the engine safely on the UI thread."""

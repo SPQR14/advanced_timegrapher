@@ -1,6 +1,6 @@
 """Audio capture layer for adv_tg (layer 1).
 
-* ``capture``: ``AudioCapture``, a 1-channel float32 ``sounddevice.InputStream`` whose
+* ``capture``: ``AudioCapture``, a float32 ``sounddevice.InputStream`` (loudest input kept) whose
   callback only writes into a ``SampleStream`` and counts events (in-process; used by
   ``capture_check``, the tests and the ``ADV_TG_CAPTURE_INPROC=1`` debugging mode).
 * ``process_capture``: ``ProcessAudioCapture``, same interface, with the stream in a child

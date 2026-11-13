@@ -89,7 +89,7 @@ def minmax_decimate(
     """Peak-preserving decimation for plotting; returns ``(time_ms, values)``."""
     n = len(signal)
     if n <= 2 * bins:
-        return np.arange(n, dtype=np.float64) / fs * 1000.0, signal.copy()
+        return np.arange(n, dtype=np.float64) / fs * 1000.0, signal.astype(np.float64)
     size = n // bins
     trimmed = signal[: size * bins].reshape(bins, size)
     values = np.empty(2 * bins, dtype=np.float64)

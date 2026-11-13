@@ -130,14 +130,20 @@ def detect_array(
 
 
 def beats_equal(a: list[Beat], b: list[Beat], tol: float = 1e-6) -> bool:
-    """True if both lists have the same ``k``, flags and instants, ``t_fine`` included
-    (within ``tol`` samples)."""
+    """True if both lists have the same ``k``, flags and instants, ``t_fine`` and ``t_p1``
+    included (within ``tol`` samples)."""
     if len(a) != len(b):
         return False
     for x, y in zip(a, b, strict=True):
         if x.k != y.k or x.flags != y.flags:
             return False
-        for u, v in ((x.p1, y.p1), (x.p2, y.p2), (x.p3, y.p3), (x.t_fine, y.t_fine)):
+        for u, v in (
+            (x.p1, y.p1),
+            (x.p2, y.p2),
+            (x.p3, y.p3),
+            (x.t_fine, y.t_fine),
+            (x.t_p1, y.t_p1),
+        ):
             if math.isnan(u) != math.isnan(v) or (not math.isnan(u) and abs(u - v) > tol):
                 return False
     return True
@@ -452,6 +458,7 @@ def write_csv(path: Path, beats: list[Beat], fs: float) -> None:
                 "flags",
                 "flag_names",
                 "t_fine",
+                "t_p1",
             ]
         )
         for b in beats:
@@ -471,6 +478,7 @@ def write_csv(path: Path, beats: list[Beat], fs: float) -> None:
                     int(b.flags),
                     names,
                     f"{b.t_fine:.4f}",
+                    f"{b.t_p1:.4f}",
                 ]
             )
     _dbg.file_write(path, rows=len(beats))

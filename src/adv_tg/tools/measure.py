@@ -291,7 +291,11 @@ def print_report(r: MeasureResult) -> None:
             f"(tic {_f(m.amplitude_tic_deg, '.0f')}°, tac {_f(m.amplitude_tac_deg, '.0f')}°; "
             f"± {_f(m.amplitude_la_uncertainty_deg, '.0f')}° por ±1° de LA)"
         )
+    names = {"p1": "desbloqueo (P1)", "t_fine": "caída (P3)"}
+    points = " / ".join(names.get(v, v) for v in m.rate_point)
     print(f"Jitter par/impar   : {_f(m.sigma_even_us, '.0f')} / {_f(m.sigma_odd_us, '.0f')} µs")
+    if not r.quartz:
+        print(f"Punto de la marcha : {points} (tic / tac)")
     print(f"Confianza          : {m.confidence:.2f} (ordenación, no probabilidad)")
     print(f"Tiempo real        : {r.realtime_factor:.0f}x (detector + métricas)")
     for w in m.warnings:
