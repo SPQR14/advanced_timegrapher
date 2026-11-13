@@ -82,6 +82,20 @@ Pipeline
    parity keeps a single timing point. The choice is made once per parity, on its first 4
    beats (while the template warms up and ``t_fine`` is NaN anyway), and never changes: a noisy quartz (TMI
    VH31, Bulova NM10: 15 dB) keeps the template for the whole take.
+8c. **Mechanical: front of each unlocking** (``p1_onset``, ``Beat.t_p1``). P1 is the first
+   sound after the silence between two beats, and on the real takes its front repeats from
+   beat to beat far better than the drop does: 15-60 µs against 100-700 µs for ``t_fine``
+   (Miyota 9015 19/20 µs vs 207/254; Seiko 4R36 13/15 vs 122/507; 4R34 19/16 vs 214/224, and
+   no 1-2 ms steps when the drop template changes shape). The drop is a rattle of lobes whose
+   relative level changes with every tooth; the unlocking is one impact. Each beat is timed
+   on its own envelope: noise level from the ``p1_onset_base_ms`` before the search window,
+   first rise above ``p1_onset_sigma`` sigmas that lasts ``p1_onset_min_ms``, then the
+   crossing of ``p1_onset_fraction`` of the peak that follows it (constant fraction: the
+   instant does not move with the loudness of the beat). The window is placed with the
+   template (``t_fine`` minus the template P1 offset) or, while the template warms up, with
+   the per-beat ``p1``. The same idea as 8b and as the PPS detector. Layer 3 decides, per
+   parity, whether ``t_p1`` or ``t_fine`` feeds the rate (a weak P1, as the tac of the ETA
+   C07, stays on ``t_fine``).
 9. **Losses**: a beat without anchor leaves a gap in ``k`` (``round(dt / P)``); after
    ``max_missed`` consecutive losses the lock is dropped and re-acquired, ``k`` continuing
    from the last beat. Stream overruns (``advance``) and runs of digital silence are data
@@ -277,6 +291,17 @@ class BeatDetectorConfig:
         quartz_onset_sigma: Onset threshold in sigmas of the local noise (default 6).
         quartz_onset_lowpass_hz: Low-pass before the onset search (default 9 kHz): at low
             levels the noise of a card is mostly above 15 kHz.
+        p1_onset: Mechanical mode: time the unlocking front of each beat (step 8c,
+            ``Beat.t_p1``; default True).
+        p1_onset_sigma: First rise above this many sigmas of the noise before the window (6).
+        p1_onset_fraction: The instant is the crossing of this fraction of the peak that
+            follows the first rise (default 0.4; on the real takes 0.2-0.4 agree to 2-5 µs
+            and 0.4 has the smallest scatter).
+        p1_onset_back_ms, p1_onset_fwd_ms: Search window around the expected P1 (default
+            5 ms before, 3 ms after: the template P1 offset can be a few ms off for a refresh).
+        p1_onset_base_ms: Silence before the window used for the noise level (default 5 ms).
+        p1_onset_min_ms: The rise must last this long (default 0.1 ms; blips are shorter).
+        p1_onset_peak_ms: The peak is searched this long after the first rise (0.5 ms).
         normalize: Software level normalization of the input (``adv_tg.dsp.normalizer``),
             default off. For inputs whose gain cannot be lowered: the peaks are brought to
             -6 dBFS before the analysis, so beats that reached full scale at the input are no
@@ -348,6 +373,14 @@ class BeatDetectorConfig:
     quartz_onset_beat_snr_db: float = 20.0
     quartz_onset_sigma: float = 6.0
     quartz_onset_lowpass_hz: float = 9000.0
+    p1_onset: bool = True
+    p1_onset_sigma: float = 6.0
+    p1_onset_fraction: float = 0.4
+    p1_onset_back_ms: float = 5.0
+    p1_onset_fwd_ms: float = 3.0
+    p1_onset_base_ms: float = 5.0
+    p1_onset_min_ms: float = 0.1
+    p1_onset_peak_ms: float = 0.5
     normalize: bool = False
 
     def __post_init__(self) -> None:
@@ -419,6 +452,18 @@ class BeatDetectorConfig:
             raise ValueError("quartz_onset_sigma y quartz_onset_lowpass_hz deben ser positivos")
         if not 1 <= self.template_min_beats <= self.template_beats:
             raise ValueError("se requiere 1 <= template_min_beats <= template_beats")
+        if not 0.0 < self.p1_onset_fraction < 1.0:
+            raise ValueError(f"p1_onset_fraction fuera de (0, 1): {self.p1_onset_fraction}")
+        for name in (
+            "p1_onset_sigma",
+            "p1_onset_back_ms",
+            "p1_onset_fwd_ms",
+            "p1_onset_base_ms",
+            "p1_onset_min_ms",
+            "p1_onset_peak_ms",
+        ):
+            if not getattr(self, name) > 0:
+                raise ValueError(f"{name} debe ser positivo (recibido {getattr(self, name)})")
         for name in ("template_search_ms", "template_post_ms", "template_p1_min_ms"):
             if not getattr(self, name) > 0:
                 raise ValueError(f"{name} debe ser positivo (recibido {getattr(self, name)})")
@@ -662,6 +707,13 @@ class BeatDetector:
         self._q_win = int(round(3.0 * ms))
         self._q_cen = int(round(1.0 * ms))
         self._q_quiet = max(2, int(round(0.5 * ms)))
+        # unlocking front of each beat (step 8c)
+        self._p1_on = c.p1_onset and not c.quartz
+        self._p1_back = int(round(c.p1_onset_back_ms * ms))
+        self._p1_fwd = int(round(c.p1_onset_fwd_ms * ms))
+        self._p1_base = max(4, int(round(c.p1_onset_base_ms * ms)))
+        self._p1_hold = max(1, int(round(c.p1_onset_min_ms * ms)))
+        self._p1_peak = max(1, int(round(c.p1_onset_peak_ms * ms)))
         n_al = max(1, int(round(c.template_align_smooth_ms * ms)))
         self._align_kernel = np.full(n_al, 1.0 / n_al)
         self._normalizer = (
@@ -1544,6 +1596,7 @@ class BeatDetector:
         t_fine = self._fine(k, a, tp)
         if self._q_on:
             t_fine = self._quartz_fine(k, t_fine)
+        t_p1 = self._p1_fine(k, t_fine, p1) if self._p1_on else math.nan
         conf = self._confidence(snr, p1, p2, p3, residual, flags)
         self._emitted += 1
         self._n_p[0] += not math.isnan(p1)
@@ -1561,6 +1614,7 @@ class BeatDetector:
             confidence=conf,
             flags=flags,
             t_fine=t_fine,
+            t_p1=t_p1,
         )
 
     # ------------------------------------------------------------------ fine timing
@@ -1634,6 +1688,49 @@ class BeatDetector:
         if len(t.segs) < c.template_min_beats or math.isnan(ref):
             return math.nan
         return origin + ref
+
+    def _p1_fine(self, k: int, t_fine: float, p1: float) -> float:
+        """Front of this beat's unlocking (step 8c): absolute index, NaN when not clean.
+
+        Every bound is an absolute index derived from the beat's own instants, and the span
+        ends before ``t_fine``, so the result does not depend on the chunking.
+        """
+        c = self.config
+        t = self._tpl[k & 1]
+        off = t.onset_ref - t.onset_p1
+        if math.isfinite(t_fine) and math.isfinite(off):
+            center = t_fine - off
+        elif math.isfinite(p1):
+            center = p1
+        else:
+            return math.nan
+        ci = int(round(center))
+        a, b = ci - self._p1_back, ci + self._p1_fwd
+        b0, b1 = a - self._p1_base, b + self._p1_peak + 1
+        if b0 < self._env.start or b1 > self._env.end or self._in_dropout(b0, b1):
+            return math.nan
+        e = self._env.get(b0, b1)
+        mu, sg = robust_level(e[: self._p1_base])
+        thr = mu + c.p1_onset_sigma * sg
+        seg = e[self._p1_base : self._p1_base + (b - a)]
+        starts, ends = _runs(seg > thr)
+        # a rise that reaches the end of the window is still going on: it counts
+        ok = ((ends - starts) >= self._p1_hold) | (ends == seg.size)
+        if not ok.any():
+            return math.nan
+        j = int(starts[ok][0])
+        if j == 0:  # the window does not start in silence: no front to time
+            return math.nan
+        j += self._p1_base  # index into e
+        peak = float(np.max(e[j : j + self._p1_peak + 1]))
+        level = max(thr, mu + c.p1_onset_fraction * (peak - mu))
+        up = np.flatnonzero(e[j : j + self._p1_peak + 1] >= level)
+        if up.size == 0:
+            return math.nan
+        j += int(up[0])
+        d = float(e[j] - e[j - 1])
+        frac = (level - float(e[j - 1])) / d if d > 0 else 1.0
+        return b0 + j - 1 + min(max(frac, 0.0), 1.0)
 
     def _quartz_fine(self, k: int, t_fine: float) -> float:
         """Quartz: ``t_fine`` from the onset of the step when the parity is clean (step 8b)."""

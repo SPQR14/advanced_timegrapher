@@ -32,12 +32,16 @@ Paper tape (``SessionSnapshot.tape_*``). For each new beat with a fine instant: 
 seconds and its offset in ms against a grid of nominal periods corrected by the applied clock
 drift, ``-(t_fine - t0 - (k - k0) P_nom (1 + ppm 1e-6)) / fs`` (sign: a gaining watch goes
 up). A healthy watch draws two straight rows (tic and tac): the slope is the rate
-(1 s/d = 1/86.4 ms per second) and their distance the tic/tac offset. The offsets are at the
-drop (``t_fine``, the precise and steady point); ``tape_shift_ms`` moves each row to the point
-of the beat error shown (P1): by ``(t_fine - P1)`` of its parity, from the templates
-(``beat_error_point`` "p1") or the median over the window of each beat's own P1 ("p1_beat"),
-minus the mean of the two (the mid line stays), and through the same median of
-``BE_DISPLAY_UPDATES`` updates as the figure. Without P1 (point "t_fine") it is (0, 0).
+(1 s/d = 1/86.4 ms per second) and their distance the tic/tac offset. Each row is drawn at
+the timing point of its parity in the rate (``Metrics.rate_point``): the unlocking front of
+each beat (``Beat.t_p1``, 15-60 µs from beat to beat) where it is clean, else the drop
+(``t_fine``). When the point of a parity changes, a constant (the median of ``t_fine - t_p1``
+over the window) keeps its row continuous. ``tape_shift_ms`` moves each row to the point of
+the beat error shown (P1): by the median over the window of (drawn instant - P1 instant) of
+its parity, the P1 instant being the template's (``beat_error_point`` "p1"), each beat's own
+P1 ("p1_beat") or its unlocking front ("p1_fine"), minus the mean of the two (the mid line
+stays), and through the same median of ``BE_DISPLAY_UPDATES`` updates as the figure. Without
+P1 (point "t_fine") it is (0, 0).
 
 Displayed figures (``SessionSnapshot.display``). In live mode a parity template can give a
 wrong P1 onset for one or two refreshes (Miyota: tac amplitude 295° -> 127° -> 295° within
@@ -242,6 +246,9 @@ class MeasurementSession:
         self._be_history: deque[float] = deque(maxlen=BE_DISPLAY_UPDATES)
         self._be_p3_history: deque[float] = deque(maxlen=BE_DISPLAY_UPDATES)
         self._tape_origin: tuple[int, float] | None = None  # (k0, t0) of the tape grid
+        # timing point drawn for (tic, tac) and the constant added to its instants (samples)
+        self._tape_point = ["t_fine", "t_fine"]
+        self._tape_off = [0.0, 0.0]
         self._tape_shift_history: deque[tuple[float, float]] = deque(maxlen=BE_DISPLAY_UPDATES)
         lo, hi = self._detector.config.band_hz
         self._sos = butter_bandpass_sos(4, (lo, hi), fs)
@@ -357,42 +364,69 @@ class MeasurementSession:
         )
 
     # ------------------------------------------------------------------ paper tape
+    def _tape_instant(self, b: Beat) -> float:
+        """Instant of ``b`` on the tape: the point of its parity plus its constant (or NaN)."""
+        parity = b.k & 1
+        t = b.t_p1 if self._tape_point[parity] == "p1" else b.t_fine
+        return t + self._tape_off[parity]
+
+    def _tape_follow(self, metrics: Metrics) -> None:
+        """Draw each parity at the point that times it in the rate, without a step in its row."""
+        if not math.isfinite(metrics.rate_s_per_day):
+            return
+        for parity in (0, 1):
+            new = metrics.rate_point[parity]
+            if new == self._tape_point[parity]:
+                continue
+            d = [
+                b.t_fine - b.t_p1
+                for b in self._tracker.beats
+                if b.k & 1 == parity and math.isfinite(b.t_fine) and math.isfinite(b.t_p1)
+            ]
+            if not d:
+                continue
+            delta = float(np.median(d))
+            self._tape_off[parity] += delta if new == "p1" else -delta
+            self._tape_point[parity] = new
+
     def _tape(self, beats: list[Beat]) -> tuple[NDArray, NDArray, NDArray]:
-        good = [b for b in beats if math.isfinite(b.t_fine)]
+        good = [(b, t) for b in beats if math.isfinite(t := self._tape_instant(b))]
         if not good:
             return np.zeros(0), np.zeros(0), np.zeros(0, np.int8)
         if self._tape_origin is None:
-            self._tape_origin = (good[0].k, good[0].t_fine)
+            self._tape_origin = (good[0][0].k, good[0][1])
         k0, t0 = self._tape_origin
         period = self._metrics_config.nominal_period_samples * (1.0 + self._applied[0].ppm * 1e-6)
-        k = np.array([b.k for b in good], dtype=np.float64)
-        t = np.array([b.t_fine for b in good])
+        k = np.array([b.k for b, _ in good], dtype=np.float64)
+        t = np.array([v for _, v in good])
         offset_ms = -(t - t0 - (k - k0) * period) / self._fs * 1e3
-        parity = (np.array([b.k for b in good]) & 1).astype(np.int8)
+        parity = (np.array([b.k for b, _ in good]) & 1).astype(np.int8)
         return t / self._fs, offset_ms, parity
 
     def _tape_shift(self, metrics: Metrics) -> tuple[float, float]:
-        """``(tic, tac)`` shift of the rows from the drop to the P1 point shown (ms)."""
+        """``(tic, tac)`` shift of the rows from the drawn point to the P1 point shown (ms)."""
         fs = self._fs
         off = (math.nan, math.nan)
-        if metrics.beat_error_point == "p1":
-            tic, tac = self._detector.templates()
-            if tic is not None and tac is not None:
-                off = (
-                    (tic.onset_ref - tic.onset_p1) / fs * 1e3,
-                    (tac.onset_ref - tac.onset_p1) / fs * 1e3,
-                )
-        elif metrics.beat_error_point == "p1_beat":
+        point = metrics.beat_error_point
+        if point in ("p1", "p1_beat", "p1_fine"):
+            tpl = self._detector.templates()
+            tpl_off = [t.onset_ref - t.onset_p1 if t is not None else math.nan for t in tpl]
             d: tuple[list[float], list[float]] = ([], [])
             for b in self._tracker.beats:
-                if math.isfinite(b.t_fine) and math.isfinite(b.p1):
-                    d[b.k & 1].append((b.t_fine - b.p1) / fs * 1e3)
+                parity = b.k & 1
+                if point == "p1":
+                    p1 = b.t_fine - tpl_off[parity]
+                else:
+                    p1 = b.p1 if point == "p1_beat" else b.t_p1
+                v = (self._tape_instant(b) - p1) / fs * 1e3
+                if math.isfinite(v):
+                    d[parity].append(v)
             if d[0] and d[1]:
                 off = (float(np.median(d[0])), float(np.median(d[1])))
         if all(math.isfinite(v) for v in off):
             mid = 0.5 * (off[0] + off[1])
             self._tape_shift_history.append((off[0] - mid, off[1] - mid))
-        elif metrics.beat_error_point == "t_fine":
+        elif point == "t_fine":
             self._tape_shift_history.clear()
         if not self._tape_shift_history:
             return (0.0, 0.0)
@@ -414,6 +448,7 @@ class MeasurementSession:
                 self._last_beat = b
         del self._recent_snr[:-SNR_BEATS]
         metrics = self._tracker.result()
+        self._tape_follow(metrics)
         tape = self._tape(beats)
         tape_shift = self._tape_shift(metrics)
 

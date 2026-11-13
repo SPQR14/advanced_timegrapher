@@ -59,7 +59,7 @@ def _check(m, rate: float, be: float, amp: float, tol: tuple[float, float, float
     assert m.rate_s_per_day == pytest.approx(rate, abs=tol[0])
     assert m.beat_error_ms == pytest.approx(be, abs=tol[1])
     assert m.amplitude_deg == pytest.approx(amp, rel=tol[2] / 100.0)
-    assert m.beat_error_point in ("p1", "p1_beat")
+    assert m.beat_error_point in ("p1", "p1_beat", "p1_fine")
     assert not m.rate_trend_flag  # constant rate: no trend warning
 
 

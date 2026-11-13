@@ -2,8 +2,9 @@
 
 Pure library: no Qt, no audio. Inputs are the ``Beat`` list and the two parity templates of
 ``BeatDetector.templates()``; every instant is an absolute sample index in the ADC clock.
-Per-beat ``p1/p2/p3`` are NOT used (they are fragile when tic and tac sound differently; see
-docs/resultados_pruebas_fase2.md, sections 6-7).
+The sub-event onsets ``p1/p2/p3`` of each beat are NOT used for the rate (they are fragile
+when tic and tac sound differently; see docs/resultados_pruebas_fase2.md, sections 6-7); the
+fine instants ``t_fine`` (drop, by template) and ``t_p1`` (unlocking front of the beat) are.
 
 Model and conventions
 ---------------------
@@ -15,6 +16,26 @@ Model and conventions
   docs/fase3_resultados.md, 6.8). ``AFTER_GAP`` beats are kept too: the integer ``k``
   already absorbs the gap. Below ``min_beats_per_parity`` valid beats in either parity no
   figure is given (NaN).
+* **Timing point of the rate, per parity** (``Metrics.rate_point``). Each parity is timed at
+  the drop (``t_fine``) or at the unlocking front (``Beat.t_p1``), whichever is cleaner; the
+  regression has one constant per parity, so the two parities may use different points. The
+  unlocking is one impact after a silence; the drop is a rattle of lobes aligned through a
+  template, whose timing point moves when the template changes shape. Measured on the real
+  takes (scatter from beat to beat, tic/tac, µs): Miyota 9015 19/20 at P1 vs 207/254 at the
+  drop; Seiko 4R36 13/15 vs 122/507; H-50 (2nd take) 41/14 vs 143/495; Seiko 4R34 19/16 vs
+  214/224 plus 1-2 ms steps of the drop template (rate of 20 s windows: 16.9 s/d peak to peak
+  at the drop, 0.7 at P1). The hidden error of the drop reached 2 s/d in 30 s (4R36: -2.98
+  at the drop, -5.03 +- 0.03 at P1). ``t_p1`` is used for a parity when (a) it has at least
+  80 % as many beats as ``t_fine``, (b) at least 80 % of them survive the robust trimming
+  around their own line (a front that flips between two sounds does not), (c) its
+  beat-to-beat scatter (second differences ``t[k] - 2 t[k+2] + t[k+4]``, insensitive to the
+  wander of the watch) is below ``_BE_SWITCH_RATIO`` of that of ``t_fine`` and (d) its
+  scatter around its own line is not larger than that of ``t_fine``. A parity already on P1
+  stays there until (c) fails by a wide margin (``_P1_KEEP_RATIO``), so a live reading does
+  not flip between the two points. A weak unlocking (ETA C07 tac, Seagull tac) stays on
+  ``t_fine``. Limit: with the amplitude changing during the take, P1 and the drop move
+  in opposite directions around the dead point; neither is the centre (4R36: 8° in 30 s,
+  +-0.7 s/d). A stable watch has no such term.
 * **Parity-weighted robust regression** ``t = a + P k + c (-1)^k`` (``k`` even = tic):
   start unweighted; then, per parity, sigma = 1.4826 * MAD of that parity's residuals, beats
   beyond ``outlier_sigma`` sigmas of their parity are trimmed and each parity is weighted by
@@ -49,21 +70,23 @@ Model and conventions
   windows, else the block/covariance ratio of the take; never below 1 (on the quartz
   references the covariance sigma of a window was 1.4-4.8x too small).
 * **Beat error** at P1: ``2 |c|`` of the same regression (half the difference between the
-  tic->tac and tac->tic intervals) on one of two sets of P1 instants:
+  tic->tac and tac->tic intervals) on one of three sets of P1 instants:
 
   - ``"p1"``: projected from the parity template, ``t_p1 = t_fine - (onset_ref - onset_p1)``.
     Best when P1 is weak (H-50, Miyota), but it inherits the alignment on the drop: when the
     drop of one parity wanders against a clean unlock (Seiko 4R34: ~3 ms), it is off by
     1-3 ms;
   - ``"p1_beat"``: each beat's own P1 onset (``Beat.p1``). Exact on a clean unlock front
-    (4R34 and 4R36: 25-40 µs), noisy on a weak one.
+    (4R34 and 4R36: 25-40 µs), noisy on a weak one;
+  - ``"p1_fine"``: the unlocking front of each beat (``Beat.t_p1``), only when both parities
+    are timed at P1 for the rate (see above): the direct measurement of the definition.
 
-  The template P1 is used unless the per-beat P1 has an uncertainty below
+  The template P1 is used unless another set has an uncertainty below
   ``_BE_SWITCH_RATIO`` (1/1.6) of it: the block jackknife of an uncertainty scatters ~30 %
-  itself, so a near tie keeps the validated estimator. Without any P1, ``c`` of the
+  itself, so a near tie keeps the earlier estimator in the list. Without any P1, ``c`` of the
   ``t_fine`` regression is used and a warning says that the measuring point changed.
   P1 is the reference of the Witschi documentation: the unlocking is the only sound caused
-  by the balance itself. ``beat_error_p3_ms`` (``2 |c|`` of the ``t_fine`` regression, i.e. at
+  by the balance itself. ``beat_error_p3_ms`` (``2 |c|`` of a ``t_fine`` regression, i.e. at
   the drop) is reported for comparison: many instruments time the loudest sound, and the two
   differ by the tic/tac lift-time difference, ``BE_P3 = BE_P1 + (t_lift_tic - t_lift_tac)``
   with signs (Seagull ST1901: 0.51 ms at P1, 0.20 ms at P3, lift times 8.69 / 8.37 ms).
@@ -81,7 +104,8 @@ Model and conventions
 
 Batch and incremental: ``compute_metrics`` works on a list of beats; ``MetricsTracker`` keeps
 the beats of the last ``span_s`` seconds (by ``t_fine``) and computes the same function on
-them, so both modes give identical numbers on the same beats.
+them, so both modes give identical numbers on the same beats (the tracker only adds the
+hysteresis of the timing point between consecutive results).
 """
 
 from __future__ import annotations
@@ -118,6 +142,7 @@ __all__ = [
     "rate_from_period",
     "rate_trend",
     "select_beats",
+    "select_timing",
     "timing_confidence",
     "window_rates",
 ]
@@ -155,6 +180,8 @@ class MetricsConfig:
         adc_drift_sigma_ppm: Total uncertainty of ``adc_drift_ppm`` (``AdcDrift.uncertainty_ppm``
             of layer 4). It is added in quadrature to the rate uncertainty; a value > 0 also
             marks the rate as calibrated when the measured drift is exactly 0.
+        p1_timing: Time a parity at the unlocking front (``Beat.t_p1``) when it is cleaner
+            than ``t_fine`` (module docstring; default True). False = always ``t_fine``.
     """
 
     sample_rate: float
@@ -173,6 +200,7 @@ class MetricsConfig:
     amplitude_mismatch_deg: float = 20.0
     adc_drift_ppm: float = 0.0
     adc_drift_sigma_ppm: float = 0.0
+    p1_timing: bool = True
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.sample_rate) and self.sample_rate > 0):
@@ -283,6 +311,8 @@ class Metrics:
     lift_angle_deg: float = DEFAULT_LIFT_ANGLE_DEG
     sigma_even_us: float = math.nan
     sigma_odd_us: float = math.nan
+    # timing point of the rate for (tic, tac): "t_fine" (drop) or "p1" (unlocking front)
+    rate_point: tuple[str, str] = ("t_fine", "t_fine")
     windows: list[WindowRate] = field(default_factory=list)
     rate_trend_s_per_day_per_min: float = math.nan
     rate_trend_sigma_s_per_day_per_min: float = math.nan
@@ -311,8 +341,115 @@ def select_beats(beats: Iterable[Beat]) -> tuple[NDArray[np.float64], NDArray[np
     return np.asarray(ks, dtype=np.float64), np.asarray(ts, dtype=np.float64), excluded
 
 
+def _median(a: NDArray[np.float64]) -> float:
+    """``float(np.median(a))`` for a 1-D array without NaN, 5x faster on the short arrays of
+    the regressions (``np.median`` spends ~10 µs in its wrappers; a fit calls it ~20 times and
+    a live update fits ~40 times). Same value bit for bit."""
+    n = a.size
+    if n == 0:
+        return math.nan
+    s = np.sort(a)
+    h = n >> 1
+    return float(s[h]) if n & 1 else float(0.5 * (s[h - 1] + s[h]))
+
+
 def _mad_sigma(r: NDArray[np.float64]) -> float:
-    return 1.4826 * float(np.median(np.abs(r - np.median(r))))
+    return 1.4826 * _median(np.abs(r - _median(r)))
+
+
+#: A parity leaves ``t_fine`` for ``t_p1`` (and the beat error leaves the template P1 for another
+#: set of instants) only when the scatter of the new one is below this fraction of the old one
+#: (1 / (1 + 2 x 0.3): the 6-block jackknife scatters ~30 %, docs/fase3_resultados.md 8.2).
+_BE_SWITCH_RATIO: float = 1.0 / 1.6
+#: ... and a parity already on ``t_p1`` goes back to ``t_fine`` only above this ratio.
+_P1_KEEP_RATIO: float = 0.9
+#: Share of the ``t_fine`` beats that ``t_p1`` must have, and share of its own beats that must
+#: survive the trimming around its line.
+_P1_MIN_SHARE: float = 0.8
+#: Triples (k, k+2, k+4) needed for a beat-to-beat scatter.
+_PAIR_MIN_TRIPLES: int = 8
+
+
+def _pair_sigma(k: NDArray[np.int64], t: NDArray[np.float64]) -> float:
+    """Beat-to-beat timing scatter of ONE parity (samples), insensitive to the rate and to its
+    slow wander: robust sigma of ``t[k] - 2 t[k+2] + t[k+4]`` over sqrt(6). NaN with fewer
+    than ``_PAIR_MIN_TRIPLES`` complete triples."""
+    if k.size < _PAIR_MIN_TRIPLES + 2:
+        return math.nan
+    ok = (k[1:-1] - k[:-2] == 2) & (k[2:] - k[1:-1] == 2)
+    if np.count_nonzero(ok) < _PAIR_MIN_TRIPLES:
+        return math.nan
+    d = (t[:-2] - 2.0 * t[1:-1] + t[2:])[ok]
+    return max(_mad_sigma(d) / math.sqrt(6.0), _SIGMA_FLOOR)
+
+
+def _line_scatter(
+    k: NDArray[np.int64], t: NDArray[np.float64], outlier_sigma: float
+) -> tuple[float, float]:
+    """``(sigma, kept share)`` of ONE parity around its own robust line (samples)."""
+    x = (k - k[k.size // 2]).astype(np.float64)
+    keep = np.ones(k.size, dtype=bool)
+    r = np.zeros(k.size)
+    for _ in range(10):
+        if np.count_nonzero(keep) < 3:
+            return math.inf, 0.0
+        slope, icpt = np.polyfit(x[keep], t[keep], 1)
+        r = t - (slope * x + icpt)
+        s = max(_mad_sigma(r[keep]), _SIGMA_FLOOR)
+        new = np.abs(r - _median(r[keep])) <= outlier_sigma * s
+        if np.array_equal(new, keep):
+            break
+        keep = new
+    n = int(np.count_nonzero(keep))
+    if n < 3:
+        return math.inf, 0.0
+    return max(float(np.std(r[keep])), _SIGMA_FLOOR), n / k.size
+
+
+def select_timing(
+    beats: Iterable[Beat],
+    config: MetricsConfig,
+    previous: tuple[str, str] | None = None,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], int, tuple[str, str]]:
+    """``(k, t, excluded, points)``: the instants that feed the rate.
+
+    ``points`` is the timing point of each parity, ``"p1"`` (``Beat.t_p1``) or ``"t_fine"``
+    (module docstring, "Timing point of the rate"); ``previous`` are the points of the last
+    update of a live reading (hysteresis). ``SATURATED`` beats and beats without the instant
+    of their parity's point are excluded.
+    """
+    bl = [b for b in beats]
+    n = len(bl)
+    k = np.fromiter((b.k for b in bl), dtype=np.int64, count=n)
+    tf = np.fromiter((b.t_fine for b in bl), dtype=np.float64, count=n)
+    tp = np.fromiter((b.t_p1 for b in bl), dtype=np.float64, count=n)
+    good = np.fromiter((not b.flags & _EXCLUDE for b in bl), dtype=bool, count=n)
+    odd = (k & 1) == 1
+    use = good & np.isfinite(tf)
+    t = tf.copy()
+    points = ["t_fine", "t_fine"]
+    if config.p1_timing and not config.quartz and n:
+        for parity in (0, 1):
+            m = good & (odd == bool(parity))
+            mf = m & np.isfinite(tf)
+            mp = m & np.isfinite(tp)
+            n_f, n_p = int(np.count_nonzero(mf)), int(np.count_nonzero(mp))
+            if n_f < config.min_beats_per_parity or n_p < max(
+                config.min_beats_per_parity, _P1_MIN_SHARE * n_f
+            ):
+                continue
+            pair_f, pair_p = _pair_sigma(k[mf], tf[mf]), _pair_sigma(k[mp], tp[mp])
+            if not (math.isfinite(pair_f) and math.isfinite(pair_p)):
+                continue
+            line_f, _ = _line_scatter(k[mf], tf[mf], config.outlier_sigma)
+            line_p, share = _line_scatter(k[mp], tp[mp], config.outlier_sigma)
+            was_p1 = previous is not None and previous[parity] == "p1"
+            ratio = _P1_KEEP_RATIO if was_p1 else _BE_SWITCH_RATIO
+            if share >= _P1_MIN_SHARE and pair_p < ratio * pair_f and line_p <= line_f:
+                points[parity] = "p1"
+                t[m] = tp[m]
+                use[m] = mp[m]
+    return k[use].astype(np.float64), t[use], n - int(np.count_nonzero(use)), (points[0], points[1])
 
 
 def fit_parity_weighted(
@@ -359,7 +496,7 @@ def fit_parity_weighted(
         for parity, m in ((0, even), (1, ~even)):
             rp = r[m & keep]
             s = max(_mad_sigma(rp), _SIGMA_FLOOR)
-            center = float(np.median(rp))
+            center = _median(rp)
             new_keep[m] = np.abs(r[m] - center) <= outlier_sigma * s
             sig[parity] = s
         if weighted:
@@ -628,10 +765,15 @@ def compute_metrics(
     beats: Sequence[Beat],
     templates: tuple[ParityTemplate | None, ParityTemplate | None],
     config: MetricsConfig,
+    previous_points: tuple[str, str] | None = None,
 ) -> Metrics:
-    """Rate, beat error and amplitude of ``beats`` (batch mode)."""
+    """Rate, beat error and amplitude of ``beats`` (batch mode).
+
+    ``previous_points``: ``Metrics.rate_point`` of the previous update of a live reading (see
+    ``select_timing``); None in batch mode.
+    """
     fs = config.sample_rate
-    k, t, excluded = select_beats(beats)
+    k, t, excluded, points = select_timing(beats, config, previous_points)
     n = len(beats)
     m = Metrics(
         n_beats=n,
@@ -640,6 +782,7 @@ def compute_metrics(
         n_excluded=excluded,
         excluded_fraction=excluded / n if n else 0.0,
         lift_angle_deg=config.effective_lift_angle_deg,
+        rate_point=points,
     )
     if t.size:
         m.span_s = float(t.max() - t.min()) / fs
@@ -697,17 +840,25 @@ def compute_metrics(
             f"minuto (± {m.rate_trend_sigma_s_per_day_per_min:.2f}); el reloj no está estable"
         )
     if not config.quartz:
-        _beat_error(m, beats, k, t, templates, config)
-        m.beat_error_p3_ms = beat_error_from_fit(fit, fs)[0]
+        # the beat error candidates are defined on t_fine (the drop), whatever times the rate
+        kf, tfine, _ = select_beats(beats)
+        fit_drop = fit
+        if points != ("t_fine", "t_fine"):
+            fit_drop = fit_parity_weighted(
+                kf,
+                tfine,
+                outlier_sigma=config.outlier_sigma,
+                max_iterations=config.max_iterations,
+                min_per_parity=config.min_beats_per_parity,
+            )
+        _beat_error(
+            m, beats, kf, tfine, templates, config, k if points == ("p1", "p1") else None, t
+        )
+        if fit_drop is not None:
+            m.beat_error_p3_ms = beat_error_from_fit(fit_drop, fs)[0]
         _amplitude(m, templates, config)
     m.confidence = _confidence(m, config)
     return m
-
-
-#: The beat error leaves the template P1 for the per-beat P1 only when the latter's
-#: uncertainty is below this fraction of the former's (1 / (1 + 2 x 0.3): the 6-block jackknife
-#: scatters ~30 %, docs/fase3_resultados.md 8.2).
-_BE_SWITCH_RATIO: float = 1.0 / 1.6
 
 
 def _beat_error_candidate(
@@ -749,8 +900,14 @@ def _beat_error(
     t: NDArray[np.float64],
     templates: tuple[ParityTemplate | None, ParityTemplate | None],
     config: MetricsConfig,
+    k_fine: NDArray[np.float64] | None = None,
+    t_p1: NDArray[np.float64] | None = None,
 ) -> None:
-    """Beat error at P1, from the better of two sets of P1 instants (see the module doc)."""
+    """Beat error at P1, from the best of up to three sets of P1 instants (module doc).
+
+    ``k``/``t`` are the ``t_fine`` instants; ``k_fine``/``t_p1`` the unlocking fronts when both
+    parities are timed there (else None).
+    """
     candidates: list[tuple[str, tuple[float, float, float, float]]] = []
     offsets = [tp.onset_ref - tp.onset_p1 if tp is not None else math.nan for tp in templates]
     if all(math.isfinite(v) for v in offsets):
@@ -768,8 +925,12 @@ def _beat_error(
     res = _beat_error_candidate(kb, tb, config) if kb.size else None
     if res is not None:
         candidates.append(("p1_beat", res))
+    # the unlocking front of each beat, when it times both parities of the rate
+    res = _beat_error_candidate(k_fine, t_p1, config) if k_fine is not None else None
+    if res is not None:
+        candidates.append(("p1_fine", res))
     if candidates:
-        # the template P1 (validated against tg/WAM) unless the per-beat P1 is clearly more
+        # the template P1 (validated against tg/WAM) unless a per-beat P1 is clearly more
         # precise: the block jackknife of the uncertainty scatters ~30 % itself, so only a
         # ratio beyond 1 + 2 x 0.3 counts as a real difference, not a near tie
         point, res = candidates[0]
@@ -841,6 +1002,7 @@ class MetricsTracker:
         self._beats: deque[Beat] = deque()
         self._templates: tuple[ParityTemplate | None, ParityTemplate | None] = (None, None)
         self._last_t = -math.inf
+        self._points: tuple[str, str] | None = None  # rate_point of the last result
 
     def add(
         self,
@@ -873,4 +1035,6 @@ class MetricsTracker:
         return list(self._beats)
 
     def result(self) -> Metrics:
-        return compute_metrics(list(self._beats), self._templates, self.config)
+        m = compute_metrics(list(self._beats), self._templates, self.config, self._points)
+        self._points = m.rate_point if math.isfinite(m.rate_s_per_day) else None
+        return m
