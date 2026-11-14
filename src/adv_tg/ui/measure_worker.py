@@ -43,6 +43,7 @@ from PyQt6.QtCore import QObject
 from adv_tg.audio.analysis_process import LocalAnalyzer, ProcessAnalyzer
 from adv_tg.audio.file_replay import FileReplay
 from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY, AdcDrift, ClockLevel, drift_from_tags
+from adv_tg.core.metrics import AMPLITUDE_ONE_PARITY_PREFIX
 from adv_tg.core.models import BeatEvent, BeatTelemetry, WatchConfig
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
 from adv_tg.core.session import SessionConfig, SessionSnapshot
@@ -140,13 +141,20 @@ def snapshot_to_telemetry(snap: SessionSnapshot, fs: float) -> BeatTelemetry:
         )
     # The tic/tac amplitude mismatch of a single update is usually a template glitch (see
     # adv_tg.core.session): warn only when it persists in the displayed (median) amplitudes.
-    warnings = [w for w in m.warnings if not w.startswith(_AMP_MISMATCH_PREFIX)]
+    amp_warnings = [
+        w for w in m.warnings if w.startswith((_AMP_MISMATCH_PREFIX, AMPLITUDE_ONE_PARITY_PREFIX))
+    ]
+    warnings = [w for w in m.warnings if w not in amp_warnings]
     warnings += list(snap.detector_warnings)
     tic, tac = shown.amplitude_tic_deg, shown.amplitude_tac_deg
     if math.isfinite(tic) and math.isfinite(tac) and abs(tic - tac) > AMP_MISMATCH_DEG:
-        warnings.append(
-            f"amplitud de tic y tac distinta ({tic:.0f}° / {tac:.0f}°): la amplitud es orientativa"
-        )
+        if m.amplitude_parity != "both" and amp_warnings:
+            warnings.append(amp_warnings[0])  # says which parity is used, and why
+        else:
+            warnings.append(
+                f"amplitud de tic y tac distinta ({tic:.0f}° / {tac:.0f}°): "
+                "la amplitud es orientativa"
+            )
     if snap.saturated_beats:
         warnings.append(
             f"{snap.saturated_beats} batimientos saturados: baja la ganancia del micrófono"

@@ -57,7 +57,10 @@ Model and conventions
   timing noise (lobe changes, template evolution) that a white-noise covariance ignores; with
   two 10 s windows on a 30 s take, a slope of window rates flagged clean watches (Miyota,
   H-50) at -23 and -39 s/d/min. The trend is flagged when ``|trend| > trend_sigma * sigma``
-  and ``|trend| >= trend_min_s_per_day_per_min``: on a precise take a tiny trend is
+  and ``|trend| >= trend_min_s_per_day_per_min`` and the change it means over the span,
+  ``|trend| * span``, reaches ``trend_min_change_s_per_day`` (a healthy watch wanders a few
+  s/d within a minute with its gear train: significant, but not a watch that "is not
+  stable"). On a precise take a tiny trend is
   significant without meaning anything (the GPS PPS reference at 44.1 kHz: the warm-up of
   the card, 0.016 s/d per minute, at 5 sigma)
   (3 sigma by default).
@@ -136,7 +139,10 @@ __all__ = [
     "WindowRate",
     "amplitude_from_templates",
     "beat_error_from_fit",
+    "AMPLITUDE_ONE_PARITY_PREFIX",
+    "drop_rise_samples",
     "effective_window_s",
+    "sharper_drop_parity",
     "compute_metrics",
     "fit_parity_weighted",
     "format_beat_error_ms",
@@ -178,9 +184,20 @@ class MetricsConfig:
         trend_sigma: The trend is flagged beyond this many sigmas of its slope (default 3).
         trend_min_s_per_day_per_min: ... and only from this size on (default 0.1 s/d per
             minute, 0.2 s/d over a 2-minute take).
+        trend_min_change_s_per_day: ... and only when the rate changes by at least this much
+            over the measured span, ``|trend| * span`` (default 7 s/d). The gear train makes
+            the rate of a healthy watch wander by a few s/d within a minute (up to 4.6 s/d
+            over 30 s on the reference takes); a watch that is still settling after being
+            wound or moved, or one with a fault, changes more.
         trend_blocks: Contiguous time blocks of the jackknife (default 6).
         amplitude_range_deg: Valid amplitudes (default 90-400°).
         amplitude_mismatch_deg: Tic/tac amplitude difference that raises a warning (20°).
+        drop_sharpness_ratio: The balance has one amplitude; when tic and tac differ by more
+            than ``amplitude_mismatch_deg``, one of the two lift times is wrong. If the drop
+            of one parity rises to its maximum at least this many times faster than the
+            other's (default 2), the amplitude is taken from that parity alone: a smeared
+            drop has no definite onset (Seiko 4R tic: 3 ms of rise against 0.4 ms of the
+            tac, and a lift time 1.7 ms short). Otherwise the mean is kept, as indicative.
         adc_drift_ppm: ADC clock error in ppm (> 0 = ADC fast); 0 = not calibrated.
         adc_drift_sigma_ppm: Total uncertainty of ``adc_drift_ppm`` (``AdcDrift.uncertainty_ppm``
             of layer 4). It is added in quadrature to the rate uncertainty; a value > 0 also
@@ -200,9 +217,11 @@ class MetricsConfig:
     window_step_s: float | None = None
     trend_sigma: float = 3.0
     trend_min_s_per_day_per_min: float = 0.1
+    trend_min_change_s_per_day: float = 7.0
     trend_blocks: int = 6
     amplitude_range_deg: tuple[float, float] = (90.0, 400.0)
     amplitude_mismatch_deg: float = 20.0
+    drop_sharpness_ratio: float = 2.0
     adc_drift_ppm: float = 0.0
     adc_drift_sigma_ppm: float = 0.0
     p1_timing: bool = True
@@ -228,6 +247,10 @@ class MetricsConfig:
             raise ValueError("trend_sigma debe ser positivo")
         if not self.trend_min_s_per_day_per_min >= 0:
             raise ValueError("trend_min_s_per_day_per_min no puede ser negativo")
+        if not self.trend_min_change_s_per_day >= 0:
+            raise ValueError("trend_min_change_s_per_day no puede ser negativo")
+        if not self.drop_sharpness_ratio > 1:
+            raise ValueError("drop_sharpness_ratio debe ser mayor que 1")
         if self.trend_blocks < 3:
             raise ValueError("trend_blocks debe ser >= 3")
         lo, hi = self.amplitude_range_deg
@@ -311,6 +334,9 @@ class Metrics:
     amplitude_deg: float = math.nan
     amplitude_tic_deg: float = math.nan
     amplitude_tac_deg: float = math.nan
+    # parity the amplitude comes from: "both" (their mean), or "tic" / "tac" when they
+    # disagree and only that one has a sharp drop
+    amplitude_parity: str = "both"
     amplitude_la_uncertainty_deg: float = math.nan
     amplitude_indicative: bool = False
     lift_angle_deg: float = DEFAULT_LIFT_ANGLE_DEG
@@ -735,6 +761,43 @@ def window_rates(
     return out
 
 
+#: Start of the warning when the amplitude comes from one parity (``sharper_drop_parity``).
+AMPLITUDE_ONE_PARITY_PREFIX: str = "amplitud tomada del"
+#: The maximum of the drop is searched this long after its onset.
+_DROP_RISE_WINDOW_S: float = 0.006
+
+
+def drop_rise_samples(template: ParityTemplate | None, sample_rate: float) -> float:
+    """Samples from the P3 onset of a template to the maximum of its drop (NaN if n/a).
+
+    A clean drop is one impact: it reaches its maximum within a few tenths of a millisecond.
+    A smeared one (several impacts, or a slow build-up before the main one) takes
+    milliseconds, and where its "onset" lies is a matter of definition.
+    """
+    if template is None or not math.isfinite(template.onset_p3):
+        return math.nan
+    a = max(int(round(template.onset_p3)), 0)
+    b = min(template.envelope.size, a + int(round(_DROP_RISE_WINDOW_S * sample_rate)))
+    if b - a < 2:
+        return math.nan
+    return float(np.argmax(template.envelope[a:b]))
+
+
+def sharper_drop_parity(
+    templates: tuple[ParityTemplate | None, ParityTemplate | None], config: MetricsConfig
+) -> int | None:
+    """Parity (0 tic, 1 tac) whose drop is clearly the sharper one, or None if neither is
+    (``MetricsConfig.drop_sharpness_ratio``)."""
+    rise = [drop_rise_samples(t, config.sample_rate) for t in templates]
+    if not all(math.isfinite(r) for r in rise):
+        return None
+    parity = 0 if rise[0] <= rise[1] else 1
+    # one sample at least: a drop that peaks on its onset sample is not "infinitely" sharper
+    if max(rise[1 - parity], 1.0) >= config.drop_sharpness_ratio * max(rise[parity], 1.0):
+        return parity
+    return None
+
+
 def amplitude_from_templates(
     templates: tuple[ParityTemplate | None, ParityTemplate | None], config: MetricsConfig
 ) -> tuple[float, float, float, float]:
@@ -820,7 +883,10 @@ def timing_confidence(m: Metrics, config: MetricsConfig) -> float:
 def _confidence(m: Metrics, config: MetricsConfig) -> float:
     q_time = timing_confidence(m, config)
     q_amp = 1.0
-    if math.isfinite(m.amplitude_tic_deg) and math.isfinite(m.amplitude_tac_deg):
+    if m.amplitude_parity != "both":
+        # taken from the parity with the sharp drop: as sure as two that differ by 20°
+        q_amp = 0.5
+    elif math.isfinite(m.amplitude_tic_deg) and math.isfinite(m.amplitude_tac_deg):
         q_amp = 1.0 / (1.0 + abs(m.amplitude_tic_deg - m.amplitude_tac_deg) / 20.0)
     return float(min(1.0, max(0.0, q_time * q_amp)))
 
@@ -913,11 +979,15 @@ def _compute_metrics(
         and abs(m.rate_trend_s_per_day_per_min)
         > config.trend_sigma * m.rate_trend_sigma_s_per_day_per_min
         and abs(m.rate_trend_s_per_day_per_min) >= config.trend_min_s_per_day_per_min
+        and abs(m.rate_trend_s_per_day_per_min) * m.span_s / 60.0
+        >= config.trend_min_change_s_per_day
     ):
         m.rate_trend_flag = True
+        change = m.rate_trend_s_per_day_per_min * m.span_s / 60.0
         m.warnings.append(
-            f"la marcha cambia durante la medida: {m.rate_trend_s_per_day_per_min:+.2f} s/d por "
-            f"minuto (± {m.rate_trend_sigma_s_per_day_per_min:.2f}); el reloj no está estable"
+            f"la marcha cambia durante la medida: {change:+.1f} s/d en {m.span_s:.0f} s "
+            f"({m.rate_trend_s_per_day_per_min:+.1f} ± {m.rate_trend_sigma_s_per_day_per_min:.1f} "
+            "s/d por minuto); el reloj aún se está asentando"
         )
     if not config.quartz:
         # the beat error candidates are defined on t_fine (the drop), whatever times the rate
@@ -1053,10 +1123,21 @@ def _amplitude(
         and math.isfinite(a_tac)
         and abs(a_tic - a_tac) > config.amplitude_mismatch_deg
     ):
-        m.warnings.append(
-            f"amplitud de tic y tac distinta ({a_tic:.0f}° / {a_tac:.0f}°): revisar la "
-            "identificación de P1/P3"
-        )
+        parity = sharper_drop_parity(templates, config)
+        if parity is None:
+            m.warnings.append(
+                f"amplitud de tic y tac distinta ({a_tic:.0f}° / {a_tac:.0f}°): revisar la "
+                "identificación de P1/P3"
+            )
+        else:
+            names, amps = ("tic", "tac"), (a_tic, a_tac)
+            m.amplitude_parity = names[parity]
+            m.amplitude_deg = amps[parity]
+            m.amplitude_la_uncertainty_deg = unc * amps[parity] / a
+            m.warnings.append(
+                f"{AMPLITUDE_ONE_PARITY_PREFIX} {names[parity]} ({amps[parity]:.0f}°): la "
+                f"caída del {names[1 - parity]} no es nítida (daría {amps[1 - parity]:.0f}°)"
+            )
 
 
 # ====================================================================== incremental

@@ -142,6 +142,27 @@ def test_rate_drift_is_recovered_and_flagged(drift: float) -> None:
     assert any("cambia durante la medida" in w for w in m.warnings)
 
 
+def test_small_rate_wander_is_measured_but_not_flagged() -> None:
+    """8 s/d per minute over 40 s is a change of 5 s/d: what the gear train of a healthy
+    watch does within a minute. The trend is still measured, and it is statistically
+    significant, but the watch is not reported as unsettled."""
+    x, _ = synth_watch(
+        bph=28800,
+        rate_s_per_day=5.0,
+        seconds=40,
+        snr_db=30,
+        seed=3,
+        jitter_us=50.0,
+        rate_drift_s_per_day_per_min=8.0,
+    )
+    beats, det = _detect(x, 28800)
+    m = compute_metrics(beats, det.templates(), _cfg(28800))
+    assert m.rate_trend_s_per_day_per_min == pytest.approx(8.0, rel=0.25)
+    assert not m.rate_trend_flag and not any("cambia durante" in w for w in m.warnings)
+    strict = compute_metrics(beats, det.templates(), _cfg(28800, trend_min_change_s_per_day=0.0))
+    assert strict.rate_trend_flag  # the old criterion flagged it
+
+
 def test_consecutive_30s_windows_are_stable() -> None:
     """90 s, incremental mode: rates of consecutive 30 s windows agree within 3 sigma."""
     x, _ = synth_watch(bph=28800, rate_s_per_day=5.0, seconds=90, snr_db=30, seed=9, jitter_us=50)
