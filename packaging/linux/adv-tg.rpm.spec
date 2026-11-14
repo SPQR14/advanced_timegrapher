@@ -93,6 +93,9 @@ which update-desktop-database &>/dev/null && update-desktop-database %{_datadir}
 which gtk-update-icon-cache &>/dev/null && gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 
 %changelog
+* Sat Nov 14 2026 Alberto Pico <albertopicolara@gmail.com> - 1.0.1-1
+- Release version 1.0.1: GUI contrast improvements in About and Report dialogs,
+  compact HUD metric cards, and immediate Clock Drift status synchronization.
 * Fri Nov 13 2026 Alberto Pico <albertopicolara@gmail.com> - 1.0.0-1
 - Release version 1.0.0: live input channel selection, interference filter, faster
   analysis, update notice; self-contained rpm, deb and AppImage built on EL9.

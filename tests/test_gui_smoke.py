@@ -85,6 +85,10 @@ def test_buy_coffee_button_lives_in_about_dialog(qtbot, monkeypatch) -> None:
     assert not hasattr(window, "btn_buy_coffee")  # not in the top bar any more
     about = window.open_about_dialog(exec_dialog=False)
     qtbot.addWidget(about)
+    assert about.lbl_support_project.text() == "Support the project"
+    assert about.layout().indexOf(about.lbl_support_project) + 1 == about.layout().indexOf(
+        about.btn_buy_coffee
+    )
     qtbot.mouseClick(about.btn_buy_coffee, Qt.MouseButton.LeftButton)
     assert opened == ["https://buymeacoffee.com/sqpr14"]
     assert "buymeacoffee.com/sqpr14" in about.btn_buy_coffee.toolTip()

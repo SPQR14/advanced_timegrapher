@@ -81,7 +81,11 @@ from adv_tg.ui.measure_worker import device_name as measure_device_name
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
 from adv_tg.ui.update_notifier import UpdateNotifier
 from adv_tg.ui.worker_factory import create_worker
-from adv_tg.utils.adc_calibration import config_dir
+from adv_tg.utils.adc_calibration import (
+    CalibrationStore,
+    CalibrationStoreError,
+    config_dir,
+)
 from adv_tg.utils.audio_io import AudioDeviceInfo, list_input_devices
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
@@ -320,9 +324,9 @@ class HudCard(QFrame):
 
         self.value_label = QLabel("---.-")
         self.value_label.setObjectName("HudCardValue")
-        self.value_label.setMinimumHeight(58)
+        self.value_label.setMinimumHeight(51)
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        mono_font = QFont("JetBrains Mono", 39, QFont.Weight.Bold)
+        mono_font = QFont("JetBrains Mono", 32, QFont.Weight.Bold)
         mono_font.setStyleHint(QFont.StyleHint.Monospace)
         self.value_label.setFont(mono_font)
         self.dimmed = False
@@ -349,7 +353,7 @@ class HudCard(QFrame):
         self.value_label.setStyleSheet(
             f"color: {color}; "
             f'font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace; '
-            f"font-size: 39pt; "
+            f"font-size: 32pt; "
             f"font-weight: 800; "
             f"padding-bottom: 2px;"
         )
@@ -739,6 +743,23 @@ class MainWin(QMainWindow):
                     stop:0 #00b0ff, stop:1 #00e676
                 );
                 border-radius: 3px;
+            }}
+            QPushButton {{
+                background-color: #1c2430;
+                color: #8b96a8;
+                border: 1px solid #2f3e52;
+                border-radius: 5px;
+                padding: 6px 12px;
+                font-size: 11px;
+                font-weight: 800;
+            }}
+            QPushButton:hover {{
+                border-color: #ff9e40;
+            }}
+            QPushButton:disabled {{
+                background-color: #151a22;
+                color: #5c6675;
+                border-color: #222a35;
             }}
             QPushButton#ActionButton, QPushButton#CenterTraceButton {{
                 background-color: #1c2430;
@@ -1746,6 +1767,7 @@ class MainWin(QMainWindow):
             self.btn_mock.setChecked(is_mock)
             self.btn_mock.blockSignals(was_blocked)
         self._install_worker(device_id)
+        self._sync_calibration_drift()
 
     def _on_mock_toggled(self, checked: bool) -> None:
         """MOCK on: select the synthetic device. MOCK off: go back to the previous device."""
@@ -1946,6 +1968,8 @@ class MainWin(QMainWindow):
                 f"{cfg.bph} A/h, {cfg.lift_angle:.1f} deg, {cfg.sample_rate} Hz",
             )
             self.dsp_worker.update_watch_config(cfg)
+            if cfg.sample_rate != old.sample_rate and not self.dsp_worker.isRunning():
+                self._sync_calibration_drift()
 
     def _on_language_changed(self, index: int) -> None:
         """Switch active language in Translator and refresh all UI texts."""
@@ -2393,6 +2417,61 @@ class MainWin(QMainWindow):
             name = text.split("] ", 1)[1] if "] " in text else text
         return name, int(self.current_watch_config().sample_rate)
 
+    def _sync_calibration_drift(self, store: CalibrationStore | None = None) -> None:
+        """Update the clock drift status bar and statistics label from the stored calibration
+        of the selected device and sample rate (if any)."""
+        if not hasattr(self, "lbl_drift_status"):
+            return
+        fs = float(self.current_watch_config().sample_rate)
+        worker = self.dsp_worker
+        drift = None
+        source = ""
+        if isinstance(worker, MeasureStreamWorker):
+            if worker.replay_path is not None:
+                drift, source, _ = worker._calibration(fs)
+            else:
+                target = self._calibration_target()
+                if target is not None:
+                    try:
+                        cal = (store or worker._store or CalibrationStore()).best(
+                            target[0], target[1]
+                        )
+                    except CalibrationStoreError as exc:
+                        logger.warning("%s", exc)
+                        cal = None
+                    if cal is not None:
+                        drift = cal.effective()
+                        source = (
+                            f"calibración guardada (nivel {int(drift.level)}, "
+                            f"{cal.measured_at:%Y-%m-%d})"
+                        )
+        if drift is not None:
+            effective_fs = fs * (1.0 + drift.ppm * 1e-6)
+            self._on_drift_updated(effective_fs, drift.ppm, -PPM_TO_S_PER_DAY * drift.ppm)
+            self._on_clock_info(drift.uncertainty_ppm, int(drift.level), source)
+            return
+
+        self._last_effective_fs = fs
+        self._last_drift_ppm = 0.0
+        self._last_rate_bias_spd = 0.0
+        self._last_drift_sigma_ppm = None
+        self._last_drift_confidence = None
+        self._last_clock_level = None
+        self._last_clock_source = ""
+        self.lbl_stat_drift_val.setText("")
+        self.lbl_stat_drift_val.setToolTip("")
+        self.lbl_drift_status.setToolTip("")
+        if type(worker) is CaptureStreamWorker:
+            self.lbl_drift_status.setText("")
+        else:
+            self.lbl_drift_status.setText(
+                self.translator.tr("status_drift_format").format(
+                    ppm=0.0,
+                    fs=fs,
+                    bias=0.0,
+                )
+            )
+
     def _uncorrected_rate_spd(self) -> float | None:
         """Last rate of the real engine without the card clock correction (s/d), or None.
 
@@ -2431,6 +2510,9 @@ class MainWin(QMainWindow):
             device_id=self.selected_device_id(),
             capture_busy=self.dsp_worker is not None and self.dsp_worker.isRunning(),
         )
+        dlg.calibration_changed.connect(lambda: self._sync_calibration_drift(dlg.store))
+        if not self._last_clock_source.startswith("en vivo") and dlg.records():
+            self._sync_calibration_drift(dlg.store)
         if exec_dialog:
             dlg.exec()
         return dlg
@@ -2964,6 +3046,8 @@ class MainWin(QMainWindow):
                 bias=self._last_rate_bias_spd,
             )
         )
+        if self._last_clock_level is not None or self._last_drift_sigma_ppm is not None:
+            self._refresh_drift_stat_label()
         self._refresh_capture_health_label()
 
         self.btn_save_position.setText(tr("btn_save_position"))
@@ -3130,8 +3214,11 @@ class MainWin(QMainWindow):
                 card.set_value(self.EMPTY_VALUE)
             self.card_beat_error.set_sub("")
             self._set_real_bph(math.nan, math.nan)
-            self.lbl_drift_status.setText("")
-            self.lbl_stat_drift_val.setText("")
+            if type(self.dsp_worker) is CaptureStreamWorker:
+                self.lbl_drift_status.setText("")
+                self.lbl_stat_drift_val.setText("")
+            else:
+                self._sync_calibration_drift()
             self._clear_oscilloscope_markers()
 
         duration_s = self.duration_s()

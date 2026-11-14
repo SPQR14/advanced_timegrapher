@@ -359,6 +359,7 @@ class Translator:
             "mock_mode": "MOCK",
             "mock_tooltip": "Simulated data to test the GUI (no real measurement)",
             "coffee_tooltip": "Support the project: {url}",
+            "support_project": "Support the project",
             "beat_error_p3": "at the drop (P3): {value}",
             "real_bph": "Real BPH: {value}",
             "beat_error_tooltip": (
@@ -728,6 +729,7 @@ class Translator:
             "mock_mode": "MOCK",
             "mock_tooltip": "Datos simulados para probar la GUI (sin medición real)",
             "coffee_tooltip": "Apoya el proyecto: {url}",
+            "support_project": "Apoya el proyecto",
             "beat_error_p3": "en la caída (P3): {value}",
             "real_bph": "A/h reales: {value}",
             "beat_error_tooltip": (

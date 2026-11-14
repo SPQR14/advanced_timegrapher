@@ -1,10 +1,10 @@
 ; Inno Setup Script para Advanced Timegrapher en Windows (x64)
 ; Compilar con:
-;   iscc /DMyAppVersion=1.0.0 packaging\windows\installer.iss
+;   iscc /DMyAppVersion=1.0.1 packaging\windows\installer.iss
 ; o utilizando el script auxiliar de PowerShell / GitHub Actions.
 
 #ifndef MyAppVersion
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #endif
 
 #define MyAppName "Advanced Timegrapher"

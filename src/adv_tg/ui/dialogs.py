@@ -28,7 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pyqtgraph as pg
-from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, Qt, QUrl
+from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QCloseEvent, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
@@ -136,6 +136,7 @@ class CalibrationDialog(QDialog):
     """
 
     PPS_TAB, MANUAL_TAB, REFERENCE_TAB = range(3)
+    calibration_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -548,6 +549,7 @@ class CalibrationDialog(QDialog):
             device=self.device, fs=self.sample_rate, pulses=est.used,
         )  # fmt: skip
         self.refresh()
+        self.calibration_changed.emit()
         return True
 
     def done(self, result: int) -> None:  # noqa: D102 - stop the capture with the window
@@ -663,6 +665,7 @@ class CalibrationDialog(QDialog):
             device=self.device, fs=self.sample_rate,
         )  # fmt: skip
         self.refresh()
+        self.calibration_changed.emit()
         return True
 
     def forget(self, confirm: bool = True) -> int:
@@ -681,6 +684,7 @@ class CalibrationDialog(QDialog):
             self._error(exc)
             return 0
         self.refresh()
+        self.calibration_changed.emit()
         return n
 
 
@@ -723,16 +727,22 @@ class AboutDialog(QDialog):
         self.version_label = title
 
         folder_layout = QHBoxLayout()
-        btn_open_logs = QPushButton(tr("open_logs_folder"))
-        btn_open_logs.clicked.connect(lambda: open_folder(LoggerSetup.LOG_DIR))
-        btn_open_config = QPushButton(tr("open_calibration_folder"))
-        btn_open_config.clicked.connect(lambda: open_folder(config_dir()))
-        folder_layout.addWidget(btn_open_logs)
-        folder_layout.addWidget(btn_open_config)
+        self.btn_open_logs = QPushButton(tr("open_logs_folder"))
+        self.btn_open_logs.setObjectName("MockButton")
+        self.btn_open_logs.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_open_logs.clicked.connect(lambda: open_folder(LoggerSetup.LOG_DIR))
+        self.btn_open_config = QPushButton(tr("open_calibration_folder"))
+        self.btn_open_config.setObjectName("MockButton")
+        self.btn_open_config.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_open_config.clicked.connect(lambda: open_folder(config_dir()))
+        folder_layout.addWidget(self.btn_open_logs)
+        folder_layout.addWidget(self.btn_open_config)
         layout.addLayout(folder_layout)
 
         # Manual update check; the result is shown here (it only links to the download page)
         self.btn_check_updates = QPushButton(tr("update_check_now"))
+        self.btn_check_updates.setObjectName("MockButton")
+        self.btn_check_updates.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lbl_update = QLabel()
         self.lbl_update.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_update.setOpenExternalLinks(True)
@@ -746,6 +756,8 @@ class AboutDialog(QDialog):
             updates.finished.connect(self._on_update_result)
 
         # Support the project (opens BUY_ME_A_COFFEE_URL)
+        self.lbl_support_project = QLabel(tr("support_project"))
+        layout.addWidget(self.lbl_support_project, alignment=Qt.AlignmentFlag.AlignHCenter)
         self.btn_buy_coffee = QPushButton(tr("btn_buy_coffee"))
         self.btn_buy_coffee.setObjectName("CoffeeButton")
         self.btn_buy_coffee.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -760,6 +772,10 @@ class AboutDialog(QDialog):
         layout.addWidget(self.lbl_coffee_failed)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        self.btn_close = buttons.button(QDialogButtonBox.StandardButton.Close)
+        if self.btn_close is not None:
+            self.btn_close.setObjectName("MockButton")
+            self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -851,9 +867,15 @@ class ReportDialog(QDialog):
         privacy.setObjectName("HelpText")
         layout.addWidget(privacy)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        self.btn_cancel = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if self.btn_cancel is not None:
+            self.btn_cancel.setObjectName("MockButton")
+            self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_create = buttons.addButton(
             tr("report_create"), QDialogButtonBox.ButtonRole.AcceptRole
         )
+        self.btn_create.setObjectName("MockButton")
+        self.btn_create.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_create.clicked.connect(lambda: self.create())
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -893,7 +915,11 @@ class ReportDialog(QDialog):
             box.setText(text)
             open_btn = box.addButton(tr("report_open_github"), QMessageBox.ButtonRole.AcceptRole)
             show_btn = box.addButton(tr("report_show_file"), QMessageBox.ButtonRole.ActionRole)
-            box.addButton(QMessageBox.StandardButton.Close)
+            close_btn = box.addButton(QMessageBox.StandardButton.Close)
+            for b in (open_btn, show_btn, close_btn):
+                if b is not None:
+                    b.setObjectName("MockButton")
+                    b.setCursor(Qt.CursorShape.PointingHandCursor)
             box.exec()
             if box.clickedButton() is open_btn:
                 QDesktopServices.openUrl(QUrl(ISSUES_URL))
