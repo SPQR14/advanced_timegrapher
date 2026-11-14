@@ -425,8 +425,13 @@ def test_paper_tape_window_starts_at_zero_then_scrolls(window) -> None:
     newest = max(window._tape_x_even[-1], window._tape_x_odd[-1])
     assert x_hi == pytest.approx(newest + mw.TAPE_LEAD_S)
     assert x_hi - x_lo == pytest.approx(mw.TAPE_WINDOW_S)
-    # COSC guides are horizontal and do not scroll or move
-    assert (window.cosc_lower_line.value(), window.cosc_upper_line.value()) == (-4.0, 6.0)
+    # COSC guides: from the trace at the left edge of the view, with the slopes of the limits
+    for line, spd in ((window.cosc_lower_line, -4.0), (window.cosc_upper_line, 6.0)):
+        gx, gy = line.getData()
+        assert gx[0] == pytest.approx(x_lo) and gx[1] == pytest.approx(x_hi)
+        assert gy[0] == pytest.approx(window._tape_mid_at(x_lo))
+        assert (gy[1] - gy[0]) / (gx[1] - gx[0]) * 86.4 == pytest.approx(spd)
+    assert window.tape_zero_line.value() == pytest.approx(window._tape_mid_at(x_lo))
 
 
 def test_paper_tape_rows_are_smoothed_but_export_stays_raw(window) -> None:
@@ -533,15 +538,42 @@ def test_paper_tape_zero_line_stands_out(window) -> None:
     assert min(c.red(), c.green(), c.blue()) >= 200  # near white
 
 
-def test_cosc_guides_stay_fixed_when_the_trace_scrolls(window) -> None:
-    _fill_tape(window, 150.0, rate_spd=12.0)  # the trace climbs past +6 and leaves the guides
+def _guide_end(line) -> float:
+    return float(line.getData()[1][-1])
+
+
+@pytest.mark.parametrize(
+    ("rate_spd", "inside"), [(7.0, False), (5.0, True), (0.0, True), (-3.0, True), (-6.0, False)]
+)
+def test_cosc_guides_show_the_rate_as_a_slope(window, rate_spd: float, inside: bool) -> None:
+    """On a paper tape the rate is the slope: a +7 s/d watch must end above the +6 guide (it
+    stayed under the old horizontal line at +6 *ms*: it climbs 4.9 ms in a minute)."""
+    _fill_tape(window, 60.0, rate_spd=rate_spd)
+    x_hi = window.paper_tape_plot.getViewBox().viewRange()[0][1]
+    end = window._tape_mid_at(x_hi)
+    lower, upper = _guide_end(window.cosc_lower_line), _guide_end(window.cosc_upper_line)
+    assert (lower <= end <= upper) is inside
+    assert window.cosc_upper_label.toPlainText() == "+6 s/d"
+    assert window.cosc_lower_label.toPlainText() == "-4 s/d"
+    pen = window.cosc_upper_line.opts["pen"]
+    assert pen.color().green() > 200 and pen.color().red() < 50  # green
+
+
+def test_cosc_guides_follow_the_trace_when_it_scrolls(window) -> None:
+    """Long test: the guides restart from where the trace is at the left edge of the view, so
+    they always judge the rate over the visible minute."""
+    _fill_tape(window, 150.0, rate_spd=12.0)
+    (x_lo, x_hi), (y_lo, y_hi) = window.paper_tape_plot.getViewBox().viewRange()
+    assert x_lo > 0.0  # scrolled
+    gx, gy = window.cosc_upper_line.getData()
+    assert gx[0] == pytest.approx(x_lo) and gy[0] == pytest.approx(12.0 * x_lo / 86.4, abs=0.2)
+    assert window._tape_mid_at(x_hi) > _guide_end(window.cosc_upper_line)  # 12 s/d: outside
+    assert y_lo <= gy[0] <= y_hi  # the start of the guides is in the view
+    # paused by the user: the guides stay where they were until the trace is centred again
+    window._tape_autoscale = False
+    before = window.cosc_upper_line.getData()[1].copy()
     window._autoscale_paper_tape()
-    assert window.paper_tape_plot.getViewBox().viewRange()[0][0] > 0.0  # scrolled
-    for line, value in ((window.cosc_upper_line, 6.0), (window.cosc_lower_line, -4.0)):
-        assert line.value() == value and line.angle == 0
-        assert line.label.format == f"{value:+g}"
-        pen = line.pen
-        assert pen.color().green() > 200 and pen.color().red() < 50  # green
+    assert np.array_equal(window.cosc_upper_line.getData()[1], before)
 
 
 def test_paper_tape_rows_are_converted_once_per_change(window, monkeypatch) -> None:

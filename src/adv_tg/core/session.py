@@ -344,9 +344,10 @@ class MeasurementSession:
         h = list(self._history)
         tic = _nanmedian([m.amplitude_tic_deg for m in h])
         tac = _nanmedian([m.amplitude_tac_deg for m in h])
-        if math.isfinite(tic) and math.isfinite(tac):
+        mismatch = self._metrics_config.amplitude_mismatch_deg
+        if math.isfinite(tic) and math.isfinite(tac) and abs(tic - tac) <= mismatch:
             amp = 0.5 * (tic + tac)
-        else:
+        else:  # one parity only, or the two disagree: each update already chose (metrics)
             amp = _nanmedian([m.amplitude_deg for m in h])
         lo, hi = self._metrics_config.amplitude_range_deg
         if not (math.isfinite(amp) and lo <= amp <= hi):

@@ -101,9 +101,12 @@ def test_real_engine_in_the_gui(window, qtbot, tmp_path, monkeypatch) -> None:
     de, do = np.array(window._tape_disp_even), np.array(window._tape_disp_odd)
     assert lo <= min(de.min(), do.min()) and max(de.max(), do.max()) <= hi
     assert x_lo == pytest.approx(0.0, abs=1e-6) and x_hi == pytest.approx(60.0)
-    # COSC guides: green horizontal lines at +6 and -4 that never move
-    assert window.cosc_upper_line.value() == 6.0 and window.cosc_lower_line.value() == -4.0
-    assert window.cosc_upper_line.angle == 0 and window.cosc_lower_line.angle == 0
+    # COSC guides: the slopes of +6 and -4 s/d from the start of the trace; this +4 s/d watch
+    # ends between them
+    gx, gy = window.cosc_upper_line.getData()
+    assert (gy[1] - gy[0]) / (gx[1] - gx[0]) * 86.4 == pytest.approx(6.0)
+    lx, ly = window.cosc_lower_line.getData()
+    assert (ly[1] - ly[0]) / (lx[1] - lx[0]) * 86.4 == pytest.approx(-4.0)
     # the drawn rows start around 0 (origin = mid point of the first tic and tac)
     xe_d, ye_d, xo_d, yo_d = window._tape_rows()
     assert abs(0.5 * (ye_d[0] + yo_d[0])) < 0.5
