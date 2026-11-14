@@ -567,3 +567,60 @@ def test_plot_axes_are_cached(window) -> None:
     for plot in (window.paper_tape_plot, window.oscilloscope_plot, window.waveform_plot):
         for axis in plot.getPlotItem().axes.values():
             assert axis["item"].cacheMode() == QGraphicsItem.CacheMode.DeviceCoordinateCache
+
+
+def test_about_and_report_dialog_buttons_have_contrast(window) -> None:
+    window.translator.set_locale("en")
+    about = window.open_about_dialog(exec_dialog=False)
+    assert about.lbl_support_project.text() == "Support the project"
+    for btn in (
+        about.btn_open_logs,
+        about.btn_open_config,
+        about.btn_check_updates,
+        about.btn_close,
+    ):
+        assert btn is not None and btn.objectName() == "MockButton"
+    about.close()
+
+    window.translator.set_locale("es")
+    about_es = window.open_about_dialog(exec_dialog=False)
+    assert about_es.lbl_support_project.text() == "Apoya el proyecto"
+    about_es.close()
+    window.translator.set_locale("en")
+
+    report = window.open_report_dialog(exec_dialog=False)
+    for btn in (report.btn_create, report.btn_cancel):
+        assert btn is not None and btn.objectName() == "MockButton"
+    report.close()
+
+
+def test_hud_cards_reduced_by_7px(window) -> None:
+    for card in (window.card_rate, window.card_beat_error, window.card_amplitude):
+        assert card.value_label.minimumHeight() == 51
+        assert card.value_label.font().pointSize() == 32
+        assert "font-size: 32pt;" in card.value_label.styleSheet()
+
+
+def test_clock_drift_footer_updates_from_loaded_calibration(window) -> None:
+    window.btn_mock.setChecked(False)
+    store = CalibrationStore()
+    store.add(Calibration("Fake CM18", 48000, AdcDrift.manual(10.0, 0.5), datetime.now(UTC)))
+    window._sync_calibration_drift()
+    assert "+10.00 ppm" in window.lbl_drift_status.text()
+    assert "48000.48 Hz" in window.lbl_drift_status.text()
+    assert "-0.86 s/d" in window.lbl_drift_status.text()
+    assert "+10.00 ± 0.50 ppm" in window.lbl_stat_drift_val.text()
+
+    # Saving or forgetting in CalibrationDialog updates the footer immediately
+    dlg = window.open_calibration_dialog(exec_dialog=False)
+    assert dlg is not None
+    dlg.spn_ppm.setValue(-5.0)
+    dlg.spn_sigma.setValue(0.2)
+    assert dlg.save()
+    assert "-5.00 ppm" in window.lbl_drift_status.text()
+    assert "+0.43 s/d" in window.lbl_drift_status.text()
+
+    assert dlg.forget(confirm=False) > 0
+    assert "+0.00 ppm" in window.lbl_drift_status.text()
+    assert window.lbl_stat_drift_val.text() == ""
+    dlg.close()

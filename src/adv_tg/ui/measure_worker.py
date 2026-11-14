@@ -195,6 +195,8 @@ class _SessionHook:
         self._owner = owner
         self._stream = stream
         self._fs = float(config.sample_rate)
+        self._cal = config.calibration
+        self._cal_source = config.calibration_source
         self._analyzer = analyzer  # its session was started by the worker
         self._analyzer_dead = False
         self._next_analysis = 0.0
@@ -260,14 +262,19 @@ class _SessionHook:
 
     def _emit_drift(self) -> None:
         snap = self._last
-        if snap is None:
+        if snap is not None:
+            d: AdcDrift = snap.drift
+            source = snap.drift_source
+        elif self._cal is not None:
+            d = self._cal
+            source = self._cal_source
+        else:
             return
-        d: AdcDrift = snap.drift
         self._owner.drift_updated.emit(
             self._fs * (1.0 + d.ppm * 1e-6), d.ppm, -PPM_TO_S_PER_DAY * d.ppm
         )
         sigma = d.uncertainty_ppm if d.level != ClockLevel.UNCALIBRATED else math.nan
-        self._owner.clock_info.emit(sigma, int(d.level), snap.drift_source)
+        self._owner.clock_info.emit(sigma, int(d.level), source)
 
     def tick(self, now: float) -> None:
         t0 = time.perf_counter()
