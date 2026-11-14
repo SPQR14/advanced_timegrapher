@@ -101,3 +101,20 @@ def test_playout_recovers_from_a_stall_and_from_a_backlog() -> None:
     # a long hiccup delivers 2 s at once: re-seated near the newest sample, not 2 s behind
     pos = po.advance(0.6, 48_000 + 96_000)
     assert 0 <= (48_000 + 96_000) - pos <= cw.PLAYOUT_RESYNC_S * FS
+
+
+def test_waveform_x_range_is_fixed_to_the_window(qtbot) -> None:
+    """With X auto-range the view box repainted the whole plot (grid and axes) on every
+    frame, even when the range it computed was the same."""
+    window = mw.MainWin()
+    qtbot.addWidget(window)
+    t = np.linspace(0.0, 2000.0, 600)
+    window._on_waveform_ready(t, np.zeros_like(t))
+    view_box = window.waveform_plot.getViewBox()
+    assert not view_box.autoRangeEnabled()[0]
+    (lo, hi), _ = view_box.viewRange()
+    assert lo <= 0.0 and hi >= 2000.0 and (hi - lo) < 2000.0 * 1.2
+    window._on_waveform_ready(t[:300], np.zeros(300))  # a shorter window: followed
+    (lo, hi), _ = view_box.viewRange()
+    assert hi < 1100.0
+    window.close()
