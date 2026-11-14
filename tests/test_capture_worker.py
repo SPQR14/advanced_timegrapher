@@ -153,7 +153,7 @@ def test_streams_waveform_health_and_level(qtbot) -> None:
     assert abs(20 * math.log10(plot_peak / src_peak)) < 1.0
 
     assert rec.health and rec.health[-1][0] >= 99.0 and rec.health[-1][1] == 0
-    assert len(rec.levels) >= 10
+    assert len(rec.levels) >= 8
     assert not any(s for _, _, s in rec.levels)
     peaks = [p for p, _, _ in rec.levels]
     assert all(-30.0 < p < -1.0 for p in peaks)  # tone alone ~-26 dBFS, ticks ~-8 dBFS

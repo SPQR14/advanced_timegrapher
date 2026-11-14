@@ -512,9 +512,8 @@ class _CaptureReader(QObject):
                 return
             self._emit_waveform()
             now = time.perf_counter()
-            if now >= self._next_level:
+            if now >= self._next_level and self._emit_level():
                 self._next_level = max(self._next_level + LEVEL_PERIOD_S, now)
-                self._emit_level()
             if now >= self._next_health:
                 self._next_health = max(self._next_health + HEALTH_PERIOD_S, now)
                 st = self._stream.stats()
@@ -574,22 +573,23 @@ class _CaptureReader(QObject):
         self._owner.waveform_ready.emit(time_ms, values)
         self._waveforms += 1
 
-    def _emit_level(self) -> None:
+    def _emit_level(self) -> bool:
         stream = self._stream
         total = stream.total_samples
         start = max(self._last_level_idx, stream.oldest_available)
         if total <= start:
-            return
+            return False
         try:
             x = stream.read(start, total, np.float64)
         except SamplesOverwritten:
             self._last_level_idx = total
-            return
+            return False
         self._last_level_idx = total
         peak_db = _dbfs(float(np.max(np.abs(x))))
         rms_db = _dbfs(math.sqrt(float(np.mean(x * x))))
         self._owner.level_updated.emit(peak_db, rms_db, peak_db >= SATURATION_DBFS)
         self._log_level_1s(x, peak_db >= SATURATION_DBFS)
+        return True
 
     def _log_level_1s(self, x: np.ndarray, saturated: bool) -> None:
         """Diagnostics: DEBUG level summary once per second (to calibrate the quality bar)."""
