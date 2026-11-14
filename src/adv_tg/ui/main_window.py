@@ -455,6 +455,7 @@ class MainWin(QMainWindow):
         # origin of the trace: mid point of the first tic and tac (the rows start around 0)
         self._tape_y0: float | None = None
         self._osc_span_ms: float | None = None
+        self._wave_span: tuple[float, float] | None = None
         self._silence_since: float | None = None
         self._silence_warned: bool = False
         self._osc_rng = np.random.default_rng(2026)
@@ -3655,6 +3656,13 @@ class MainWin(QMainWindow):
         """Slot updating the real-time acoustic waveform curve from the engine."""
         t0 = time.perf_counter()  # slot performance (SlotProfiler)
         if time_axis is not None and waveform is not None and len(time_axis) > 0:
+            # Fixed X range, set again only when the window itself changes: with auto-range
+            # on, every frame made the view box repaint the whole plot (grid and axes), even
+            # when the range it computed was the same.
+            span = (float(time_axis[0]), float(time_axis[-1]))
+            if span != self._wave_span and span[1] > span[0]:
+                self._wave_span = span
+                self.waveform_plot.setXRange(*span)
             self.audio_waveform_curve.setData(time_axis, waveform)
         self._perf_waveform.record(t0)
 
