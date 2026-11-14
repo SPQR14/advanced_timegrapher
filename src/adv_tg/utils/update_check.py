@@ -148,7 +148,8 @@ def fetch_latest(timeout_s: float = 6.0) -> ReleaseInfo | None:
         },
     )
     try:
-        with urllib.request.urlopen(  # noqa: S310
+        # B310 (file:/ or custom schemes): the URL is the https constant above, never user input
+        with urllib.request.urlopen(  # noqa: S310  # nosec B310
             request, timeout=timeout_s, context=ssl_context()
         ) as response:
             raw = response.read(_MAX_RESPONSE_BYTES + 1)
