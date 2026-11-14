@@ -8,17 +8,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
-# 1. Obtener versión (argumento o desde código fuente / pyproject.toml)
-VERSION="${1:-}"
-if [ -z "$VERSION" ]; then
-    VERSION=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])" 2>/dev/null || true)
-fi
-if [ -z "$VERSION" ]; then
-    VERSION=$(grep -E '^__version__\s*=' src/adv_tg/__init__.py | cut -d'"' -f2 2>/dev/null || true)
-fi
-if [ -z "$VERSION" ]; then
-    VERSION="0.8.0"
-fi
+# 1. Versión: argumento o la del paquete (la que informa el binario con --version)
+VERSION="${1:-$(grep -E '^__version__\s*=' src/adv_tg/__init__.py | cut -d'"' -f2)}"
 
 echo "=========================================================="
 echo " Construyendo paquete RPM para Advanced Timegrapher ${VERSION}"

@@ -15,7 +15,7 @@ body:
     attributes:
       label: App version / Versión de la aplicación
       description: Shown in About / Se ve en Acerca de
-      placeholder: "0.8.0"
+      placeholder: "1.0.0"
     validations:
       required: true
   - type: input

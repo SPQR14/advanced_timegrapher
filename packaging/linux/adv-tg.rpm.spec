@@ -1,14 +1,18 @@
 Name:           adv-tg
 Version:        %{version}
-Release:        1%{?dist}
+# No dist tag: one package for every RPM distribution
+Release:        1
 Summary:        Horological acoustic timing and rate measurement machine
 License:        GPL-3.0-or-later
-URL:            https://github.com/AlbertoPico/advanced_timegrapher
+URL:            https://github.com/SPQR14/advanced_timegrapher
 Group:          Applications/Engineering
 
 # Disable automatic debuginfo packaging (PyInstaller bundle already contains stripped binaries)
 %define debug_package %{nil}
 %define __strip /bin/true
+# No /usr/lib/.build-id links: the bundled libraries share build ids with the system's
+# packages (libpng, libbrotli...) and the links would conflict with them on install
+%define _build_id_links none
 
 # Disallow automatic internal library dependencies generation for bundled PyInstaller dependencies
 AutoReqProv:    no
@@ -16,10 +20,26 @@ AutoReqProv:    no
 %global __find_provides %{nil}
 %global __find_requires %{nil}
 
-# Explicit external system dependencies for RPM distributions (Fedora, RHEL, openSUSE)
-Requires:       portaudio
-Requires:       alsa-lib
-Requires:       libxkbcommon
+# The bundle carries Python, Qt, numpy, PortAudio and libsndfile. What it takes from the system
+# is declared by library name, which resolves on Fedora, RHEL/Alma/Rocky and openSUSE alike
+# (package names differ between them). Built on EL9: glibc >= 2.34.
+Requires:       libc.so.6(GLIBC_2.34)(64bit)
+Requires:       libstdc++.so.6()(64bit)
+Requires:       libgcc_s.so.1()(64bit)
+Requires:       libasound.so.2()(64bit)
+Requires:       libglib-2.0.so.0()(64bit)
+Requires:       libgobject-2.0.so.0()(64bit)
+Requires:       libgio-2.0.so.0()(64bit)
+Requires:       libfontconfig.so.1()(64bit)
+Requires:       libfreetype.so.6()(64bit)
+Requires:       libX11.so.6()(64bit)
+Requires:       libX11-xcb.so.1()(64bit)
+Requires:       libxcb.so.1()(64bit)
+Requires:       libGL.so.1()(64bit)
+Requires:       libEGL.so.1()(64bit)
+Requires:       libwayland-client.so.0()(64bit)
+Requires:       libwayland-cursor.so.0()(64bit)
+Requires:       libwayland-egl.so.1()(64bit)
 
 %description
 Advanced Timegrapher is an open-source watch timing machine and horological acoustic
@@ -73,6 +93,9 @@ which update-desktop-database &>/dev/null && update-desktop-database %{_datadir}
 which gtk-update-icon-cache &>/dev/null && gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 
 %changelog
+* Fri Nov 13 2026 Alberto Pico <albertopicolara@gmail.com> - 1.0.0-1
+- Release version 1.0.0: live input channel selection, interference filter, faster
+  analysis, update notice; self-contained rpm, deb and AppImage built on EL9.
 * Fri Oct 30 2026 Alberto Pico <albertopicolara@gmail.com> - 0.8.0-1
 - Release version 0.8.0 (beta): recording analysis (gear train, feature vectors,
   rule-based diagnosis), audio normalization, 44.1 kHz input, no ALSA overflows.

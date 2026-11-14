@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import html
 import math
 import os
 import shutil
@@ -13,10 +14,11 @@ from pathlib import Path
 import numpy as np
 import pyqtgraph as pg
 from numpy.typing import NDArray
-from PyQt6.QtCore import QRectF, QSize, Qt, QTimer
+from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
     QAction,
     QColor,
+    QDesktopServices,
     QFont,
     QIcon,
     QImage,
@@ -53,6 +55,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from adv_tg import __version__
 from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY
 from adv_tg.core.models import BeatEvent, BeatTelemetry, TelemetryResult, WatchConfig
 from adv_tg.i18n.translator import Translator
@@ -76,12 +79,14 @@ from adv_tg.ui.flow_layout import FlowLayout
 from adv_tg.ui.measure_worker import MeasureStreamWorker
 from adv_tg.ui.measure_worker import device_name as measure_device_name
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
+from adv_tg.ui.update_notifier import UpdateNotifier
 from adv_tg.ui.worker_factory import create_worker
 from adv_tg.utils.adc_calibration import config_dir
 from adv_tg.utils.audio_io import AudioDeviceInfo, list_input_devices
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
 from adv_tg.utils.security import safe_filename_base, sanitize_csv_cell
+from adv_tg.utils.update_check import ReleaseInfo, UpdateState
 from adv_tg.utils.watch_db import load_watch_db
 
 logger = LoggerSetup.setup_logger(__name__)
@@ -1608,6 +1613,19 @@ class MainWin(QMainWindow):
         self.lbl_capture_health.setObjectName("StatValue")
         self.statusBar().addPermanentWidget(self.lbl_capture_health)
 
+        # Newer release available: a link to its download page (hidden until one is found).
+        # Nothing touches the network here: see schedule_update_check / check_for_updates.
+        self._update_state = UpdateState()
+        self._update_release: ReleaseInfo | None = None
+        self.update_notifier = UpdateNotifier(parent=self)
+        self.update_notifier.finished.connect(self._on_update_result)
+        self.lbl_update = QLabel()
+        self.lbl_update.setObjectName("StatValue")
+        self.lbl_update.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_update.setVisible(False)
+        self.lbl_update.linkActivated.connect(lambda _url: self.open_update_page())
+        self.statusBar().addPermanentWidget(self.lbl_update)
+
         self._build_menu_bar()
 
     def _build_menu_bar(self) -> None:
@@ -1630,6 +1648,16 @@ class MainWin(QMainWindow):
         self.action_report = QAction(self)
         self.action_report.triggered.connect(lambda: self.open_report_dialog())
         self.menu_help.addAction(self.action_report)
+
+        self.action_check_updates = QAction(self)
+        self.action_check_updates.triggered.connect(lambda: self.check_for_updates())
+        self.menu_help.addAction(self.action_check_updates)
+        self.action_auto_update = QAction(self)
+        self.action_auto_update.setCheckable(True)
+        self.action_auto_update.setChecked(self._update_state.enabled)
+        self.action_auto_update.toggled.connect(self._on_auto_update_toggled)
+        self.menu_help.addAction(self.action_auto_update)
+        self.menu_help.addSeparator()
 
         self.action_about = QAction(self)
         self.action_about.triggered.connect(lambda: self.open_about_dialog())
@@ -2501,10 +2529,72 @@ class MainWin(QMainWindow):
 
     def open_about_dialog(self, exec_dialog: bool = True) -> AboutDialog:
         """Version, licence, links and the configuration and log folders."""
-        dlg = AboutDialog(self.translator, parent=self)
+        dlg = AboutDialog(self.translator, parent=self, updates=self.update_notifier)
         if exec_dialog:
             dlg.exec()
         return dlg
+
+    # ---- update notice (the program only tells and links; it never installs anything)
+
+    def schedule_update_check(self, delay_ms: int = 4000) -> bool:
+        """Start-up check, at most once a day and only if enabled. True if one was scheduled.
+
+        Called by ``main`` after the window is shown (never by the constructor, so that tests
+        and tools that build the window do not touch the network).
+        """
+        if not self._update_state.due():
+            return False
+        QTimer.singleShot(delay_ms, lambda: self.update_notifier.start(manual=False))
+        return True
+
+    def check_for_updates(self) -> bool:
+        """Check requested by the user (menu Help). False when one is already running."""
+        started = self.update_notifier.start(manual=True)
+        if started:
+            self.statusBar().showMessage(self.translator.tr("update_checking"), 6000)
+        return started
+
+    def _on_auto_update_toggled(self, checked: bool) -> None:
+        self._update_state.enabled = bool(checked)
+        self._update_state.save()
+        logger.info("Automatic update check %s", "enabled" if checked else "disabled")
+
+    def _on_update_result(self, release: object, error: object, manual: bool) -> None:
+        tr = self.translator.tr
+        if error is not None:
+            logger.info("Update check failed: %s", error)
+            if manual:
+                self.statusBar().showMessage(tr("update_check_failed"), 8000)
+            return
+        self._update_state.mark_checked()
+        self._update_release = release if isinstance(release, ReleaseInfo) else None
+        self._refresh_update_label()
+        if self._update_release is not None:
+            logger.info("Newer version available: %s", self._update_release.version)
+        elif manual:
+            self.statusBar().showMessage(tr("update_up_to_date").format(current=__version__), 8000)
+
+    def _refresh_update_label(self) -> None:
+        rel = self._update_release
+        self.lbl_update.setVisible(rel is not None)
+        if rel is None:
+            return
+        tr = self.translator.tr
+        text = html.escape(tr("update_available").format(version=rel.version))
+        self.lbl_update.setText(f"{text} — <a href='#'>{html.escape(tr('update_download'))}</a>")
+        self.lbl_update.setToolTip(tr("update_available_tooltip").format(current=__version__))
+
+    def open_update_page(self) -> bool:
+        """Open the page of the newer release in the browser (False if that failed)."""
+        if self._update_release is None:
+            return False
+        url = self._update_release.url
+        ok = bool(QDesktopServices.openUrl(QUrl(url)))
+        if not ok:  # show the address so it can be typed by hand
+            self.statusBar().showMessage(
+                self.translator.tr("update_open_failed").format(url=url), 20000
+            )
+        return ok
 
     def open_logs_folder(self) -> bool:
         """Open the log folder in the system's file manager (menu Tools)."""
@@ -2890,6 +2980,9 @@ class MainWin(QMainWindow):
         self.menu_help.setTitle(tr("menu_help"))
         self.action_report.setText(tr("btn_report"))
         self.action_about.setText(tr("btn_about"))
+        self.action_check_updates.setText(tr("update_check_now"))
+        self.action_auto_update.setText(tr("update_check_auto"))
+        self._refresh_update_label()
         self.btn_calibrate.setText(tr("btn_calibrate"))
         self.btn_calibrate.setToolTip(tr("btn_calibrate_tooltip"))
         arrow = "▼" if self.btn_global_stats.isChecked() else "▶"
