@@ -18,6 +18,9 @@ from adv_tg import __version__  # noqa: E402
 # 1. Data files: assets (SVG, ICO, ICNS), watch caliber DB and sample calibration audios.
 # Only docs/samples is packaged from the docs/ directory (markdown notes/reports are excluded).
 datas = collect_data_files("adv_tg", includes=["ui/assets/*", "utils/db/*.csv"])
+# CA certificates for the update notice (HTTPS to the GitHub API): the bundled OpenSSL does
+# not know where the host system keeps its own
+datas += collect_data_files("certifi")
 assets_dir = ROOT / "src" / "adv_tg" / "ui" / "assets"
 db_dir = ROOT / "src" / "adv_tg" / "utils" / "db"
 samples_dir = ROOT / "docs" / "samples"
@@ -88,10 +91,49 @@ a = Analysis(  # noqa: F821
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
+    # Linux: sounddevice must find the bundled PortAudio (see the hook)
+    runtime_hooks=[str(ROOT / "packaging" / "rthook_portaudio.py")],
     # SciPy is not used at all (filter design and filtering in pure numpy): never bundle it.
     excludes=["matplotlib", "pytest", "pytestqt", "tkinter", "IPython", "scipy"],
     noarchive=False,
 )
+
+# 5. Linux: libraries that must come from the system, never from the build host.
+# PyInstaller bundles every shared library the build host resolves. These belong to the base
+# system of the machine that RUNS the application and break it when an older copy shadows them:
+#   - libstdc++ / libgcc_s: the system's OpenGL drivers (Mesa, LLVM) need the system's, newer
+#     ones; libgcc_s of the build host can also ask for a newer glibc than the target has.
+#   - libmvec: part of glibc, must match the system's libc.
+#   - libasound: finds its plugins (PipeWire / PulseAudio "default" device) and its
+#     configuration in distribution-specific paths.
+#   - glib: Qt's GTK platform theme loads the system's GTK, which needs the system's glib.
+#   - fontconfig / freetype / harfbuzz: read the system's font configuration and caches.
+#   - libX11 and friends: must match the system's libxcb (never bundled by PyInstaller).
+# The rpm and deb packages declare them as dependencies (packaging/linux); the AppImage
+# relies on them like every AppImage does (they are in the AppImage "excludelist").
+if sys.platform.startswith("linux"):
+    _SYSTEM_LIBS = (
+        "libstdc++.so",
+        "libgcc_s.so",
+        "libmvec.so",
+        "libasound.so",
+        "libglib-2.0.so",
+        "libgio-2.0.so",
+        "libgobject-2.0.so",
+        "libgmodule-2.0.so",
+        "libgthread-2.0.so",
+        "libfontconfig.so",
+        "libfreetype.so",
+        "libharfbuzz.so",
+        "libX11.so",
+        "libX11-xcb.so",
+        "libXau.so",
+        "libXext.so",
+    )
+    a.binaries = [
+        b for b in a.binaries if not Path(b[0]).name.startswith(_SYSTEM_LIBS)
+    ]
+
 pyz = PYZ(a.pure)  # noqa: F821
 
 exe = EXE(  # noqa: F821
@@ -103,7 +145,7 @@ exe = EXE(  # noqa: F821
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,  # UPX-packed DLLs trip antivirus heuristics and can break Qt plugins
     console=False,
     icon=exe_icon,
 )

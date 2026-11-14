@@ -1104,7 +1104,7 @@
 
         <div class="badge-status">
           <span class="pulse-dot"></span>
-          <span data-i18n="hero_status_badge">STATUS: V0.8.0 BETA · PURE NUMPY DSP · ZERO-SCIPY RUNTIME</span>
+          <span data-i18n="hero_status_badge">STATUS: V1.0.0 · PURE NUMPY DSP · ZERO-SCIPY RUNTIME</span>
         </div>
 
         <h1 class="hero-title">
@@ -1135,7 +1135,7 @@
           <!-- Primary Download button (No version text as requested) -->
           <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-primary" target="_blank" rel="noopener noreferrer">
             <span data-i18n="btn_download_latest">Download latest version</span>
-            <span class="btn-sub" data-i18n="btn_download_sub">macOS (.dmg) · Windows (.exe) · Linux · pip</span>
+            <span class="btn-sub" data-i18n="btn_download_sub">macOS (.dmg) · Windows (.exe) · Linux (.AppImage · .deb · .rpm)</span>
           </a>
 
 
@@ -1556,7 +1556,7 @@
 
             <!-- Milestone 3 -->
             <div class="roadmap-item">
-              <span class="roadmap-status status-active" data-i18n="road_m3_status">Diagnostics · Beta v0.8.0</span>
+              <span class="roadmap-status status-active" data-i18n="road_m3_status">Diagnostics · v1.0.0</span>
               <h3 class="roadmap-title" data-i18n="road_m3_title">Long-Term Spectral Analysis</h3>
               <p class="roadmap-desc" data-i18n="road_m3_desc">
                 Teager-Kaiser nonlinear energy operator combined with FFT and Lomb-Scargle periodograms to diagnose
@@ -1615,7 +1615,7 @@
               </div>
               <div class="terminal-code"><span class="comment"># 1. Download .dmg from Releases</span>
 <span class="comment"># 2. Drag Advanced Timegrapher to /Applications</span>
-<span class="comment"># 3. For unsigned beta Gatekeeper notice:</span>
+<span class="comment"># 3. For the unsigned-app Gatekeeper notice:</span>
 <span class="cmd">xattr -cr /Applications/Advanced\ Timegrapher.app</span></div>
             </div>
             <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-secondary" style="width: 100%; text-align: center;" data-i18n="btn_dl_mac">Download .dmg</a>
@@ -1625,9 +1625,9 @@
           <div class="spec-card">
             <div>
               <div class="card-layer-tag">Windows 10 / 11 (64-bit)</div>
-              <h3 class="card-title" data-i18n="inst_win_title">Installer `.exe` / Inno Setup</h3>
+              <h3 class="card-title" data-i18n="inst_win_title">Installer `.exe`</h3>
               <p class="card-desc" data-i18n="inst_win_desc">
-                Setup wizard or portable `.zip` binary with WASAPI / MME PortAudio low-latency drivers.
+                Setup wizard with everything included (WASAPI / MME PortAudio drivers); opens from the Start menu.
               </p>
             </div>
             <div class="terminal-box">
@@ -1637,9 +1637,9 @@
                 <span class="term-btn term-green"></span>
                 <span style="color: var(--text-dim); font-size: 0.75rem; margin-left: 0.5rem;">PowerShell</span>
               </div>
-              <div class="terminal-code"><span class="comment"># Extract .zip or run adv-tg-setup.exe</span>
+              <div class="terminal-code"><span class="comment"># Double-click the installer, or run it silently:</span>
 <span class="comment"># On Windows SmartScreen warning: "More info" -> "Run anyway"</span>
-<span class="cmd">.\adv-tg.exe</span></div>
+<span class="cmd">.\adv-tg-&lt;version&gt;-windows-x64-setup.exe /VERYSILENT</span></div>
             </div>
             <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-secondary" style="width: 100%; text-align: center;" data-i18n="btn_dl_win">Download Windows .exe</a>
           </div>
@@ -1648,9 +1648,9 @@
           <div class="spec-card">
             <div>
               <div class="card-layer-tag">Linux & Pure Python Pip</div>
-              <h3 class="card-title" data-i18n="inst_lin_title">Pip or RPM Package</h3>
+              <h3 class="card-title" data-i18n="inst_lin_title">AppImage, .deb or .rpm</h3>
               <p class="card-desc" data-i18n="inst_lin_desc">
-                Standard install on any modern distribution (Debian, Ubuntu, Fedora, Arch) with Python ≥ 3.12.
+                Self-contained packages for Debian/Ubuntu (.deb), Fedora/RHEL (.rpm) and any other distribution (AppImage). PortAudio included.
               </p>
             </div>
             <div class="terminal-box">
@@ -1660,11 +1660,12 @@
                 <span class="term-btn term-green"></span>
                 <span style="color: var(--text-dim); font-size: 0.75rem; margin-left: 0.5rem;">Bash</span>
               </div>
-              <div class="terminal-code"><span class="comment"># Install native PortAudio dependency</span>
-<span class="cmd">sudo apt install libportaudio2</span>
-<span class="comment"># Pure Python installation via pip</span>
-<span class="cmd">pip install advanced-timegrapher</span>
-<span class="cmd">adv-tg</span></div>
+              <div class="terminal-code"><span class="comment"># Debian / Ubuntu</span>
+<span class="cmd">sudo apt install ./adv-tg_*.deb</span>
+<span class="comment"># Fedora / RHEL</span>
+<span class="cmd">sudo dnf install ./adv-tg-*.rpm</span>
+<span class="comment"># Any distribution</span>
+<span class="cmd">chmod +x adv-tg-*.AppImage &amp;&amp; ./adv-tg-*.AppImage</span></div>
             </div>
             <a href="https://github.com/SPQR14/advanced_timegrapher/releases" class="btn-secondary" style="width: 100%; text-align: center;" data-i18n="btn_dl_lin">View Linux Packages</a>
           </div>
@@ -1769,14 +1770,14 @@
         nav_roadmap: "Roadmap",
         nav_downloads: "Downloads",
         btn_support_coffee: "Support the project",
-        hero_status_badge: "STATUS: V0.8.0 BETA · PURE NUMPY DSP · ZERO-SCIPY RUNTIME",
+        hero_status_badge: "STATUS: V1.0.0 · PURE NUMPY DSP · ZERO-SCIPY RUNTIME",
         hero_subtitle: "Modern Watch Escape Analyzer",
         hero_desc: "Non-invasive acoustic analyzer and modern software timegrapher for mechanical and quartz watches. Measures Rate (s/d), Beat Error (ms), and Amplitude (°) in real time through decoupled digital signal processing (DSP), with dynamic sound card clock drift calibration.",
         badge_license: "License:",
         badge_precision: "Precision:",
         badge_resolution: "Resolution:",
         btn_download_latest: "Download latest version",
-        btn_download_sub: "macOS (.dmg) · Windows (.exe) · Linux · pip",
+        btn_download_sub: "macOS (.dmg) · Windows (.exe) · Linux (.AppImage · .deb · .rpm)",
         btn_view_github: "View Code on GitHub",
         gui_window_title: "Advanced Timegrapher — Horological DSP Test Bench",
         gui_lbl_caliber: "Caliber:",
@@ -1865,7 +1866,7 @@
         road_m2_status: "Hardware Clock",
         road_m2_title: "GPS PPS & Hardware PLL/FLL",
         road_m2_desc: "Sub-microsecond synchronization using NEO-6M GPS 1-PPS pulses with a 4 kHz acoustic buzzer. Proportional-Integral (PI) NTP-style PLL/FLL loop to correct sound card crystal drift block-by-block.",
-        road_m3_status: "Diagnostics · Beta v0.8.0",
+        road_m3_status: "Diagnostics · v1.0.0",
         road_m3_title: "Long-Term Spectral Analysis",
         road_m3_desc: "Teager-Kaiser nonlinear energy operator combined with FFT and Lomb-Scargle periodograms to diagnose cyclical gear train defects (escape wheel eccentricity @ 2·Z·3600/BPH: 3.75 s at 28 800 A/h, 5 s at 21 600 A/h; fourth wheel @ 60 s).",
         road_m4_status: "Watchmaking Tools",
@@ -1877,11 +1878,11 @@
         inst_mac_title: "Universal `.dmg` Bundle",
         inst_mac_desc: "Native macOS bundle packaged with PyInstaller, bundled PortAudio, and Retina display support.",
         btn_dl_mac: "Download .dmg",
-        inst_win_title: "Installer `.exe` / Inno Setup",
-        inst_win_desc: "Setup wizard or portable `.zip` binary with WASAPI / MME PortAudio low-latency drivers.",
+        inst_win_title: "Installer `.exe`",
+        inst_win_desc: "Setup wizard with everything included (WASAPI / MME PortAudio drivers); opens from the Start menu.",
         btn_dl_win: "Download Windows .exe",
-        inst_lin_title: "Pip or RPM Package",
-        inst_lin_desc: "Standard install on any modern distribution (Debian, Ubuntu, Fedora, Arch) with Python ≥ 3.12.",
+        inst_lin_title: "AppImage, .deb or .rpm",
+        inst_lin_desc: "Self-contained packages for Debian/Ubuntu (.deb), Fedora/RHEL (.rpm) and any other distribution (AppImage). PortAudio included.",
         btn_dl_lin: "View Linux Packages",
         footer_intro: "Open-source software timegrapher and escape analyzer for precision watchmaking. Published under the GNU General Public License v3 with a modern real-time DSP core.",
         footer_domain: "Official Domain:",
@@ -1900,14 +1901,14 @@
         nav_roadmap: "Roadmap",
         nav_downloads: "Descargas",
         btn_support_coffee: "Apoyar el proyecto",
-        hero_status_badge: "ESTADO: V0.8.0 BETA · DSP EN NUMPY PURO · ZERO-SCIPY EN EJECUCIÓN",
+        hero_status_badge: "ESTADO: V1.0.0 · DSP EN NUMPY PURO · ZERO-SCIPY EN EJECUCIÓN",
         hero_subtitle: "Analizador Acústico de Escape Horológico",
         hero_desc: "Analizador acústico no invasivo y cronocomparador moderno por software para relojes mecánicos y de cuarzo. Mide en tiempo real la marcha (Rate en s/d), el error de batimiento (Beat Error en ms) y la amplitud (°) mediante procesamiento digital de señales (DSP) desacoplado, con calibración dinámica de deriva del reloj del ADC.",
         badge_license: "Licencia:",
         badge_precision: "Precisión:",
         badge_resolution: "Resolución:",
         btn_download_latest: "Descargar última versión",
-        btn_download_sub: "macOS (.dmg) · Windows (.exe) · Linux · pip",
+        btn_download_sub: "macOS (.dmg) · Windows (.exe) · Linux (.AppImage · .deb · .rpm)",
         btn_view_github: "Ver Código en GitHub",
         gui_window_title: "Advanced Timegrapher — Banco de Pruebas Horológico DSP",
         gui_lbl_caliber: "Calibre:",
@@ -1996,7 +1997,7 @@
         road_m2_status: "Reloj Hardware",
         road_m2_title: "GPS PPS & PLL/FLL por Hardware",
         road_m2_desc: "Sincronización sub-microsegundo mediante pulsos 1-PPS de GPS NEO-6M a 4 kHz. Bucle PI PLL/FLL al estilo NTP para corregir la deriva del cristal de audio bloque a bloque.",
-        road_m3_status: "Diagnóstico · Beta v0.8.0",
+        road_m3_status: "Diagnóstico · v1.0.0",
         road_m3_title: "Diagnóstico Espectral a Largo Plazo",
         road_m3_desc: "Operador de energía no lineal de Teager-Kaiser combinado con transformadas FFT y periodogramas Lomb-Scargle para diagnosticar defectos periódicos del rodaje (rueda de escape @ 2·Z·3600/BPH: 3.75 s a 28 800 A/h, 5 s a 21 600 A/h; rueda de segundos @ 60 s).",
         road_m4_status: "Herramientas de Taller",
@@ -2008,11 +2009,11 @@
         inst_mac_title: "Instalador `.dmg` Universal",
         inst_mac_desc: "Paquete universal empaquetado con PyInstaller, PortAudio nativo incluido y soporte para pantallas Retina.",
         btn_dl_mac: "Descargar .dmg",
-        inst_win_title: "Instalador `.exe` / Inno Setup",
-        inst_win_desc: "Instalador guiado o binario portable en `.zip` con controladores PortAudio WASAPI / MME de baja latencia.",
+        inst_win_title: "Instalador `.exe`",
+        inst_win_desc: "Asistente de instalación con todo incluido (controladores PortAudio WASAPI / MME); se abre desde el menú Inicio.",
         btn_dl_win: "Descargar Windows .exe",
-        inst_lin_title: "Pip o Paquete RPM",
-        inst_lin_desc: "Instalación estándar en cualquier distribución Linux moderna (Debian, Ubuntu, Fedora, Arch) con Python ≥ 3.12.",
+        inst_lin_title: "AppImage, .deb o .rpm",
+        inst_lin_desc: "Paquetes autocontenidos para Debian/Ubuntu (.deb), Fedora/RHEL (.rpm) y cualquier otra distribución (AppImage). PortAudio incluido.",
         btn_dl_lin: "Ver Paquetes Linux",
         footer_intro: "Software timegrapher y analizador de escape horológico de código abierto para relojería de alta precisión. Distribuido bajo licencia GNU GPLv3 con motor DSP en tiempo real.",
         footer_domain: "Dominio Oficial:",
