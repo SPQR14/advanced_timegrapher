@@ -255,6 +255,46 @@ def test_tic_tac_amplitude_mismatch_warns() -> None:
     assert m.confidence < m_ok.confidence
 
 
+def _template_with_drop(parity: int, amplitude: float, rise_ms: float) -> ParityTemplate:
+    """Template whose drop climbs from its onset to the maximum in ``rise_ms``."""
+    tl = lift_time_s(amplitude, 52.0, BPH) * FS
+    onset = 100.0 + tl
+    a, n = int(round(onset)), max(int(rise_ms * 1e-3 * FS), 1)
+    env = np.full(a + int(0.02 * FS), 0.02)
+    env[a : a + n] = np.linspace(0.05, 1.0, n)
+    env[a + n :] = np.linspace(1.0, 0.1, env.size - a - n)
+    return ParityTemplate(parity, 24, env, onset_p1=100.0, onset_p3=onset, onset_ref=onset)
+
+
+def test_amplitude_comes_from_the_parity_with_the_sharp_drop() -> None:
+    """The balance has one amplitude. A tic whose drop builds up over milliseconds has no
+    definite onset (Seiko 4R: 351° against the 292° of the tac): the tac alone is used."""
+    from adv_tg.core.metrics import drop_rise_samples, sharper_drop_parity
+
+    cfg = _cfg()
+    smeared_tic = _template_with_drop(0, 350.0, rise_ms=3.0)
+    sharp_tic = _template_with_drop(0, 350.0, rise_ms=0.4)
+    tac = _template_with_drop(1, 290.0, rise_ms=0.4)
+    assert drop_rise_samples(smeared_tic, FS) == pytest.approx(0.003 * FS, abs=2)
+    assert math.isnan(drop_rise_samples(None, FS))
+    assert sharper_drop_parity((smeared_tic, tac), cfg) == 1
+    assert sharper_drop_parity((sharp_tic, tac), cfg) is None  # neither is clearly sharper
+
+    m = compute_metrics(_beats(), (smeared_tic, tac), cfg)
+    assert m.amplitude_parity == "tac"
+    assert m.amplitude_deg == pytest.approx(m.amplitude_tac_deg)
+    assert m.amplitude_deg == pytest.approx(290.0, abs=0.5)
+    assert m.amplitude_tic_deg == pytest.approx(350.0, abs=0.5)  # still reported
+    assert any(w.startswith("amplitud tomada del tac") for w in m.warnings)
+    assert not any("tic y tac distinta" in w for w in m.warnings)
+
+    mean = compute_metrics(_beats(), (sharp_tic, tac), cfg)  # no sharper drop: the mean
+    assert mean.amplitude_parity == "both"
+    assert mean.amplitude_deg == pytest.approx(320.0, abs=0.5)
+    assert any("tic y tac distinta" in w for w in mean.warnings)
+    assert m.confidence > mean.confidence
+
+
 def test_quartz_reports_only_the_rate() -> None:
     m = compute_metrics(_beats(), (None, None), _cfg(quartz=True))
     assert math.isfinite(m.rate_s_per_day)
@@ -375,6 +415,14 @@ def test_tracker_span_is_validated() -> None:
         MetricsTracker(_cfg(), span_s=0.0)
 
 
+def test_trend_change_threshold_is_validated() -> None:
+    assert _cfg().trend_min_change_s_per_day == 7.0
+    with pytest.raises(ValueError):
+        _cfg(trend_min_change_s_per_day=-1.0)
+    with pytest.raises(ValueError):
+        _cfg(drop_sharpness_ratio=1.0)
+
+
 def test_trend_flag_needs_a_meaningful_size() -> None:
     """A significant but tiny trend (a card warming up, on a very precise take) is no warning."""
     from adv_tg.core.metrics import compute_metrics
@@ -392,7 +440,11 @@ def test_trend_flag_needs_a_meaningful_size() -> None:
         for i, v in zip(k, t, strict=True)
     ]  # fmt: skip
     loose = compute_metrics(
-        beats, (None, None), MetricsConfig(fs, bph, quartz=True, trend_min_s_per_day_per_min=0.0)
+        beats,
+        (None, None),
+        MetricsConfig(
+            fs, bph, quartz=True, trend_min_s_per_day_per_min=0.0, trend_min_change_s_per_day=0.0
+        ),
     )
     strict = compute_metrics(beats, (None, None), MetricsConfig(fs, bph, quartz=True))
     assert loose.rate_trend_flag  # significant...

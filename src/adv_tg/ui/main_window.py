@@ -380,9 +380,13 @@ class MainWin(QMainWindow):
 
     COSC_MIN_SPD: float = -4.0
     COSC_MAX_SPD: float = +6.0
-    #: Green horizontal guides of the paper tape at the COSC figures (-4 / +6), in the units of
-    #: its axis (ms of offset): a visual reference, fixed whatever the trace does.
-    TAPE_GUIDES_MS: tuple[float, float] = (COSC_MIN_SPD, COSC_MAX_SPD)
+    #: Green guides of the paper tape: the slopes of the COSC limits (-4 / +6 s/d), drawn from
+    #: where the trace is at the left edge of the view. On a paper tape the rate is the SLOPE
+    #: of the trace (1 s/d = 1/86.4 ms per second), so a limit in s/d is a slanted line: the
+    #: trace stays between the two guides while its rate is inside the limits, and crosses
+    #: one when it is not. (They used to be horizontal lines at -4 and +6 *ms*, which a
+    #: +7 s/d watch does not reach in a minute: it climbs 4.9 ms.)
+    TAPE_GUIDES_SPD: tuple[float, float] = (COSC_MIN_SPD, COSC_MAX_SPD)
     # Real engine: figures whose timing confidence is below CONFIDENCE_HIDE are not shown;
     # below CONFIDENCE_DIM they are greyed out (the amplitude also when the overall
     # confidence, which includes the tic/tac mismatch, is below it). Real takes range 0.23
@@ -455,6 +459,7 @@ class MainWin(QMainWindow):
         # origin of the trace: mid point of the first tic and tac (the rows start around 0)
         self._tape_y0: float | None = None
         self._osc_span_ms: float | None = None
+        self._wave_span: tuple[float, float] | None = None
         self._silence_since: float | None = None
         self._silence_warned: bool = False
         self._osc_rng = np.random.default_rng(2026)
@@ -496,6 +501,7 @@ class MainWin(QMainWindow):
 
         self.retranslate_ui()
         self._refresh_global_stats_table()
+        self._update_tape_guides()
         logger.info(
             "MainWin initialized with default caliber='%s', bph=%s, lift_angle=%.1f",
             self.cmb_caliber.currentText(),
@@ -1394,7 +1400,8 @@ class MainWin(QMainWindow):
             self._on_paper_tape_manual_range
         )
 
-        # Zero-deviation reference: solid, thicker and near-white, above the grid and the COSC
+        # Reference of a watch with no rate error (0 s/d): a horizontal line from the same
+        # point as the COSC guides. Solid, thicker and near-white, above the grid and the
         # guides but below the beat dots
         self.tape_zero_line = pg.InfiniteLine(
             pos=0.0, angle=0, pen=pg.mkPen(color=(225, 228, 232, 210), width=2.2)
@@ -1402,19 +1409,24 @@ class MainWin(QMainWindow):
         self.tape_zero_line.setZValue(-1)
         self.paper_tape_plot.addItem(self.tape_zero_line)
 
-        # Green horizontal guides at -4 and +6 (TAPE_GUIDES_MS), fixed in the data: the
-        # trace may leave them
+        # Green guides with the slopes of -4 and +6 s/d (TAPE_GUIDES_SPD), from the trace at
+        # the left edge of the view to its right edge (_update_tape_guides)
         guide_pen = pg.mkPen(color=(0, 230, 118, 170), width=1.2)
         self.cosc_lower_line, self.cosc_upper_line = (
-            pg.InfiniteLine(
-                pos=v, angle=0, pen=guide_pen, label=f"{v:+g}",
-                labelOpts={"position": 0.99, "color": (0, 230, 118), "anchors": [(1, 1), (1, 1)]},
-            )
-            for v in self.TAPE_GUIDES_MS
-        )  # fmt: skip
-        for guide in (self.cosc_lower_line, self.cosc_upper_line):
+            pg.PlotCurveItem(pen=guide_pen) for _ in self.TAPE_GUIDES_SPD
+        )
+        self.cosc_lower_label, self.cosc_upper_label = (
+            pg.TextItem(f"{v:+g} s/d", color=(0, 230, 118), anchor=(1.0, 1.0 if v > 0 else 0.0))
+            for v in self.TAPE_GUIDES_SPD
+        )
+        for guide in (
+            self.cosc_lower_line, self.cosc_upper_line,
+            self.cosc_lower_label, self.cosc_upper_label,
+        ):  # fmt: skip
             guide.setZValue(-1)
-            self.paper_tape_plot.addItem(guide)
+            # never part of the auto-range: the guides follow the view, not the reverse
+            self.paper_tape_plot.addItem(guide, ignoreBounds=True)
+        self._tape_guide_anchor: tuple[float, float] = (0.0, 0.0)
 
         # Paper tape: one dot per beat, tic (even k) and tac (odd k) rows. Each row is timed
         # at the point that times its parity in the rate (the unlocking front where it is
@@ -2104,6 +2116,41 @@ class MainWin(QMainWindow):
         half_span = max(self._tape_min_half_span(), 0.6 * (y_max - y_min) + 0.2)
         return y_center - half_span, y_center + half_span
 
+    def _tape_mid_at(self, x: float) -> float:
+        """Mid line of the drawn tic and tac rows at time ``x`` (0 without data)."""
+        xe, ye, xo, yo = self._tape_rows()
+        mids: list[float] = []
+        for xs, ys in ((xe, ye), (xo, yo)):
+            if not xs.size:
+                continue
+            i = int(np.searchsorted(xs, x))
+            if i <= 0 or i >= xs.size:  # outside the row: its nearest end
+                mids.append(float(ys[min(max(i, 0), xs.size - 1)]))
+            else:
+                w = (x - xs[i - 1]) / ((xs[i] - xs[i - 1]) or 1.0)
+                mids.append(float(ys[i - 1] + w * (ys[i] - ys[i - 1])))
+        return sum(mids) / len(mids) if mids else 0.0
+
+    def _update_tape_guides(self) -> None:
+        """Draw the 0 s/d line and the COSC slopes from the trace at the left of the view.
+
+        Each guide ends, at the right edge, where a watch running at that rate would be after
+        the visible time: a trace that ends between the green guides has run inside the
+        limits over what the view shows.
+        """
+        x_lo, x_hi = self._tape_x_window()
+        y_lo = self._tape_mid_at(x_lo)
+        self._tape_guide_anchor = (x_lo, y_lo)
+        self.tape_zero_line.setValue(y_lo)
+        guides = (
+            (self.cosc_lower_line, self.cosc_lower_label),
+            (self.cosc_upper_line, self.cosc_upper_label),
+        )
+        for (line, label), spd in zip(guides, self.TAPE_GUIDES_SPD, strict=True):
+            y_hi = y_lo + spd * (x_hi - x_lo) / 86.4
+            line.setData(np.array([x_lo, x_hi]), np.array([y_lo, y_hi]))
+            label.setPos(x_hi, y_hi)
+
     def _on_paper_tape_manual_range(self, *_args: object) -> None:
         """The user panned or zoomed the paper tape: stop autoscaling until re-centred."""
         if self._tape_autoscale:
@@ -2119,6 +2166,7 @@ class MainWin(QMainWindow):
             return
         x_lo, x_hi = self._tape_x_window()
         self.paper_tape_plot.setXRange(x_lo, x_hi, padding=0.0)
+        self._update_tape_guides()
         target = self._paper_tape_target_range()
         if target is None:
             return
@@ -2137,6 +2185,7 @@ class MainWin(QMainWindow):
         self._tape_autoscale = True
         x_lo, x_hi = self._tape_x_window()
         self.paper_tape_plot.setXRange(x_lo, x_hi, padding=0.0)
+        self._update_tape_guides()
         target = self._paper_tape_target_range()
         if target is None:
             half = self._tape_min_half_span()
@@ -3229,6 +3278,7 @@ class MainWin(QMainWindow):
         self._mock_tape_last = None
         half = self._tape_min_half_span()
         self.paper_tape_plot.setYRange(-half, half, padding=0.0)
+        self._update_tape_guides()
 
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
@@ -3655,6 +3705,13 @@ class MainWin(QMainWindow):
         """Slot updating the real-time acoustic waveform curve from the engine."""
         t0 = time.perf_counter()  # slot performance (SlotProfiler)
         if time_axis is not None and waveform is not None and len(time_axis) > 0:
+            # Fixed X range, set again only when the window itself changes: with auto-range
+            # on, every frame made the view box repaint the whole plot (grid and axes), even
+            # when the range it computed was the same.
+            span = (float(time_axis[0]), float(time_axis[-1]))
+            if span != self._wave_span and span[1] > span[0]:
+                self._wave_span = span
+                self.waveform_plot.setXRange(*span)
             self.audio_waveform_curve.setData(time_axis, waveform)
         self._perf_waveform.record(t0)
 
