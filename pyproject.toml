@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "advanced-timegrapher"
-version = "0.8.0"
+version = "1.0.0"
 description = "Software timegrapher for mechanical watches (PyQt6 GUI; measurement core under reconstruction)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,6 +19,7 @@ dependencies = [
     "PyQt6>=6.6",
     "pyqtgraph>=0.13",
     "PyOpenGL",
+    "certifi",  # CA certificates for the update notice (packaged builds have no system store)
 ]
 
 [project.optional-dependencies]

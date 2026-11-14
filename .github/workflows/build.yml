@@ -1,5 +1,13 @@
 name: Build & Package Release
 
+# One installable asset per platform, each verified by installing it on a clean system:
+#   Linux    adv-tg-<version>-linux-x86_64.AppImage   any distribution (glibc >= 2.34)
+#            adv-tg-<version>-1.x86_64.rpm            Fedora, RHEL / Alma / Rocky, openSUSE
+#            adv-tg_<version>_amd64.deb               Debian, Ubuntu and derivatives
+#   macOS    adv-tg-<version>-macos-arm64.dmg         Apple Silicon
+#   Windows  adv-tg-<version>-windows-x64-setup.exe   Windows 10 / 11 x64
+# A tag v<version> (or v<version>-rc1, -beta...) publishes exactly those five files plus SHA256SUMS.txt.
+
 on:
   push:
     branches: [ "main", "release/*" ]
@@ -11,9 +19,45 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
+  meta:
+    name: Version
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read the version and check it against the tag
+        id: version
+        run: |
+          version="$(grep -E '^__version__\s*=' src/adv_tg/__init__.py | cut -d'"' -f2)"
+          project="$(grep -E '^version\s*=' pyproject.toml | head -n 1 | cut -d'"' -f2)"
+          echo "adv_tg.__version__ = $version, pyproject.toml = $project"
+          if [ -z "$version" ] || [ "$version" != "$project" ]; then
+            echo "::error::src/adv_tg/__init__.py and pyproject.toml disagree on the version"
+            exit 1
+          fi
+          # v1.0.0, or with a pre-release suffix: v1.0.0-rc1, v1.0.0-beta
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            case "$GITHUB_REF_NAME" in
+              "v$version" | "v$version"[-.]*) ;;
+              *)
+                echo "::error::tag $GITHUB_REF_NAME does not match version $version (expected v$version or v$version-<suffix>)"
+                exit 1
+                ;;
+            esac
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   python-dist:
-    name: Build pure-Python wheel & sdist
+    name: Check pure-Python wheel & sdist
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -25,6 +69,7 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Not a release asset: only checks that the project still builds as a pure wheel
       - name: Build wheel and sdist
         run: |
           python -m pip install --upgrade pip build
@@ -32,34 +77,169 @@ jobs:
           # The project is pure Python: the wheel must be py3-none-any (no compiled code)
           ls dist/*-py3-none-any.whl
 
-      - name: Upload Python distributions
+  # ------------------------------------------------------------------ Linux
+  linux:
+    name: Linux (AppImage, rpm, deb)
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Built on Enterprise Linux 9 (glibc 2.34): a bundle made on the newest Ubuntu does not
+    # start on RHEL 9, Debian 12 or Ubuntu 22.04. Everything built here runs on those and newer.
+    container: almalinux:9
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Install build tools and the libraries to bundle
+        run: |
+          dnf -y install epel-release
+          dnf -y install git tar findutils which file binutils curl-minimal \
+            python3.12 python3.12-pip rpm-build dpkg desktop-file-utils \
+            portaudio alsa-lib libxkbcommon libxkbcommon-x11 xcb-util-cursor xcb-util-wm \
+            xcb-util-keysyms xcb-util-image xcb-util-renderutil mesa-libGL mesa-libEGL \
+            fontconfig freetype dbus-libs libwayland-client libwayland-cursor libwayland-egl \
+            libX11-xcb libxcb
+
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Python Dependencies
+        run: |
+          python3.12 -m venv /opt/venv
+          /opt/venv/bin/pip install --upgrade pip
+          /opt/venv/bin/pip install pyinstaller .
+
+      - name: Build with PyInstaller
+        run: /opt/venv/bin/pyinstaller packaging/adv-tg.spec --noconfirm
+
+      - name: Verify the bundle contents
+        run: |
+          if find dist -iname 'scipy*' | grep -q .; then
+            echo "::error::SciPy was bundled"; exit 1
+          fi
+          test -f dist/adv-tg/_internal/libportaudio.so.2
+          # base-system libraries must not be bundled (section 5 of adv-tg.spec)
+          if ls dist/adv-tg/_internal | grep -E '^(libstdc\+\+|libgcc_s|libasound|libglib-2\.0)\.so'; then
+            echo "::error::a base-system library was bundled"; exit 1
+          fi
+
+      - name: Smoke Test Binary
+        run: |
+          ./dist/adv-tg/adv-tg --version
+          ./dist/adv-tg/adv-tg --smoke-test
+
+      - name: Build rpm, deb and AppImage
+        run: |
+          ./packaging/linux/build_rpm.sh "$VERSION"
+          ./packaging/linux/build_deb.sh "$VERSION"
+          ./packaging/linux/build_appimage.sh "$VERSION"
+          ls -la dist
+
+      - name: Upload AppImage
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: python-dist
-          path: dist/*
+          name: release-linux-appimage
+          path: dist/adv-tg-${{ env.VERSION }}-linux-x86_64.AppImage
           if-no-files-found: error
+          compression-level: 0
 
-  build:
-    name: Build App on ${{ matrix.os }} (${{ matrix.arch }})
-    if: github.actor != 'dependabot[bot]'
-    runs-on: ${{ matrix.os }}
+      - name: Upload rpm
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux-rpm
+          path: dist/adv-tg-${{ env.VERSION }}-1.x86_64.rpm
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload deb
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux-deb
+          path: dist/adv-tg_${{ env.VERSION }}_amd64.deb
+          if-no-files-found: error
+          compression-level: 0
+
+  # Installs each Linux package on clean distributions, letting the package manager resolve
+  # the declared dependencies, and runs the application from the installed location.
+  linux-verify:
+    name: Verify ${{ matrix.kind }} on ${{ matrix.image }}
+    needs: linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: ${{ matrix.image }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            platform: linux
-            arch: x86_64
-            artifact_name: adv-tg-linux-x86_64.tar.gz
-          - os: macos-latest
-            platform: macos
-            arch: arm64
-            artifact_name: adv-tg-macos-arm64.zip
-          - os: windows-latest
-            platform: windows
-            arch: x64
-            artifact_name: adv-tg-windows-x64.zip
+          - { image: "debian:12", kind: deb }
+          - { image: "ubuntu:22.04", kind: deb }
+          - { image: "ubuntu:24.04", kind: deb }
+          - { image: "rockylinux:9", kind: rpm }
+          - { image: "fedora:latest", kind: rpm }
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-linux-${{ matrix.kind }}
+          path: pkg
 
+      - name: Download AppImage
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-linux-appimage
+          path: appimage
+
+      - name: Install the deb (dependencies resolved by apt)
+        if: matrix.kind == 'deb'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ./pkg/*.deb
+
+      - name: Install the rpm (dependencies resolved by dnf)
+        if: matrix.kind == 'rpm'
+        run: dnf -y install ./pkg/*.rpm
+
+      - name: Smoke test the installed application (offscreen)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          adv-tg --version
+          adv-tg --smoke-test
+
+      - name: Install a virtual X server
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          if [ "${{ matrix.kind }}" = deb ]; then
+            apt-get install -y --no-install-recommends xvfb
+          else
+            dnf -y install xorg-x11-server-Xvfb
+          fi
+
+      - name: Smoke test on X11 (installed application and AppImage)
+        env:
+          QT_QPA_PLATFORM: xcb
+          DISPLAY: ":99"
+        run: |
+          Xvfb :99 -screen 0 1600x1000x24 >/dev/null 2>&1 &
+          sleep 3
+          adv-tg --smoke-test
+          chmod +x appimage/*.AppImage
+          # containers have no FUSE: the AppImage unpacks itself to run
+          ./appimage/*.AppImage --appimage-extract-and-run --version
+          ./appimage/*.AppImage --appimage-extract-and-run --smoke-test
+
+  # ------------------------------------------------------------------ macOS
+  macos:
+    name: macOS (dmg)
+    needs: meta
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      QT_QPA_PLATFORM: offscreen
     steps:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -70,128 +250,164 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install System Dependencies (Linux)
-        if: matrix.platform == 'linux'
+      - name: Install Python Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libasound2t64 libegl1 libgl1 rpm
+          python -m pip install --upgrade pip
+          pip install pyinstaller .
+
+      - name: Build with PyInstaller
+        run: pyinstaller packaging/adv-tg.spec --noconfirm
+
+      - name: Verify SciPy is excluded from the bundle
+        run: |
+          if find dist -iname 'scipy*' | grep -q .; then
+            echo "::error::SciPy was bundled"; exit 1
+          fi
+
+      - name: Smoke Test Binary
+        run: |
+          "./dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --version
+          "./dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --smoke-test
+
+      - name: Build the DMG
+        run: |
+          ./packaging/macos/build_dmg.sh "dist/Advanced Timegrapher.app" \
+            "dist/adv-tg-${VERSION}-macos-arm64.dmg"
+
+      - name: Smoke test the application inside the DMG
+        run: |
+          mount="$(mktemp -d)"
+          hdiutil attach "dist/adv-tg-${VERSION}-macos-arm64.dmg" -nobrowse -readonly -mountpoint "$mount"
+          test -L "$mount/Applications"
+          # copied out like a user dragging it to /Applications
+          cp -R "$mount/Advanced Timegrapher.app" "$RUNNER_TEMP/"
+          hdiutil detach "$mount"
+          "$RUNNER_TEMP/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --version
+          "$RUNNER_TEMP/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --smoke-test
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-macos-dmg
+          path: dist/adv-tg-${{ env.VERSION }}-macos-arm64.dmg
+          if-no-files-found: error
+          compression-level: 0
+
+  # ------------------------------------------------------------------ Windows
+  windows:
+    name: Windows (setup.exe)
+    needs: meta
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      QT_QPA_PLATFORM: offscreen
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
 
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install .
+          pip install pyinstaller .
 
       - name: Build with PyInstaller
-        run: |
-          pyinstaller packaging/adv-tg.spec --noconfirm
+        run: pyinstaller packaging/adv-tg.spec --noconfirm
 
-      - name: Verify SciPy is excluded from binary bundle
-        shell: bash
+      - name: Verify SciPy is excluded from the bundle
         run: |
-          python -c "import glob, sys; f = glob.glob('dist/**/scipy*', recursive=True); sys.exit('SciPy was bundled in dist: ' + str(f)) if f else print('OK: No SciPy found in dist bundle')"
+          $found = Get-ChildItem dist -Recurse -Filter "scipy*"
+          if ($found) { throw "SciPy was bundled: $found" }
 
-      - name: Smoke Test Binary (Linux)
-        if: matrix.platform == 'linux'
+      # adv-tg.exe is a windowed program: PowerShell only waits for it, and only sees its
+      # exit code, through Start-Process -Wait
+      - name: Smoke Test Binary
         run: |
-          xvfb-run -a ./dist/adv-tg/adv-tg --version
-          xvfb-run -a ./dist/adv-tg/adv-tg --smoke-test
+          $p = Start-Process -FilePath "dist\adv-tg\adv-tg.exe" -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "smoke test failed with exit code $($p.ExitCode)" }
 
-      - name: Smoke Test Binary (macOS)
-        if: matrix.platform == 'macos'
+      - name: Build the installer (Inno Setup)
         run: |
-          export QT_QPA_PLATFORM=offscreen
-          "./dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --version
-          "./dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --smoke-test
-          ./dist/adv-tg/adv-tg --smoke-test
-
-      - name: Smoke Test Binary (Windows)
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          $env:QT_QPA_PLATFORM = "offscreen"
-          .\dist\adv-tg\adv-tg.exe --version
-          .\dist\adv-tg\adv-tg.exe --smoke-test
-
-      - name: Package Binaries (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          tar -czvf ${{ matrix.artifact_name }} -C dist adv-tg
-          chmod +x packaging/linux/build_rpm.sh
-          ./packaging/linux/build_rpm.sh
-
-      - name: Package Binaries (macOS)
-        if: matrix.platform == 'macos'
-        run: |
-          cd dist && zip -r -y ../${{ matrix.artifact_name }} "Advanced Timegrapher.app"
-          cd ..
-          chmod +x packaging/macos/build_dmg.sh
-          ./packaging/macos/build_dmg.sh "dist/Advanced Timegrapher.app" "dist/adv-tg-macos-arm64.dmg"
-
-      - name: Package Binaries (Windows)
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path dist\adv-tg -DestinationPath ${{ matrix.artifact_name }}
-
-      - name: Build Windows Installer (Inno Setup)
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          choco install innosetup --no-progress
-          $version = python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])"
-          if (Get-Command iscc -ErrorAction SilentlyContinue) {
-              iscc "/DMyAppVersion=$version" packaging\windows\installer.iss
-          } elseif (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe") {
-              & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging\windows\installer.iss
-          } else {
-              throw "Inno Setup compiler (ISCC) not found"
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed" }
           }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler (ISCC) not found" }
+          & $iscc "/DMyAppVersion=$env:VERSION" packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
-      - name: Upload Artifact
+      # Silent per-user installation into an explicit folder, then the installed program is
+      # run and uninstalled
+      - name: Install the setup and smoke test the installed application
+        run: |
+          $setup = (Resolve-Path "dist\adv-tg-$env:VERSION-windows-x64-setup.exe").Path
+          $dir = Join-Path $env:RUNNER_TEMP "adv-tg-install"
+          $log = Join-Path $env:RUNNER_TEMP "setup-install.log"
+          $p = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList `
+            "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /DIR=`"$dir`" /LOG=`"$log`""
+          if ($p.ExitCode -ne 0) { Get-Content $log -Tail 60; throw "setup failed with exit code $($p.ExitCode)" }
+          $exe = Join-Path $dir "adv-tg.exe"
+          if (-not (Test-Path $exe)) { Get-Content $log -Tail 60; throw "$exe was not installed" }
+          $lnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Advanced Timegrapher\Advanced Timegrapher.lnk"
+          if (-not (Test-Path $lnk)) { throw "Start Menu shortcut was not created" }
+          $p = Start-Process -FilePath $exe -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installed application: smoke test failed with exit code $($p.ExitCode)" }
+          $p = Start-Process -FilePath (Join-Path $dir "unins000.exe") -Wait -PassThru -ArgumentList `
+            "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+          if ($p.ExitCode -ne 0) { throw "uninstall failed with exit code $($p.ExitCode)" }
+          # the uninstaller finishes from a temporary copy of itself
+          for ($i = 0; $i -lt 30 -and (Test-Path $exe); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path $exe) { throw "uninstall left $exe behind" }
+
+      - name: Upload installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
+          name: release-windows-setup
+          path: dist/adv-tg-${{ env.VERSION }}-windows-x64-setup.exe
           if-no-files-found: error
+          compression-level: 0
 
-      - name: Upload macOS DMG Artifact
-        if: matrix.platform == 'macos'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: adv-tg-macos-arm64-dmg
-          path: dist/*.dmg
-          if-no-files-found: error
-
-      - name: Upload Windows Installer Artifact
-        if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: adv-tg-windows-x64-installer
-          path: dist/*setup.exe
-          if-no-files-found: error
-
-      - name: Upload Linux RPM Artifact
-        if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: adv-tg-linux-rpm
-          path: dist/*.rpm
-          if-no-files-found: error
-
+  # ------------------------------------------------------------------ Release
   release:
     name: Publish Release
-    needs: [python-dist, build]
+    needs: [meta, python-dist, linux, linux-verify, macos, windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - name: Download Artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: release-*
           path: release-artifacts
           merge-multiple: true
+
+      # One asset per platform and nothing else
+      - name: Check the set of assets
+        working-directory: release-artifacts
+        run: |
+          expected="adv-tg-${VERSION}-1.x86_64.rpm
+          adv-tg-${VERSION}-linux-x86_64.AppImage
+          adv-tg-${VERSION}-macos-arm64.dmg
+          adv-tg-${VERSION}-windows-x64-setup.exe
+          adv-tg_${VERSION}_amd64.deb"
+          found="$(ls -1 | LC_ALL=C sort)"
+          if [ "$found" != "$(echo "$expected" | sed 's/^ *//' | LC_ALL=C sort)" ]; then
+            echo "::error::unexpected release assets:"; echo "$found"; exit 1
+          fi
 
       # Users verify downloads with: sha256sum -c SHA256SUMS.txt --ignore-missing
       - name: Generate SHA-256 checksums

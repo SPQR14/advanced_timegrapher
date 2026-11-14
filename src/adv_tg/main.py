@@ -175,7 +175,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                 window.close()
                 return 1
 
-            # 3. Short measurement test without audio hardware (real sample or synthetic)
+            # 3. A packaged build must carry a PortAudio that loads: without it the
+            #    application starts but has no audio input (only the synthetic source)
+            if getattr(sys, "frozen", False):
+                try:
+                    import sounddevice
+
+                    logger.info("Smoke test PortAudio: %s", sounddevice.get_portaudio_version()[1])
+                except Exception as exc:
+                    logger.critical(
+                        "Smoke test failed: PortAudio cannot be loaded: %s", exc, exc_info=True
+                    )
+                    window.close()
+                    return 1
+
+            # 4. A packaged build must be able to verify HTTPS certificates (update notice):
+            #    its OpenSSL does not know where the host system keeps them
+            if getattr(sys, "frozen", False):
+                try:
+                    from adv_tg.utils.update_check import ssl_context
+
+                    n_ca = ssl_context().cert_store_stats().get("x509_ca", 0)
+                    if n_ca <= 0:
+                        raise RuntimeError("no CA certificates were loaded")
+                    logger.info("Smoke test TLS: %d CA certificates", n_ca)
+                except Exception as exc:
+                    logger.critical(
+                        "Smoke test failed: HTTPS certificates unavailable: %s", exc, exc_info=True
+                    )
+                    window.close()
+                    return 1
+
+            # 5. Short measurement test without audio hardware (real sample or synthetic)
             try:
                 import math
 
@@ -227,7 +258,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 window.close()
                 return 1
 
-            # 4. Numbers against the GPS PPS reference shipped with the program: the PPS
+            # 6. Numbers against the GPS PPS reference shipped with the program: the PPS
             #    detector and the watch engine (corrected with the tagged card error) must agree
             try:
                 from adv_tg.tools.reference_check import REFERENCE_NAME, check_reference
@@ -251,6 +282,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             logger.info("Smoke test passed: application initialized and DSP verified successfully")
             window.close()
             return 0
+
+    # Tell (never install) when a newer release exists: once a day, can be turned off in Help
+    try:
+        window.schedule_update_check()
+    except Exception:
+        logger.exception("No se pudo programar la búsqueda de actualizaciones")
 
     dbg.process_start("Qt event loop (app.exec)")
     exit_code = int(app.exec())

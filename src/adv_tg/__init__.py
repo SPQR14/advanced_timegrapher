@@ -1,11 +1,17 @@
 """Advanced Timegrapher (adv_tg) package."""
 
-__version__ = "0.8.0"
+__version__ = "1.0.0"
 
 import importlib.util
 import os
 import sys
 from pathlib import Path
+
+# One BLAS thread. The DSP only multiplies small matrices (64-sample biquad blocks); with the
+# default thread pool OpenBLAS spins 3x the CPU for the same wall time and competes with the
+# audio and GUI threads. Must be set before numpy is first imported; inherited by the "spawn"
+# children (capture and analysis processes). ``setdefault``: an explicit user value wins.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 
 def _bootstrap_windows_dlls() -> None:

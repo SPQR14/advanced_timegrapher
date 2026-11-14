@@ -57,6 +57,7 @@ from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY, REFERENCE_TAG, AdcDrift
 from adv_tg.core.pps import READY_SIGMA_PPM, READY_SPAN_S, PpsEstimate, calibrate_samples
 from adv_tg.i18n.translator import Translator
 from adv_tg.ui.pps_worker import PpsCalibrationWorker
+from adv_tg.ui.update_notifier import UpdateNotifier
 from adv_tg.utils.adc_calibration import (
     Calibration,
     CalibrationStore,
@@ -686,10 +687,16 @@ class CalibrationDialog(QDialog):
 class AboutDialog(QDialog):
     """Version, licence, links and the folders a bug report needs."""
 
-    def __init__(self, translator: Translator, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        translator: Translator,
+        parent: QWidget | None = None,
+        updates: UpdateNotifier | None = None,
+    ) -> None:
         super().__init__(parent)
         tr = translator.tr
         self._tr = tr
+        self._updates = updates
         self.setWindowTitle(tr("about_title"))
         self.setMinimumWidth(480)
         layout = QVBoxLayout(self)
@@ -724,6 +731,20 @@ class AboutDialog(QDialog):
         folder_layout.addWidget(btn_open_config)
         layout.addLayout(folder_layout)
 
+        # Manual update check; the result is shown here (it only links to the download page)
+        self.btn_check_updates = QPushButton(tr("update_check_now"))
+        self.lbl_update = QLabel()
+        self.lbl_update.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_update.setOpenExternalLinks(True)
+        self.lbl_update.setWordWrap(True)
+        if updates is not None:
+            update_layout = QHBoxLayout()
+            update_layout.addWidget(self.btn_check_updates)
+            update_layout.addWidget(self.lbl_update, stretch=1)
+            layout.addLayout(update_layout)
+            self.btn_check_updates.clicked.connect(self.check_updates)
+            updates.finished.connect(self._on_update_result)
+
         # Support the project (opens BUY_ME_A_COFFEE_URL)
         self.btn_buy_coffee = QPushButton(tr("btn_buy_coffee"))
         self.btn_buy_coffee.setObjectName("CoffeeButton")
@@ -741,6 +762,29 @@ class AboutDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def check_updates(self) -> None:
+        """Ask the notifier for a check requested by the user."""
+        if self._updates is None:
+            return
+        self._updates.start(manual=True)
+        self.btn_check_updates.setEnabled(False)
+        self.lbl_update.setText(html.escape(self._tr("update_checking")))
+
+    def _on_update_result(self, release: object, error: object, _manual: bool) -> None:
+        self.btn_check_updates.setEnabled(True)
+        if error is not None:
+            self.lbl_update.setText(html.escape(self._tr("update_check_failed")))
+        elif release is None:
+            self.lbl_update.setText(
+                html.escape(self._tr("update_up_to_date").format(current=__version__))
+            )
+        else:
+            text = self._tr("update_available").format(version=getattr(release, "version", ""))
+            self.lbl_update.setText(
+                f"{html.escape(text)} — <a href='{html.escape(getattr(release, 'url', ''), quote=True)}'>"
+                f"{html.escape(self._tr('update_download'))}</a>"
+            )
 
     def open_buy_coffee(self) -> bool:
         """Open the 'Buy me a coffee' page in the default browser.

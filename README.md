@@ -13,8 +13,8 @@ through a microphone and shows, in real time:
 - **Beat error** (ms): how much the tick and the tock differ.
 - **Amplitude** (°): how far the balance wheel swings.
 
-> **This is a beta.** The app already measures, but we need your results and your bug
-> reports to fine-tune it. See [Help us improve it](#help-us-improve-it).
+> **Help us fine-tune it.** Your results and your bug reports make the measurements better.
+> See [Help us improve it](#help-us-improve-it).
 >
 > The interface is available in **English and Spanish**: use the **EN / ES** selector at the
 > right end of the top bar.
@@ -32,7 +32,7 @@ through a microphone and shows, in real time:
 9. [Analyzing a recording](#analyzing-a-recording)
 10. [Help us improve it](#help-us-improve-it)
 11. [Troubleshooting](#troubleshooting)
-12. [Beta limitations](#beta-limitations)
+12. [Known limitations](#known-limitations)
 13. [Support the project](#support-the-project) · [Licence](#licence-and-technical-documentation)
 
 ## What you need
@@ -47,7 +47,7 @@ through a microphone and shows, in real time:
 ### Option A: download the app (recommended)
 
 Go to the [Releases page](https://github.com/SPQR14/advanced_timegrapher/releases) and, under
-the latest version, download the file for your system. Beta builds are **not code-signed**, so
+the latest version, download the file for your system. The builds are **not code-signed**, so
 the first time your system will warn you. This is expected; follow the steps below.
 
 **macOS**
@@ -65,29 +65,34 @@ the first time your system will warn you. This is expected; follow the steps bel
 
 **Windows**
 
-1. Download the `.zip` file, right-click it → **Extract All…**, and choose a folder (for example
-   `Documents\Advanced Timegrapher`).
-2. Open that folder and double-click **adv-tg.exe**.
-3. If a blue **"Windows protected your PC"** window appears, click **More info** → **Run
-   anyway**.
+1. Download the `-setup.exe` file and double-click it.
+2. If a blue **"Windows protected your PC"** window appears, click **More info** → **Run
+   anyway**. Follow the installer (no administrator rights are needed).
+3. Open **Advanced Timegrapher** from the **Start menu**. (To remove it: **Settings → Apps →
+   Installed apps**.)
 4. If no sound arrives, go to **Settings → Privacy & security → Microphone** and make sure that
    **Let desktop apps access your microphone** is on.
 
 **Linux**
 
-1. Install PortAudio if you do not have it: `sudo apt install libportaudio2` (Debian/Ubuntu) or
-   your distribution's equivalent.
-2. Download the Linux file, make it executable (`chmod +x <file>`) and run it.
+Pick **one** file; each one includes everything the program needs (PortAudio too) and needs a
+distribution from 2022 or later (glibc 2.34: Debian 12, Ubuntu 22.04, RHEL 9, Fedora...).
 
-### Option B: using pip (wheel or from source)
+- **Debian, Ubuntu, Mint**: download the `.deb` and run `sudo apt install ./adv-tg_*.deb`.
+- **Fedora, RHEL, AlmaLinux, Rocky, openSUSE**: download the `.rpm` and run
+  `sudo dnf install ./adv-tg-*.rpm` (`sudo zypper install` on openSUSE).
+- **Any other distribution**: download the `.AppImage`, make it executable
+  (`chmod +x adv-tg-*.AppImage`) and run it. No installation.
 
-**1. From the release wheel (recommended):**
-The project is pure Python (no compiler needed). Download and install the wheel from the [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest) page, or point pip directly to the release:
-```bash
-pip install --find-links https://github.com/SPQR14/advanced_timegrapher/releases/latest advanced-timegrapher
-```
+**New versions.** Once a day, at start-up, the app asks GitHub whether a newer release exists
+and, if so, shows a *Download* link in the status bar that opens the release page. It never
+downloads or installs anything, and the request carries nothing but the program version. Turn
+it off in **Help → Check for Updates at Startup** (or set `ADV_TG_NO_UPDATE_CHECK=1`); **Help →
+Check for Updates** checks on demand.
 
-**2. From the source code (git checkout):**
+### Option B: from the source code (pip)
+
+The project is pure Python (no compiler needed).
 Requires **Python 3.11 or later** and Git:
 ```bash
 git clone https://github.com/SPQR14/advanced_timegrapher.git
@@ -348,7 +353,7 @@ If the app does not open at all, attach the files of the log folder instead:
 | Live calibration: phase jumps keep appearing | The GPS loses its fix (move the antenna to see more sky) or audio is being lost (see the capture line under the statistics). |
 | **MOCK** badge on screen | The simulator is on: its figures are **not** measurements. Press **MOCK** to turn it off. |
 
-## Beta limitations
+## Known limitations
 
 - The beat error is sensitive to ambient noise.
 - No support for beat rates above 36000 BPH.
@@ -384,8 +389,8 @@ tic-tac con un micrófono y muestra en tiempo real:
 - **Error de batimiento** (ms): cuánto difieren el tic y el tac.
 - **Amplitud** (°): cuánto gira el volante.
 
-> **Versión beta.** La aplicación ya mide, pero necesitamos tus resultados y tus reportes de
-> fallos para afinarla. Ver [Ayúdanos a mejorarla](#ayúdanos-a-mejorarla).
+> **Ayúdanos a afinarla.** Tus resultados y tus reportes de fallos mejoran las medidas. Ver
+> [Ayúdanos a mejorarla](#ayúdanos-a-mejorarla).
 >
 > La interfaz está en **inglés y español**: usa el selector **EN / ES** del extremo derecho de
 > la barra superior. Esta guía usa los nombres en español.
@@ -403,7 +408,7 @@ tic-tac con un micrófono y muestra en tiempo real:
 9. [Analizar una grabación](#analizar-una-grabación)
 10. [Ayúdanos a mejorarla](#ayúdanos-a-mejorarla)
 11. [Solución de problemas](#solución-de-problemas)
-12. [Limitaciones de la beta](#limitaciones-de-la-beta)
+12. [Limitaciones conocidas](#limitaciones-conocidas)
 13. [Apoya el proyecto](#apoya-el-proyecto) · [Licencia](#licencia-y-documentación-técnica)
 
 ## Qué necesitas
@@ -418,7 +423,7 @@ tic-tac con un micrófono y muestra en tiempo real:
 ### Opción A: descargar la aplicación (recomendado)
 
 Entra en la [página de Releases](https://github.com/SPQR14/advanced_timegrapher/releases) y, en
-la última versión, descarga el archivo de tu sistema. Las versiones beta **no están firmadas**,
+la última versión, descarga el archivo de tu sistema. Las aplicaciones **no están firmadas**,
 así que la primera vez el sistema avisa. Es normal; sigue estos pasos.
 
 **macOS**
@@ -436,29 +441,35 @@ así que la primera vez el sistema avisa. Es normal; sigue estos pasos.
 
 **Windows**
 
-1. Descarga el archivo `.zip`, haz clic derecho → **Extraer todo…** y elige una carpeta (por
-   ejemplo `Documentos\Advanced Timegrapher`).
-2. Abre esa carpeta y haz doble clic en **adv-tg.exe**.
-3. Si aparece la ventana azul **"Windows protegió su PC"**, pulsa **Más información** →
-   **Ejecutar de todas formas**.
+1. Descarga el archivo `-setup.exe` y haz doble clic en él.
+2. Si aparece la ventana azul **"Windows protegió su PC"**, pulsa **Más información** →
+   **Ejecutar de todas formas**. Sigue el asistente (no hacen falta permisos de administrador).
+3. Abre **Advanced Timegrapher** desde el **menú Inicio**. (Para quitarlo: **Configuración →
+   Aplicaciones → Aplicaciones instaladas**.)
 4. Si no llega sonido, ve a **Configuración → Privacidad y seguridad → Micrófono** y comprueba
    que **Permitir que las aplicaciones de escritorio accedan al micrófono** esté activado.
 
 **Linux**
 
-1. Instala PortAudio si no lo tienes: `sudo apt install libportaudio2` (Debian/Ubuntu) o el
-   equivalente de tu distribución.
-2. Descarga el archivo de Linux, dale permiso de ejecución (`chmod +x <archivo>`) y ábrelo.
+Elige **un** archivo; cada uno incluye todo lo que el programa necesita (también PortAudio) y
+requiere una distribución de 2022 o posterior (glibc 2.34: Debian 12, Ubuntu 22.04, RHEL 9,
+Fedora...).
 
-### Opción B: mediante pip (wheel o desde código fuente)
+- **Debian, Ubuntu, Mint**: descarga el `.deb` y ejecuta `sudo apt install ./adv-tg_*.deb`.
+- **Fedora, RHEL, AlmaLinux, Rocky, openSUSE**: descarga el `.rpm` y ejecuta
+  `sudo dnf install ./adv-tg-*.rpm` (`sudo zypper install` en openSUSE).
+- **Cualquier otra distribución**: descarga el `.AppImage`, dale permiso de ejecución
+  (`chmod +x adv-tg-*.AppImage`) y ábrelo. No hay que instalar nada.
 
-**1. Desde el wheel del release (recomendado):**
-El proyecto es Python puro (no hace falta compilador). Descarga e instala el wheel desde la página de [Releases](https://github.com/SPQR14/advanced_timegrapher/releases/latest), o instala directamente apuntando pip al release:
-```bash
-pip install --find-links https://github.com/SPQR14/advanced_timegrapher/releases/latest advanced-timegrapher
-```
+**Versiones nuevas.** Una vez al día, al arrancar, la aplicación pregunta a GitHub si hay una
+versión más reciente y, si la hay, muestra en la barra de estado un enlace *Descargar* que abre
+la página del release. Nunca descarga ni instala nada, y la consulta solo lleva la versión del
+programa. Se desactiva en **Ayuda → Buscar actualizaciones al iniciar** (o con
+`ADV_TG_NO_UPDATE_CHECK=1`); **Ayuda → Buscar actualizaciones** lo comprueba al momento.
 
-**2. Desde el código fuente (git):**
+### Opción B: desde el código fuente (pip)
+
+El proyecto es Python puro (no hace falta compilador).
 Requiere **Python 3.11 o posterior** y Git:
 ```bash
 git clone https://github.com/SPQR14/advanced_timegrapher.git
@@ -730,7 +741,7 @@ su lugar los archivos de la carpeta de registros:
 | Calibración en vivo: siguen apareciendo saltos de fase | El GPS pierde la posición (pon la antena donde vea más cielo) o se está perdiendo audio (ver la línea de captura bajo las estadísticas). |
 | Insignia **MOCK** en pantalla | El simulador está activo: sus cifras **no** son medidas. Pulsa **MOCK** para desactivarlo. |
 
-## Limitaciones de la beta
+## Limitaciones conocidas
 
 - El error de batimiento es sensible al ruido ambiental.
 - No admite frecuencias por encima de 36000 A/h.

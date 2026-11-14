@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import html
 import math
 import os
 import shutil
@@ -13,16 +14,18 @@ from pathlib import Path
 import numpy as np
 import pyqtgraph as pg
 from numpy.typing import NDArray
-from PyQt6.QtCore import QRectF, QSize, Qt, QTimer
+from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
     QAction,
     QColor,
+    QDesktopServices,
     QFont,
     QIcon,
     QImage,
     QPageLayout,
     QPageSize,
     QPainter,
+    QPixmapCache,
     QSurfaceFormat,
 )
 from PyQt6.QtPrintSupport import QPrintDialog, QPrinter
@@ -52,6 +55,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from adv_tg import __version__
 from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY
 from adv_tg.core.models import BeatEvent, BeatTelemetry, TelemetryResult, WatchConfig
 from adv_tg.i18n.translator import Translator
@@ -75,12 +79,14 @@ from adv_tg.ui.flow_layout import FlowLayout
 from adv_tg.ui.measure_worker import MeasureStreamWorker
 from adv_tg.ui.measure_worker import device_name as measure_device_name
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
+from adv_tg.ui.update_notifier import UpdateNotifier
 from adv_tg.ui.worker_factory import create_worker
 from adv_tg.utils.adc_calibration import config_dir
 from adv_tg.utils.audio_io import AudioDeviceInfo, list_input_devices
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
 from adv_tg.utils.security import safe_filename_base, sanitize_csv_cell
+from adv_tg.utils.update_check import ReleaseInfo, UpdateState
 from adv_tg.utils.watch_db import load_watch_db
 
 logger = LoggerSetup.setup_logger(__name__)
@@ -123,6 +129,37 @@ def configure_pyqtgraph_gpu(enable_opengl: bool = False) -> bool:
 
 
 configure_pyqtgraph_gpu()
+
+#: Bounds of Qt's pixmap cache (KiB), see ``configure_pixmap_cache``.
+PIXMAP_CACHE_MIN_KB: int = 64 * 1024
+PIXMAP_CACHE_MAX_KB: int = 512 * 1024
+
+
+def configure_pixmap_cache() -> int:
+    """Give Qt's pixmap cache room for the plots on high-DPI screens; returns the limit (KiB).
+
+    The axes of the three plots are kept as cached images (``MainWin._cache_axes``) in
+    ``QPixmapCache``, whose default limit is 10 MB for the whole application (style sheet
+    borders and gradients live there too). In device pixels that is not enough on a scaled
+    screen: at 200 % (1600x950 window) the cache overflowed and every telemetry update (4/s)
+    evicted the axes, which were then drawn again from scratch on the next repaint: 25 % of a
+    core and 53 event-loop stalls over 16 ms in 15 s, against 15 % and 2 with room (at 100 %
+    the 10 MB were enough, which is why it only stuttered on some screens). The limit is only
+    a ceiling: 3 frames of the largest screen in device pixels, within
+    [``PIXMAP_CACHE_MIN_KB``, ``PIXMAP_CACHE_MAX_KB``]. Needs a ``QApplication``.
+    """
+    app = QApplication.instance()
+    need_kb = 0
+    if isinstance(app, QApplication):
+        for screen in app.screens():
+            size = screen.size()
+            dpr = float(screen.devicePixelRatio())
+            need_kb = max(need_kb, int(3 * 4 * size.width() * size.height() * dpr * dpr / 1024))
+    limit = int(min(PIXMAP_CACHE_MAX_KB, max(PIXMAP_CACHE_MIN_KB, need_kb)))
+    if QPixmapCache.cacheLimit() < limit:
+        QPixmapCache.setCacheLimit(limit)
+        logger.info("QPixmapCache limit raised to %d MB", limit // 1024)
+    return QPixmapCache.cacheLimit()
 
 
 def _resolve_assets_dir() -> Path:
@@ -326,8 +363,12 @@ class HudCard(QFrame):
 
     def set_sub(self, text: str) -> None:
         """Secondary line under the value; an empty text hides it."""
+        if text == self.sub_label.text():
+            return
         self.sub_label.setText(text)
-        self.sub_label.setVisible(bool(text))
+        visible = bool(text)
+        if visible != (not self.sub_label.isHidden()):
+            self.sub_label.setVisible(visible)
 
 
 class MainWin(QMainWindow):
@@ -361,6 +402,7 @@ class MainWin(QMainWindow):
         super().__init__()
         logger.info("Initializing MainWin UI")
         self._gpu_enabled: bool = configure_pyqtgraph_gpu()
+        configure_pixmap_cache()
         self.translator = translator if translator is not None else Translator("en")
         # Engine per device (create_worker): MockStreamWorker or MeasureStreamWorker
         self.dsp_worker: BaseStreamWorker | None = None
@@ -419,6 +461,8 @@ class MainWin(QMainWindow):
         self._save_audio_on_finish: bool = False
         # The quality bar follows the input level until the engine reports detection quality
         self._telemetry_seen: bool = False
+        self._quality_kind: str | None = None  # colour class of the quality bar (None = default)
+        self._capture_health_bad: bool = False
         self._perf_waveform = SlotProfiler("waveform_ready")
         self._perf_level = SlotProfiler("level_updated")
 
@@ -1351,8 +1395,9 @@ class MainWin(QMainWindow):
             guide.setZValue(-1)
             self.paper_tape_plot.addItem(guide)
 
-        # Paper tape: one dot per beat, tic (even k) and tac (odd k) rows. They are timed at
-        # the drop (t_fine, steady) and drawn at the point of the beat error card (P1): each
+        # Paper tape: one dot per beat, tic (even k) and tac (odd k) rows. Each row is timed
+        # at the point that times its parity in the rate (the unlocking front where it is
+        # clean, else the drop) and drawn at the point of the beat error card (P1): each
         # row is moved by the session's tape_shift_ms, so their distance is the figure shown.
         # Dots, no connecting lines, like the pixel columns of a hardware timegrapher; rows
         # smoothed by a running median (_append_tape).
@@ -1568,6 +1613,19 @@ class MainWin(QMainWindow):
         self.lbl_capture_health.setObjectName("StatValue")
         self.statusBar().addPermanentWidget(self.lbl_capture_health)
 
+        # Newer release available: a link to its download page (hidden until one is found).
+        # Nothing touches the network here: see schedule_update_check / check_for_updates.
+        self._update_state = UpdateState()
+        self._update_release: ReleaseInfo | None = None
+        self.update_notifier = UpdateNotifier(parent=self)
+        self.update_notifier.finished.connect(self._on_update_result)
+        self.lbl_update = QLabel()
+        self.lbl_update.setObjectName("StatValue")
+        self.lbl_update.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_update.setVisible(False)
+        self.lbl_update.linkActivated.connect(lambda _url: self.open_update_page())
+        self.statusBar().addPermanentWidget(self.lbl_update)
+
         self._build_menu_bar()
 
     def _build_menu_bar(self) -> None:
@@ -1590,6 +1648,16 @@ class MainWin(QMainWindow):
         self.action_report = QAction(self)
         self.action_report.triggered.connect(lambda: self.open_report_dialog())
         self.menu_help.addAction(self.action_report)
+
+        self.action_check_updates = QAction(self)
+        self.action_check_updates.triggered.connect(lambda: self.check_for_updates())
+        self.menu_help.addAction(self.action_check_updates)
+        self.action_auto_update = QAction(self)
+        self.action_auto_update.setCheckable(True)
+        self.action_auto_update.setChecked(self._update_state.enabled)
+        self.action_auto_update.toggled.connect(self._on_auto_update_toggled)
+        self.menu_help.addAction(self.action_auto_update)
+        self.menu_help.addSeparator()
 
         self.action_about = QAction(self)
         self.action_about.triggered.connect(lambda: self.open_about_dialog())
@@ -2461,10 +2529,72 @@ class MainWin(QMainWindow):
 
     def open_about_dialog(self, exec_dialog: bool = True) -> AboutDialog:
         """Version, licence, links and the configuration and log folders."""
-        dlg = AboutDialog(self.translator, parent=self)
+        dlg = AboutDialog(self.translator, parent=self, updates=self.update_notifier)
         if exec_dialog:
             dlg.exec()
         return dlg
+
+    # ---- update notice (the program only tells and links; it never installs anything)
+
+    def schedule_update_check(self, delay_ms: int = 4000) -> bool:
+        """Start-up check, at most once a day and only if enabled. True if one was scheduled.
+
+        Called by ``main`` after the window is shown (never by the constructor, so that tests
+        and tools that build the window do not touch the network).
+        """
+        if not self._update_state.due():
+            return False
+        QTimer.singleShot(delay_ms, lambda: self.update_notifier.start(manual=False))
+        return True
+
+    def check_for_updates(self) -> bool:
+        """Check requested by the user (menu Help). False when one is already running."""
+        started = self.update_notifier.start(manual=True)
+        if started:
+            self.statusBar().showMessage(self.translator.tr("update_checking"), 6000)
+        return started
+
+    def _on_auto_update_toggled(self, checked: bool) -> None:
+        self._update_state.enabled = bool(checked)
+        self._update_state.save()
+        logger.info("Automatic update check %s", "enabled" if checked else "disabled")
+
+    def _on_update_result(self, release: object, error: object, manual: bool) -> None:
+        tr = self.translator.tr
+        if error is not None:
+            logger.info("Update check failed: %s", error)
+            if manual:
+                self.statusBar().showMessage(tr("update_check_failed"), 8000)
+            return
+        self._update_state.mark_checked()
+        self._update_release = release if isinstance(release, ReleaseInfo) else None
+        self._refresh_update_label()
+        if self._update_release is not None:
+            logger.info("Newer version available: %s", self._update_release.version)
+        elif manual:
+            self.statusBar().showMessage(tr("update_up_to_date").format(current=__version__), 8000)
+
+    def _refresh_update_label(self) -> None:
+        rel = self._update_release
+        self.lbl_update.setVisible(rel is not None)
+        if rel is None:
+            return
+        tr = self.translator.tr
+        text = html.escape(tr("update_available").format(version=rel.version))
+        self.lbl_update.setText(f"{text} — <a href='#'>{html.escape(tr('update_download'))}</a>")
+        self.lbl_update.setToolTip(tr("update_available_tooltip").format(current=__version__))
+
+    def open_update_page(self) -> bool:
+        """Open the page of the newer release in the browser (False if that failed)."""
+        if self._update_release is None:
+            return False
+        url = self._update_release.url
+        ok = bool(QDesktopServices.openUrl(QUrl(url)))
+        if not ok:  # show the address so it can be typed by hand
+            self.statusBar().showMessage(
+                self.translator.tr("update_open_failed").format(url=url), 20000
+            )
+        return ok
 
     def open_logs_folder(self) -> bool:
         """Open the log folder in the system's file manager (menu Tools)."""
@@ -2850,6 +2980,9 @@ class MainWin(QMainWindow):
         self.menu_help.setTitle(tr("menu_help"))
         self.action_report.setText(tr("btn_report"))
         self.action_about.setText(tr("btn_about"))
+        self.action_check_updates.setText(tr("update_check_now"))
+        self.action_auto_update.setText(tr("update_check_auto"))
+        self._refresh_update_label()
         self.btn_calibrate.setText(tr("btn_calibrate"))
         self.btn_calibrate.setToolTip(tr("btn_calibrate_tooltip"))
         arrow = "▼" if self.btn_global_stats.isChecked() else "▶"
@@ -2990,7 +3123,7 @@ class MainWin(QMainWindow):
         self._perf_waveform.reset()
         self._perf_level.reset()
         self.prg_snr.setValue(0)
-        self.prg_snr.setStyleSheet("")
+        self._set_quality_bar_kind(None)
         self.lbl_snr_value.setText("-- dB")
         if isinstance(self.dsp_worker, CaptureStreamWorker):
             for card in (self.card_rate, self.card_beat_error, self.card_amplitude):
@@ -3144,8 +3277,13 @@ class MainWin(QMainWindow):
         text = f"SNR {snr:.0f} dB | {100.0 * share:.0f} %"
         return pct, kind, f"{text} ⚠" if saturated else text
 
-    def _set_quality_bar(self, pct: int, kind: str | None, text: str) -> None:
-        self.prg_snr.setValue(pct)
+    def _set_quality_bar_kind(self, kind: str | None) -> None:
+        """Colour class of the quality bar. A style sheet is parsed and the widget polished
+        again on every ``setStyleSheet``, even with the same text, so it is only set when the
+        class changes (it was set 4-10 times per second)."""
+        if kind == self._quality_kind:
+            return
+        self._quality_kind = kind
         if kind is None:
             self.prg_snr.setStyleSheet("")
         else:
@@ -3153,6 +3291,11 @@ class MainWin(QMainWindow):
                 f"QProgressBar::chunk {{ background-color: {self._LEVEL_BAR_COLORS[kind]};"
                 " border-radius: 3px; }"
             )
+
+    def _set_quality_bar(self, pct: int, kind: str | None, text: str) -> None:
+        if pct != self.prg_snr.value():
+            self.prg_snr.setValue(pct)
+        self._set_quality_bar_kind(kind)
         self.lbl_snr_value.setText(text)
 
     def _clear_oscilloscope_markers(self) -> None:
@@ -3256,7 +3399,7 @@ class MainWin(QMainWindow):
         else:
             if not self._telemetry_seen:
                 self._telemetry_seen = True
-                self.prg_snr.setStyleSheet("")
+                self._set_quality_bar_kind(None)
             if raw_snr_db <= 0.0 and confidence > 0.0:
                 raw_snr_db = 38.0 * confidence
             quality_pct = int(round(np.clip((raw_snr_db / 45.0) * 100.0 * confidence, 0.0, 100.0)))
@@ -3544,7 +3687,10 @@ class MainWin(QMainWindow):
                 pct=pct, ovf=self._last_capture_overflows
             )
         )
-        self.lbl_capture_health.setStyleSheet("color: #ff1744;" if pct < 98.0 else "")
+        bad = pct < 98.0
+        if bad != self._capture_health_bad:  # a style sheet is costly to set: only on change
+            self._capture_health_bad = bad
+            self.lbl_capture_health.setStyleSheet("color: #ff1744;" if bad else "")
 
     def _on_worker_error(self, message: str) -> None:
         """Slot logging any error emitted by the engine safely on the UI thread."""

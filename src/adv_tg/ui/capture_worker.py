@@ -81,6 +81,22 @@ WAVEFORM_WINDOW_S: float = 0.6
 # 960 bins divide 0.6 s exactly at 48 and 96 kHz; at 44.1 kHz the oldest 540 samples
 # (12 ms) of the window are dropped so the bins stay whole (display only).
 WAVEFORM_BINS: int = 960
+# Smooth scrolling of the live plot (``_Playout``): audio arrives in blocks (1024 samples every
+# 21 ms on ALSA; several blocks at once on Windows hosts), while the plot is drawn every 33 ms.
+# Showing "the newest samples" made the trace advance by 1 block, then 2, then 1...: uneven
+# steps of 21 / 43 ms per frame, larger with burstier hosts. The plot instead shows the audio
+# up to a playout position that advances at the sample rate, a little behind the newest sample.
+#: Margin kept between the playout position and the newest sample at its lowest point (s).
+PLAYOUT_SAFETY_S: float = 0.008
+#: Window over which the lowest margin is tracked (s).
+PLAYOUT_TRACK_S: float = 1.0
+#: Share of the margin error corrected per second (slow: the scroll speed changes < 2 %).
+PLAYOUT_GAIN_PER_S: float = 0.5
+#: Margin beyond which the position is re-seated at once (after a stall or a burst), in s.
+PLAYOUT_RESYNC_S: float = 0.5
+#: Margin at the start, before the size of the host's bursts is known (s); the loop then
+#: closes it to the smallest margin that does not run dry.
+PLAYOUT_START_S: float = 0.05
 LEVEL_PERIOD_S: float = 0.1
 HEALTH_PERIOD_S: float = 0.5
 STOP_TIMEOUT_MS: int = 2000
@@ -199,6 +215,49 @@ class SlotProfiler:
         )
 
 
+class _Playout:
+    """Display position that advances at the sample rate behind a bursty producer.
+
+    ``advance(now, total)`` returns the absolute index up to which the plot shows audio. The
+    position moves ``fs * dt`` per call; a slow loop keeps its smallest distance to ``total``
+    over the last ``PLAYOUT_TRACK_S`` at ``PLAYOUT_SAFETY_S``, so it settles one burst behind
+    the newest sample whatever the host's block size (display only: the measurement reads the
+    stream directly). It never passes ``total`` and is re-seated when it falls far behind.
+    """
+
+    def __init__(self, fs: float) -> None:
+        self._fs = float(fs)
+        self._pos: float | None = None
+        self._t = 0.0
+        self._margins: list[tuple[float, float]] = []  # (time, total - position)
+
+    def advance(self, now: float, total: int) -> int:
+        fs = self._fs
+        if self._pos is None:
+            self._pos, self._t = max(0.0, total - PLAYOUT_START_S * fs), now
+            return int(self._pos)
+        dt = max(0.0, now - self._t)
+        self._t = now
+        pos = self._pos + fs * dt
+        margin = total - pos
+        if margin < 0.0 or margin > PLAYOUT_RESYNC_S * fs:
+            # underrun (the producer stalled or we started too close) or far behind: re-seat
+            pos = float(total) if margin < 0.0 else total - PLAYOUT_SAFETY_S * fs
+            margin = total - pos
+            self._margins.clear()
+        self._margins.append((now, margin))
+        while self._margins and self._margins[0][0] < now - PLAYOUT_TRACK_S:
+            self._margins.pop(0)
+        lowest = min(m for _, m in self._margins)
+        # steer the lowest margin to the safety distance (bounded by what is available)
+        step = PLAYOUT_GAIN_PER_S * dt * (lowest - PLAYOUT_SAFETY_S * fs)
+        pos = min(pos + step, float(total))
+        if step:
+            self._margins = [(t, m - step) for t, m in self._margins]
+        self._pos = pos
+        return int(pos)
+
+
 class _OpenError(Exception):
     """Capture could not be opened; ``args[0]`` is the user-facing (Spanish) message."""
 
@@ -235,6 +294,7 @@ class _CaptureReader(QObject):
         self._last_level_idx = 0
         self._waveforms = 0
         self._max_tick_ns = 0
+        self._playout = _Playout(fs)
         # Diagnostics (phase 1c)
         self._last_tick_ns = 0
         self._lag_total_ns = 0
@@ -482,13 +542,34 @@ class _CaptureReader(QObject):
         )
 
     def _emit_waveform(self) -> None:
+        """Emit the last ``WAVEFORM_WINDOW_S`` up to the playout position, as min/max bins.
+
+        The bins lie on a fixed grid of absolute sample indices: a bin keeps its two values
+        while it crosses the plot, so the trace moves as a rigid shape (with bins cut at the
+        newest sample, every frame re-binned the audio and the peaks flickered).
+        """
+        stream = self._stream
         n = int(round(WAVEFORM_WINDOW_S * self._fs))
-        _, x = self._stream.read_latest(n, np.float64)
+        size = n // WAVEFORM_BINS
+        end = self._playout.advance(time.perf_counter(), stream.total_samples)
+        x = None
+        if size >= 2:
+            end -= end % size
+            start = end - size * WAVEFORM_BINS
+            if start >= stream.oldest_available and end > start:
+                try:
+                    # float32 as stored: the min/max of a bin are the same values, and the
+                    # conversion of the whole window to float64 was half the cost
+                    x = stream.read(start, end, np.float32)
+                except SamplesOverwritten:
+                    x = None
+        if x is None:  # young stream (window not full yet), tiny window or reader lapped
+            _, x = stream.read_latest(n, np.float32)
+            if x.size > 2 * WAVEFORM_BINS:
+                # minmax_decimate drops the tail remainder; drop the oldest samples instead.
+                x = x[x.size % WAVEFORM_BINS :]
         if x.size == 0:
             return
-        if x.size > 2 * WAVEFORM_BINS:
-            # minmax_decimate drops the tail remainder; drop the oldest samples instead.
-            x = x[x.size % WAVEFORM_BINS :]
         time_ms, values = minmax_decimate(x, self._fs, WAVEFORM_BINS)
         self._owner.waveform_ready.emit(time_ms, values)
         self._waveforms += 1

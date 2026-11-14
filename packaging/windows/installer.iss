@@ -1,10 +1,10 @@
 ; Inno Setup Script para Advanced Timegrapher en Windows (x64)
 ; Compilar con:
-;   iscc /DMyAppVersion=0.8.0 packaging\windows\installer.iss
+;   iscc /DMyAppVersion=1.0.0 packaging\windows\installer.iss
 ; o utilizando el script auxiliar de PowerShell / GitHub Actions.
 
 #ifndef MyAppVersion
-#define MyAppVersion "0.8.0"
+#define MyAppVersion "1.0.0"
 #endif
 
 #define MyAppName "Advanced Timegrapher"
@@ -24,7 +24,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=..\..\dist
-OutputBaseFilename=adv-tg-windows-x64-setup
+OutputBaseFilename=adv-tg-{#MyAppVersion}-windows-x64-setup
 SetupIconFile=adv-tg.ico
 Compression=lzma2/ultra64
 SolidCompression=yes

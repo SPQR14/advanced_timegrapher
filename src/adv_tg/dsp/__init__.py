@@ -3,6 +3,9 @@
 * ``filters``: Butterworth band-pass design, ``sosfilt_zi`` and the zero-phase padding rule,
   identical to ``scipy.signal``.
 * ``engine``: vectorised filtering, envelope and candidate kernels (see its docstring).
+* ``interference``: adaptive notch of what stands out of the noise between beats.
+* ``onset``: onset of a sound by its first departure from silence.
+* ``normalizer``: software level normalization.
 """
 
 from adv_tg.dsp.engine import (
