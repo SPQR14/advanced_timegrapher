@@ -342,6 +342,9 @@ class Metrics:
     lift_angle_deg: float = DEFAULT_LIFT_ANGLE_DEG
     sigma_even_us: float = math.nan
     sigma_odd_us: float = math.nan
+    # beat-to-beat timing scatter from second differences (insensitive to slow gear-train wander)
+    pair_sigma_even_us: float = math.nan
+    pair_sigma_odd_us: float = math.nan
     # timing point of the rate for (tic, tac): "t_fine" (drop) or "p1" (unlocking front)
     rate_point: tuple[str, str] = ("t_fine", "t_fine")
     windows: list[WindowRate] = field(default_factory=list)
@@ -441,20 +444,33 @@ def _line_scatter(
     x = (k - k[k.size // 2]).astype(np.float64)
     keep = np.ones(k.size, dtype=bool)
     r = np.zeros(k.size)
+    n_all = k.size
+    n = n_all
     for _ in range(10):
-        if np.count_nonzero(keep) < 3:
+        if n < 3:
             return math.inf, 0.0
-        slope, icpt = np.polyfit(x[keep], t[keep], 1)
+        xk = x if n == n_all else x[keep]
+        tk = t if n == n_all else t[keep]
+        xm = float(np.add.reduce(xk)) / n
+        tm = float(np.add.reduce(tk)) / n
+        dx = xk - xm
+        sxx = float(np.dot(dx, dx))
+        if sxx <= 0.0:
+            return math.inf, 0.0
+        slope = float(np.dot(dx, tk - tm)) / sxx
+        icpt = tm - slope * xm
         r = t - (slope * x + icpt)
-        s = max(_mad_sigma(r[keep]), _SIGMA_FLOOR)
-        new = np.abs(r - _median(r[keep])) <= outlier_sigma * s
+        rk = r if n == n_all else r[keep]
+        med_r = _median(rk)
+        s = max(1.4826 * _median(np.abs(rk - med_r)), _SIGMA_FLOOR)
+        new = np.abs(r - med_r) <= outlier_sigma * s
         if np.array_equal(new, keep):
             break
         keep = new
-    n = int(np.count_nonzero(keep))
+        n = int(np.count_nonzero(keep))
     if n < 3:
         return math.inf, 0.0
-    return max(_std(r[keep]), _SIGMA_FLOOR), n / k.size
+    return max(_std(r if n == n_all else r[keep]), _SIGMA_FLOOR), n / n_all
 
 
 def select_timing(
@@ -546,6 +562,128 @@ def fit_parity_weighted(
         return fit
 
 
+def _fit_parity_linear(
+    k: NDArray[np.float64],
+    t: NDArray[np.float64],
+    even: NDArray[np.bool_],
+    outlier_sigma: float,
+    max_iterations: int,
+    min_per_parity: int,
+    weighted: bool,
+) -> ParityFit | None:
+    """Closed-form decoupled-parity WLS for ``t = a + P k + c (-1)^k`` (no SVD / matrix inv).
+
+    With intercepts ``mu_e = a + c`` (even) and ``mu_o = a - c`` (odd), centring each parity
+    on its own mean decouples ``mu_e, mu_o`` from ``P``, so ``P``, ``a``, ``c`` and both
+    weighted and sandwich heteroscedastic covariances reduce to O(N) dot products.
+    """
+    k_ref = float(round(_median(k)))
+    kk = k - k_ref
+    t_ref = _median(t)
+    y = t - t_ref
+    ke_all, ye_all = kk[even], y[even]
+    ko_all, yo_all = kk[~even], y[~even]
+    ne_all, no_all = ke_all.size, ko_all.size
+    ke_m = np.ones(ne_all, dtype=bool)
+    ko_m = np.ones(no_all, dtype=bool)
+    ne, no = ne_all, no_all
+    we = wo = 1.0
+    for _ in range(max_iterations):
+        if ne < min_per_parity or no < min_per_parity:
+            return None
+        ke = ke_all if ne == ne_all else ke_all[ke_m]
+        ye = ye_all if ne == ne_all else ye_all[ke_m]
+        ko = ko_all if no == no_all else ko_all[ko_m]
+        yo = yo_all if no == no_all else yo_all[ko_m]
+        mke = float(np.add.reduce(ke)) / ne
+        mye = float(np.add.reduce(ye)) / ne
+        mko = float(np.add.reduce(ko)) / no
+        myo = float(np.add.reduce(yo)) / no
+        dke, dye = ke - mke, ye - mye
+        dko, dyo = ko - mko, yo - myo
+        sxx = we * float(np.dot(dke, dke)) + wo * float(np.dot(dko, dko))
+        if sxx <= 0.0:
+            return None
+        period = (we * float(np.dot(dke, dye)) + wo * float(np.dot(dko, dyo))) / sxx
+        mu_e = mye - period * mke
+        mu_o = myo - period * mko
+        re = ye_all - (mu_e + period * ke_all)
+        ro = yo_all - (mu_o + period * ko_all)
+        re_k = re if ne == ne_all else re[ke_m]
+        ro_k = ro if no == no_all else ro[ko_m]
+        ce = _median(re_k)
+        se = max(1.4826 * _median(np.abs(re_k - ce)), _SIGMA_FLOOR)
+        co = _median(ro_k)
+        so = max(1.4826 * _median(np.abs(ro_k - co)), _SIGMA_FLOOR)
+        new_e = np.abs(re - ce) <= outlier_sigma * se
+        new_o = np.abs(ro - co) <= outlier_sigma * so
+        if weighted:
+            we, wo = 1.0 / (se * se), 1.0 / (so * so)
+        if np.array_equal(new_e, ke_m) and np.array_equal(new_o, ko_m):
+            break
+        ke_m, ko_m = new_e, new_o
+        ne, no = int(np.count_nonzero(ke_m)), int(np.count_nonzero(ko_m))
+    if ne < min_per_parity or no < min_per_parity:
+        return None
+    # final fit on the kept set with the final weights
+    ke = ke_all if ne == ne_all else ke_all[ke_m]
+    ye = ye_all if ne == ne_all else ye_all[ke_m]
+    ko = ko_all if no == no_all else ko_all[ko_m]
+    yo = yo_all if no == no_all else yo_all[ko_m]
+    mke = float(np.add.reduce(ke)) / ne
+    mye = float(np.add.reduce(ye)) / ne
+    mko = float(np.add.reduce(ko)) / no
+    myo = float(np.add.reduce(yo)) / no
+    dke, dye = ke - mke, ye - mye
+    dko, dyo = ko - mko, yo - myo
+    sxx_e = float(np.dot(dke, dke))
+    sxx_o = float(np.dot(dko, dko))
+    sxx = we * sxx_e + wo * sxx_o
+    if sxx <= 0.0:
+        return None
+    period = (we * float(np.dot(dke, dye)) + wo * float(np.dot(dko, dyo))) / sxx
+    mu_e = mye - period * mke
+    mu_o = myo - period * mko
+    re_k = ye - (mu_e + period * ke)
+    ro_k = yo - (mu_o + period * ko)
+    s_even = max(_std(re_k), _SIGMA_FLOOR)
+    s_odd = max(_std(ro_k), _SIGMA_FLOOR)
+    ve, vo = s_even * s_even, s_odd * s_odd
+    if weighted:
+        var_p = 1.0 / (sxx_e / ve + sxx_o / vo)
+    else:  # ordinary least squares with heteroscedastic noise (exact sandwich form)
+        sxx_u = sxx_e + sxx_o
+        var_p = (ve * sxx_e + vo * sxx_o) / (sxx_u * sxx_u)
+    dm = mke - mko
+    var_c = 0.25 * (ve / ne + vo / no + dm * dm * var_p)
+    return ParityFit(
+        a=0.5 * (mu_e + mu_o) + t_ref,
+        period=period,
+        c=0.5 * (mu_e - mu_o),
+        period_sigma=math.sqrt(max(var_p, 0.0)),
+        c_sigma=math.sqrt(max(var_c, 0.0)),
+        k_ref=k_ref,
+        sigma_even=s_even,
+        sigma_odd=s_odd,
+        n_even=ne,
+        n_odd=no,
+        n_trimmed=(ne_all - ne) + (no_all - no),
+    )
+
+
+def _solve_wls_4x4(
+    Xk: NDArray[np.float64], yk: NDArray[np.float64], wk: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """Solve 4-column weighted least squares via normal equations (fallback to SVD lstsq)."""
+    Xw = Xk * wk[:, None]
+    try:
+        return np.linalg.solve(Xk.T @ Xw, Xw.T @ yk)
+    except np.linalg.LinAlgError:
+        sw = np.sqrt(wk)
+        coef, *_ = np.linalg.lstsq(Xk * sw[:, None], yk * sw, rcond=None)
+        return coef
+
+
 def _fit_parity_weighted(
     k: NDArray[np.float64],
     t: NDArray[np.float64],
@@ -557,31 +695,41 @@ def _fit_parity_weighted(
 ) -> ParityFit | None:
     if k.size == 0:
         return None
-    even = (k.astype(np.int64) % 2) == 0
+    even = (k.astype(np.int64) & 1) == 0
     odd = ~even
     if min(np.count_nonzero(even), np.count_nonzero(odd)) < min_per_parity:
         return None
-    k_ref = float(np.round(_median(k)))
+    if not quadratic:
+        return _fit_parity_linear(
+            k, t, even, outlier_sigma, max_iterations, min_per_parity, weighted
+        )
+    k_ref = float(round(_median(k)))
     kk = k - k_ref
+    scale = max(float(np.max(np.abs(kk))), 1.0)
+    ks = kk / scale
     t_ref = _median(t)
-    y = t - t_ref  # re-centring keeps the normal equations well conditioned
-    cols = [np.ones(k.size), kk, np.where(even, 1.0, -1.0)]
-    if quadratic:
-        cols.append(kk * kk)
-    X = np.stack(cols, axis=1)
-    keep = np.ones(k.size, dtype=bool)
-    w = np.ones(k.size)
+    y = t - t_ref  # re-centring + scaling keeps the 4x4 normal equations well conditioned
+    n_all = k.size
+    X = np.empty((n_all, 4), dtype=np.float64)
+    X[:, 0] = 1.0
+    X[:, 1] = ks
+    X[:, 2] = np.where(even, 1.0, -1.0)
+    X[:, 3] = ks * ks
+    keep = np.ones(n_all, dtype=bool)
+    w = np.ones(n_all, dtype=np.float64)
     sig = {0: 1.0, 1: 1.0}
-    coef = np.zeros(X.shape[1])
     parities = ((0, even), (1, odd))
     keep_even, keep_odd = even, odd
+    n_keep = n_all
     for _ in range(max_iterations):
         if min(np.count_nonzero(keep_even), np.count_nonzero(keep_odd)) < min_per_parity:
             return None
-        sw = np.sqrt(w[keep])
-        coef, *_ = np.linalg.lstsq(X[keep] * sw[:, None], y[keep] * sw, rcond=None)
+        Xk = X if n_keep == n_all else X[keep]
+        yk = y if n_keep == n_all else y[keep]
+        wk = w if n_keep == n_all else w[keep]
+        coef = _solve_wls_4x4(Xk, yk, wk)
         r = y - X @ coef
-        new_keep = np.zeros(k.size, dtype=bool)
+        new_keep = np.zeros(n_all, dtype=bool)
         for parity, m in parities:
             rp = r[keep_odd if parity else keep_even]
             center = _median(rp)
@@ -589,42 +737,46 @@ def _fit_parity_weighted(
             new_keep[m] = np.abs(r[m] - center) <= outlier_sigma * s
             sig[parity] = s
         if weighted:
-            w = np.where(even, 1.0 / sig[0] ** 2, 1.0 / sig[1] ** 2)
+            w = np.where(even, 1.0 / (sig[0] * sig[0]), 1.0 / (sig[1] * sig[1]))
         if np.array_equal(new_keep, keep):
             break
         keep = new_keep
         keep_even, keep_odd = keep & even, keep & odd
+        n_keep = int(np.count_nonzero(keep))
     n_even, n_odd = int(np.count_nonzero(keep_even)), int(np.count_nonzero(keep_odd))
     if min(n_even, n_odd) < min_per_parity:
         return None
     # final fit on the kept set with the final weights
-    sw = np.sqrt(w[keep])
-    coef, *_ = np.linalg.lstsq(X[keep] * sw[:, None], y[keep] * sw, rcond=None)
+    Xk = X if n_keep == n_all else X[keep]
+    yk = y if n_keep == n_all else y[keep]
+    wk = w if n_keep == n_all else w[keep]
+    coef = _solve_wls_4x4(Xk, yk, wk)
     r = y - X @ coef
     s_even = max(_std(r[keep_even]), _SIGMA_FLOOR)
     s_odd = max(_std(r[keep_odd]), _SIGMA_FLOOR)
     # covariance with the per-parity variances actually observed on the kept set
-    var = np.where(even, s_even**2, s_odd**2)[keep]
-    Xk = X[keep]
+    var = np.where(even, s_even * s_even, s_odd * s_odd)[keep]
     if weighted:
         cov = np.linalg.inv(Xk.T @ (Xk / var[:, None]))
     else:  # ordinary least squares with heteroscedastic noise (sandwich form)
         inv = np.linalg.inv(Xk.T @ Xk)
         cov = inv @ (Xk.T @ (Xk * var[:, None])) @ inv
+    inv_s = 1.0 / scale
+    inv_s2 = inv_s * inv_s
     return ParityFit(
         a=float(coef[0]) + t_ref,
-        period=float(coef[1]),
+        period=float(coef[1]) * inv_s,
         c=float(coef[2]),
-        period_sigma=math.sqrt(max(float(cov[1, 1]), 0.0)),
+        period_sigma=math.sqrt(max(float(cov[1, 1]), 0.0)) * inv_s,
         c_sigma=math.sqrt(max(float(cov[2, 2]), 0.0)),
         k_ref=k_ref,
         sigma_even=s_even,
         sigma_odd=s_odd,
         n_even=n_even,
         n_odd=n_odd,
-        n_trimmed=int(np.count_nonzero(~keep)),
-        q=float(coef[3]) if quadratic else math.nan,
-        q_sigma=math.sqrt(max(float(cov[3, 3]), 0.0)) if quadratic else math.nan,
+        n_trimmed=n_all - n_keep,
+        q=float(coef[3]) * inv_s2,
+        q_sigma=math.sqrt(max(float(cov[3, 3]), 0.0)) * inv_s2,
     )
 
 
@@ -869,12 +1021,20 @@ def _window_sigma_factor(m: Metrics) -> float:
 
 
 def timing_confidence(m: Metrics, config: MetricsConfig) -> float:
-    """Confidence of the rate and beat error: ``q_n * q_sigma * q_excl`` (module docstring)."""
+    """Confidence of the rate and beat error: ``q_n * q_sigma * q_excl`` (module docstring).
+
+    When the short-term beat-to-beat scatter (``pair_sigma_*_us``) is available, ``q_sigma``
+    uses ``min(line_sigma, pair_sigma)`` so slow physical gear-train wander in long takes does
+    not masquerade as noisy acoustics (while rate uncertainty still carries the full wander
+    through ``sigma_*_us`` and the block jackknife).
+    """
     if not math.isfinite(m.rate_s_per_day):
         return 0.0
     n_min = min(m.n_used_even, m.n_used_odd)
     q_n = min(1.0, n_min / (3.0 * config.min_beats_per_parity))
-    s_max = max(m.sigma_even_us, m.sigma_odd_us)
+    s_line = max(m.sigma_even_us, m.sigma_odd_us)
+    s_pair = max(m.pair_sigma_even_us, m.pair_sigma_odd_us)
+    s_max = min(s_line, s_pair) if (math.isfinite(s_line) and math.isfinite(s_pair)) else s_line
     q_sigma = 1.0 / (1.0 + s_max / 500.0) if math.isfinite(s_max) else 0.0
     q_excl = max(0.0, 1.0 - m.excluded_fraction)
     return float(min(1.0, max(0.0, q_n * q_sigma * q_excl)))
@@ -897,17 +1057,20 @@ def compute_metrics(
     templates: tuple[ParityTemplate | None, ParityTemplate | None],
     config: MetricsConfig,
     previous_points: tuple[str, str] | None = None,
+    *,
+    compute_windows: bool = True,
 ) -> Metrics:
     """Rate, beat error and amplitude of ``beats`` (batch mode).
 
     ``previous_points``: ``Metrics.rate_point`` of the previous update of a live reading (see
-    ``select_timing``); None in batch mode.
+    ``select_timing``); None in batch mode. ``compute_windows=False`` skips per-window rates
+    when the caller does not display them and the span holds fewer than 6 windows.
     """
     if _memo.fits is not None:  # nested call: the outer one owns the memo
-        return _compute_metrics(beats, templates, config, previous_points)
+        return _compute_metrics(beats, templates, config, previous_points, compute_windows)
     _memo.fits = {}
     try:
-        return _compute_metrics(beats, templates, config, previous_points)
+        return _compute_metrics(beats, templates, config, previous_points, compute_windows)
     finally:
         _memo.fits = None
 
@@ -917,6 +1080,7 @@ def _compute_metrics(
     templates: tuple[ParityTemplate | None, ParityTemplate | None],
     config: MetricsConfig,
     previous_points: tuple[str, str] | None,
+    compute_windows: bool = True,
 ) -> Metrics:
     fs = config.sample_rate
     k, t, excluded, points = select_timing(beats, config, previous_points)
@@ -953,10 +1117,19 @@ def _compute_metrics(
     m.n_used_even, m.n_used_odd = fit.n_even, fit.n_odd
     m.sigma_even_us = fit.sigma_even / fs * 1e6
     m.sigma_odd_us = fit.sigma_odd / fs * 1e6
+    ki = k.astype(np.int64)
+    even_m = (ki & 1) == 0
+    pe = _pair_sigma(ki[even_m], t[even_m])
+    po = _pair_sigma(ki[~even_m], t[~even_m])
+    if math.isfinite(pe):
+        m.pair_sigma_even_us = pe / fs * 1e6
+    if math.isfinite(po):
+        m.pair_sigma_odd_us = po / fs * 1e6
     m.rate_s_per_day, m.rate_sigma_s_per_day = rate_from_period(
         fit.period, fit.period_sigma, config
     )
-    m.windows = window_rates(k, t, config)
+    if compute_windows:
+        m.windows = window_rates(k, t, config)
     (
         m.rate_trend_s_per_day_per_min,
         m.rate_trend_sigma_s_per_day_per_min,
@@ -1012,9 +1185,16 @@ def _compute_metrics(
 
 
 def _beat_error_candidate(
-    k: NDArray[np.float64], t: NDArray[np.float64], config: MetricsConfig
+    k: NDArray[np.float64],
+    t: NDArray[np.float64],
+    config: MetricsConfig,
+    c_shift: float = 0.0,
 ) -> tuple[float, float, float, float] | None:
-    """``(beat_error_ms, sigma_ms, sigma_block_ms, uncertainty_ms)`` of one set of instants."""
+    """``(beat_error_ms, sigma_ms, sigma_block_ms, uncertainty_ms)`` of one set of instants.
+
+    ``c_shift`` shifts the parity half-difference ``c`` analytically (e.g. template P1
+    projection ``-0.5 * (off_even - off_odd)``) without refitting shifted copies of ``t``.
+    """
     fit = fit_parity_weighted(
         k,
         t,
@@ -1024,7 +1204,9 @@ def _beat_error_candidate(
     )
     if fit is None:
         return None
-    be, sigma = beat_error_from_fit(fit, config.sample_rate)
+    fs = config.sample_rate
+    be = 2.0 * abs(fit.c + c_shift) / fs * 1e3
+    sigma = 2.0 * fit.c_sigma / fs * 1e3
     # block jackknife of the beat error (same blocks as the trend)
     vals: list[float] = []
     for mask in _blocks(t, config.trend_blocks):
@@ -1038,7 +1220,7 @@ def _beat_error_candidate(
         if f is None:
             vals = []
             break
-        vals.append(beat_error_from_fit(f, config.sample_rate)[0])
+        vals.append(2.0 * abs(f.c + c_shift) / fs * 1e3)
     sigma_block = _jackknife_sigma(vals) if vals else math.nan
     return be, sigma, sigma_block, float(np.nanmax([sigma, sigma_block]))
 
@@ -1061,8 +1243,9 @@ def _beat_error(
     candidates: list[tuple[str, tuple[float, float, float, float]]] = []
     offsets = [tp.onset_ref - tp.onset_p1 if tp is not None else math.nan for tp in templates]
     if all(math.isfinite(v) for v in offsets):
-        even = (k.astype(np.int64) % 2) == 0
-        res = _beat_error_candidate(k, t - np.where(even, offsets[0], offsets[1]), config)
+        # Shifting even by -off0 and odd by -off1 only shifts c by -0.5 * (off0 - off1);
+        # reusing (k, t) hits the memoized drop fits directly.
+        res = _beat_error_candidate(k, t, config, c_shift=-0.5 * (offsets[0] - offsets[1]))
         if res is not None:
             candidates.append(("p1", res))
     # each beat's own P1 onset: exact where P1 is a clean front, noisy where it is weak
@@ -1192,7 +1375,13 @@ class MetricsTracker:
     def beats(self) -> list[Beat]:
         return list(self._beats)
 
-    def result(self) -> Metrics:
-        m = compute_metrics(list(self._beats), self._templates, self.config, self._points)
+    def result(self, *, compute_windows: bool = True) -> Metrics:
+        m = compute_metrics(
+            list(self._beats),
+            self._templates,
+            self.config,
+            self._points,
+            compute_windows=compute_windows,
+        )
         self._points = m.rate_point if math.isfinite(m.rate_s_per_day) else None
         return m

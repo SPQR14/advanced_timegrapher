@@ -215,3 +215,13 @@ def test_tic_tac_warning_only_when_it_persists() -> None:
     shown = DisplayFigures(rate_s_per_day=5.0, amplitude_tic_deg=295, amplitude_tac_deg=260)
     w = mw.snapshot_to_telemetry(replace(snap, display=shown), FS).warnings
     assert len(w) == 1 and "295° / 260°" in w[0]
+    w_sat = mw.snapshot_to_telemetry(
+        replace(snap, saturated_beats=10, normalized=False), FS
+    ).warnings
+    assert any("Normalizar audio" in s for s in w_sat)
+    w_norm = mw.snapshot_to_telemetry(
+        replace(snap, saturated_beats=10, normalized=True), FS
+    ).warnings
+    assert any("saturados" in s for s in w_norm) and not any(
+        "Normalizar audio" in s for s in w_norm
+    )

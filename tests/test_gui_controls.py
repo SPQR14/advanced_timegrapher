@@ -151,6 +151,9 @@ def test_new_texts_exist_in_both_languages() -> None:
         "cal_ref_apply",
         "cal_ref_apply_tooltip",
         "cal_ref_note",
+        "test_progress",
+        "test_progress_tooltip",
+        "test_progress_stab_short",
     ]
     en, es = Translator.DICTIONARIES["en"], Translator.DICTIONARIES["es"]
     assert set(en) == set(es)
@@ -626,11 +629,17 @@ def test_about_and_report_dialog_buttons_have_contrast(window) -> None:
     report.close()
 
 
-def test_hud_cards_reduced_by_7px(window) -> None:
-    for card in (window.card_rate, window.card_beat_error, window.card_amplitude):
-        assert card.value_label.minimumHeight() == 51
-        assert card.value_label.font().pointSize() == 32
-        assert "font-size: 32pt;" in card.value_label.styleSheet()
+def test_hud_cards_compact_size_and_matching_accents(window) -> None:
+    expected = (
+        (window.card_rate, "#00e5ff"),
+        (window.card_beat_error, "#00e676"),
+        (window.card_amplitude, "#ffab00"),
+    )
+    for card, accent in expected:
+        assert card.value_label.minimumHeight() == 46
+        assert card.value_label.font().pointSize() == 29
+        assert "font-size: 29pt;" in card.value_label.styleSheet()
+        assert f"border-left: 4px solid {accent};" in card.styleSheet()
 
 
 def test_clock_drift_footer_updates_from_loaded_calibration(window) -> None:
@@ -656,3 +665,85 @@ def test_clock_drift_footer_updates_from_loaded_calibration(window) -> None:
     assert "+0.00 ppm" in window.lbl_drift_status.text()
     assert window.lbl_stat_drift_val.text() == ""
     dlg.close()
+
+
+def test_top_bar_progress_lang_and_statusbar_mock_placement(window, qtbot) -> None:
+    """Verify: (1) progress bar right next to duration, (2) lang right next to progress bar,
+    (3) MOCK button in bottom status bar immediately left of the session status label."""
+    window.resize(1920, 1080)
+    window.show()
+    qtbot.wait(50)
+
+    # 1 & 2. Progress bar follows Test Duration; Language selector sits immediately to its right
+    flow = window.top_fields.layout()
+    blocks = [flow.itemAt(i).widget() for i in range(flow.count())]
+    dur_idx = next(i for i, b in enumerate(blocks) if b.isAncestorOf(window.cmb_duration))
+    prg_idx = next(i for i, b in enumerate(blocks) if b.isAncestorOf(window.prg_test_progress))
+    lang_idx = next(i for i, b in enumerate(blocks) if b.isAncestorOf(window.cmb_lang))
+    assert prg_idx == dur_idx + 1
+    assert lang_idx == prg_idx + 1
+    assert window.cmb_lang.mapTo(window, window.cmb_lang.rect().topLeft()).x() > (
+        window.prg_test_progress.mapTo(window, window.prg_test_progress.rect().topRight()).x()
+    )
+
+    # 3. MOCK button moved from top bar to bottom status bar, immediately left of status label
+    assert not window.top_bar.isAncestorOf(window.btn_mock)
+    assert window.statusBar().isAncestorOf(window.btn_mock)
+    mock_right = window.btn_mock.mapTo(window, window.btn_mock.rect().topRight()).x()
+    status_left = window.lbl_session_status.mapTo(
+        window, window.lbl_session_status.rect().topLeft()
+    ).x()
+    assert mock_right <= status_left
+
+
+def test_realtime_test_progress_bar_lifecycle(window, monkeypatch) -> None:
+    """Progress bar tracks stabilization + measurement in real time and localizes cleanly."""
+    window.set_session_timing(stabilization_s=10, duration_s=60)
+    assert window.prg_test_progress.value() == 0
+
+    clock = [1000.0]
+    monkeypatch.setattr(mw.time, "monotonic", lambda: clock[0])
+
+    window.btn_mock.setChecked(True)
+    window.start_capture()
+    try:
+        # At t=0: stabilizing phase
+        assert window.prg_test_progress.value() == 0
+        assert window._test_progress_kind == "stabilizing"
+        assert "STAB" in window.prg_test_progress.format()
+
+        # Halfway through stabilization (t=5 s of 70 s total -> 7 %)
+        clock[0] = 1005.0
+        window._check_session_duration()
+        assert window.prg_test_progress.value() == 7
+        assert window._test_progress_kind == "stabilizing"
+        assert "00:05/01:10" in window.prg_test_progress.format()
+
+        # Language switch refreshes phase prefix in place
+        window.cmb_lang.setCurrentIndex(1)  # ES
+        assert "ESTAB" in window.prg_test_progress.format()
+        assert window.lbl_test_progress.text() == window.translator.tr("test_progress")
+        window.cmb_lang.setCurrentIndex(0)  # back to EN
+
+        # Halfway through total session (t=35 s of 70 s -> 50 %, measuring phase)
+        clock[0] = 1035.0
+        window._check_session_duration()
+        assert window._capture_state == "MIDIENDO"
+        assert window.prg_test_progress.value() == 50
+        assert window._test_progress_kind is None
+        assert "50% (00:35/01:10)" == window.prg_test_progress.format()
+
+        # Completion (t=70 s -> 100 %, done, session stops automatically)
+        clock[0] = 1070.0
+        window._check_session_duration()
+        assert window.prg_test_progress.value() == 100
+        assert window._test_progress_kind == "done"
+        assert window._capture_state == "INACTIVO"
+    finally:
+        window.stop_capture()
+
+    # Changing test duration while idle resets the completed bar back to 0%
+    window.set_session_timing(duration_s=120)
+    assert window.prg_test_progress.value() == 0
+    assert window.prg_test_progress.format() == "%p%"
+    assert window._test_progress_kind is None

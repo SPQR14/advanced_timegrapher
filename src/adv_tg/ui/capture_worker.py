@@ -585,17 +585,22 @@ class _CaptureReader(QObject):
             self._last_level_idx = total
             return False
         self._last_level_idx = total
-        peak_db = _dbfs(float(np.max(np.abs(x))))
-        rms_db = _dbfs(math.sqrt(float(np.mean(x * x))))
-        self._owner.level_updated.emit(peak_db, rms_db, peak_db >= SATURATION_DBFS)
-        self._log_level_1s(x, peak_db >= SATURATION_DBFS)
+        if x.size == 0:
+            return False
+        peak = float(np.max(np.abs(x)))
+        sumsq = float(np.dot(x, x))
+        peak_db = _dbfs(peak)
+        rms_db = _dbfs(math.sqrt(sumsq / x.size))
+        saturated = peak_db >= SATURATION_DBFS
+        self._owner.level_updated.emit(peak_db, rms_db, saturated)
+        self._log_level_1s(peak, sumsq, x.size, saturated)
         return True
 
-    def _log_level_1s(self, x: np.ndarray, saturated: bool) -> None:
+    def _log_level_1s(self, peak: float, sumsq: float, n: int, saturated: bool) -> None:
         """Diagnostics: DEBUG level summary once per second (to calibrate the quality bar)."""
-        self._lvl_peak = max(self._lvl_peak, float(np.max(np.abs(x))))
-        self._lvl_sumsq += float(np.dot(x, x))
-        self._lvl_n += x.size
+        self._lvl_peak = max(self._lvl_peak, peak)
+        self._lvl_sumsq += sumsq
+        self._lvl_n += n
         self._lvl_sat = self._lvl_sat or saturated
         now = time.perf_counter()
         if now < self._lvl_next_log:

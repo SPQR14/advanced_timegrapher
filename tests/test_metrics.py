@@ -19,6 +19,7 @@ from adv_tg.core.metrics import (
     format_beat_error_ms,
     rate_from_period,
     select_beats,
+    timing_confidence,
 )
 
 FS = 48_000
@@ -358,6 +359,39 @@ def test_too_few_beats_gives_no_figures() -> None:
 def test_confidence_is_bounded() -> None:
     m = compute_metrics(_beats(jitter_us=(100.0, 300.0), seed=4), _templates(), _cfg())
     assert 0.0 < m.confidence <= 1.0
+
+
+def test_timing_confidence_separates_smooth_wander_from_acoustic_jitter() -> None:
+    """Slow sinusoidal gear-train modulation widens line sigma and block uncertainty, but
+    short-term beat-to-beat jitter (``pair_sigma_*_us``) stays low so timing confidence stays
+    high; genuine beat-to-beat noise of equal RMS keeps timing confidence low."""
+    clean = _beats(600, jitter_us=(20.0, 20.0), seed=11)
+    # 60-second fourth-wheel modulation of +-450 us (smooth from beat to beat)
+    wander = [
+        Beat(
+            b.k,
+            b.p1,
+            b.p2,
+            b.p3,
+            3,
+            -6,
+            30,
+            0,
+            0.9,
+            b.flags,
+            t_fine=b.t_fine + 450e-6 * FS * math.sin(2.0 * math.pi * (b.k / 6.0) / 60.0),
+        )
+        for b in clean
+    ]
+    noisy = _beats(600, jitter_us=(320.0, 320.0), seed=12)
+    cfg = _cfg()
+    m_wander = compute_metrics(wander, _templates(), cfg)
+    m_noisy = compute_metrics(noisy, _templates(), cfg)
+    assert m_wander.sigma_even_us > 250.0
+    assert m_wander.pair_sigma_even_us < 40.0
+    assert timing_confidence(m_wander, cfg) > 0.85
+    assert timing_confidence(m_noisy, cfg) < 0.70
+    assert timing_confidence(m_wander, cfg) > timing_confidence(m_noisy, cfg) + 0.20
 
 
 # ---------------------------------------------------------------------- incremental

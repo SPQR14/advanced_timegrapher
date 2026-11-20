@@ -33,7 +33,7 @@ pulls Qt); ``sounddevice`` is imported lazily. Nothing from ``adv_tg.ui``.
 
 from __future__ import annotations
 
-import collections
+import queue
 import struct
 import sys
 import threading
@@ -54,7 +54,6 @@ FRAME_HEADER = struct.Struct("<QqqqI")
 #: Log file name used by the child (``logs/adv_tg_capture.log``).
 LOG_NAME = "adv_tg_capture"
 STATS_PERIOD_S = 1.0
-SENDER_IDLE_S = 0.002
 DRAIN_TIMEOUT_S = 2.0
 FAKE_BLOCKSIZE = 512
 FAKE_RAMP_MODULO = 1 << 24  # float32 represents integers exactly up to 2**24
@@ -164,7 +163,7 @@ class _ChildCapture:
         self.params = params
         self.fs = float(params["sample_rate"])
         self.data_conn = data_conn
-        self.queue: collections.deque[tuple[int, int, int, bytes]] = collections.deque()
+        self.queue: queue.SimpleQueue[tuple[int, int, int, bytes] | None] = queue.SimpleQueue()
         self.stream: Any = None
         self._pa_clock: Any = None
         self.channels = 1  # channels the device was opened with
@@ -179,7 +178,6 @@ class _ChildCapture:
         # Sender state (written only by the sender thread)
         self.seq_sent = 0
         self.pipe_broken = False
-        self._sender_stop = threading.Event()
         self._sender: threading.Thread | None = None
 
     # ------------------------------------------------------------------ callback
@@ -200,8 +198,8 @@ class _ChildCapture:
             adc = adc_end_ns(time_info, frames, self.fs)
             sel = self.selector
             ch = 0 if sel is None else sel.pick(indata)
-            self.queue.append((stamp, adc, wall, indata[:, ch].tobytes()))
-            backlog = len(self.queue)
+            self.queue.put_nowait((stamp, adc, wall, indata[:, ch].tobytes()))
+            backlog = self.queue.qsize()
             if backlog > self.backlog_max:
                 self.backlog_max = backlog
         except Exception:
@@ -288,30 +286,46 @@ class _ChildCapture:
                 except Exception:
                     pass
         if not drain:
-            self.queue.clear()
-        self._sender_stop.set()
+            while True:
+                try:
+                    self.queue.get_nowait()
+                except queue.Empty:
+                    break
         if self._sender is not None:
+            self.queue.put_nowait(None)
             self._sender.join(DRAIN_TIMEOUT_S)
+            self._sender = None
 
     # ------------------------------------------------------------------ sender
     def _send_loop(self) -> None:
         q = self.queue
-        pack = FRAME_HEADER.pack
+        hdr_size = FRAME_HEADER.size
+        pack_into = FRAME_HEADER.pack_into
         send = self.data_conn.send_bytes
-        while True:
-            try:
-                host_ns, adc_ns, wall_ns, payload = q.popleft()
-            except IndexError:
-                if self._sender_stop.is_set():
+        buf = bytearray(hdr_size + 4096)
+        mv = memoryview(buf)
+        try:
+            while True:
+                item = q.get()
+                if item is None:
                     return
-                time.sleep(SENDER_IDLE_S)
-                continue
-            try:
-                send(pack(self.seq_sent, host_ns, adc_ns, wall_ns, len(payload) // 4) + payload)
-            except (OSError, ValueError):
-                self.pipe_broken = True
-                return
-            self.seq_sent += 1
+                host_ns, adc_ns, wall_ns, payload = item
+                plen = len(payload)
+                total = hdr_size + plen
+                if total > len(buf):
+                    mv.release()
+                    buf = bytearray(total)
+                    mv = memoryview(buf)
+                pack_into(mv, 0, self.seq_sent, host_ns, adc_ns, wall_ns, plen // 4)
+                mv[hdr_size:total] = payload
+                try:
+                    send(mv[:total])
+                except (OSError, ValueError):
+                    self.pipe_broken = True
+                    return
+                self.seq_sent += 1
+        finally:
+            mv.release()
 
     # ------------------------------------------------------------------ stats
     def stats(self) -> dict[str, Any]:
@@ -321,7 +335,7 @@ class _ChildCapture:
             "callback_errors": self.callback_errors,
             "max_callback_us": self.max_callback_ns / 1e3,
             "backlog_max": self.backlog_max,
-            "backlog_now": len(self.queue),
+            "backlog_now": self.queue.qsize(),
             "seq_sent": self.seq_sent,
             "channels": self.channels,
             "channel": self.channel,
