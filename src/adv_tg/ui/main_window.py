@@ -308,10 +308,18 @@ class HudCard(QFrame):
         super().__init__(parent)
         self.setObjectName("HudCard")
         self._accent_color = accent_color
+        self.setStyleSheet(
+            f"QFrame#HudCard {{"
+            f" background-color: #11161d;"
+            f" border: 1px solid #2b3545;"
+            f" border-left: 4px solid {self._accent_color};"
+            f" border-radius: 5px;"
+            f" }}"
+        )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(2)
+        layout.setContentsMargins(12, 4, 12, 4)
+        layout.setSpacing(1)
 
         header_layout = QHBoxLayout()
         self.title_label = QLabel(title)
@@ -324,9 +332,9 @@ class HudCard(QFrame):
 
         self.value_label = QLabel("---.-")
         self.value_label.setObjectName("HudCardValue")
-        self.value_label.setMinimumHeight(51)
+        self.value_label.setMinimumHeight(46)
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        mono_font = QFont("JetBrains Mono", 32, QFont.Weight.Bold)
+        mono_font = QFont("JetBrains Mono", 29, QFont.Weight.Bold)
         mono_font.setStyleHint(QFont.StyleHint.Monospace)
         self.value_label.setFont(mono_font)
         self.dimmed = False
@@ -353,9 +361,9 @@ class HudCard(QFrame):
         self.value_label.setStyleSheet(
             f"color: {color}; "
             f'font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace; '
-            f"font-size: 32pt; "
+            f"font-size: 29pt; "
             f"font-weight: 800; "
-            f"padding-bottom: 2px;"
+            f"padding-bottom: 1px;"
         )
 
     def set_value(self, text: str, dimmed: bool = False) -> None:
@@ -471,6 +479,8 @@ class MainWin(QMainWindow):
         # The quality bar follows the input level until the engine reports detection quality
         self._telemetry_seen: bool = False
         self._quality_kind: str | None = None  # colour class of the quality bar (None = default)
+        self._test_progress_kind: str | None = None  # colour class of the test progress bar
+        self._last_progress_elapsed_s: float | None = None
         self._capture_health_bad: bool = False
         self._perf_waveform = SlotProfiler("waveform_ready")
         self._perf_level = SlotProfiler("level_updated")
@@ -750,6 +760,25 @@ class MainWin(QMainWindow):
                 );
                 border-radius: 3px;
             }}
+            QProgressBar#TestProgressBar {{
+                background-color: #0d1117;
+                border: 1px solid #303947;
+                border-radius: 4px;
+                text-align: center;
+                color: #f1f5f9;
+                font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+                font-size: 11px;
+                font-weight: 700;
+                min-height: 32px;
+                max-height: 32px;
+            }}
+            QProgressBar#TestProgressBar::chunk {{
+                background-color: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #0077b6, stop:1 #009e60
+                );
+                border-radius: 3px;
+            }}
             QPushButton {{
                 background-color: #1c2430;
                 color: #8b96a8;
@@ -876,6 +905,12 @@ class MainWin(QMainWindow):
                 background-color: #ff6d00;
                 color: #120800;
                 border-color: #ff9e40;
+            }}
+            QStatusBar QPushButton#MockButton {{
+                padding: 1px 10px;
+                margin-right: 6px;
+                font-size: 10px;
+                border-radius: 4px;
             }}
             QLabel#MockBadge {{
                 background-color: #ff6d00;
@@ -1078,7 +1113,20 @@ class MainWin(QMainWindow):
         self._configure_combo_box(self.cmb_duration, min_width=90)
         self.cmb_duration.setCurrentIndex(DURATION_CHOICES_S.index(DEFAULT_DURATION_S))
 
-        # Language selector (EN / ES)
+        # Real-time test progress bar (right next to Test Duration)
+        control_h = self.cmb_bph.sizeHint().height()
+        self.lbl_test_progress = QLabel()
+        self.lbl_test_progress.setObjectName("TopBarLabel")
+        self.prg_test_progress = QProgressBar()
+        self.prg_test_progress.setObjectName("TestProgressBar")
+        self.prg_test_progress.setRange(0, 100)
+        self.prg_test_progress.setValue(0)
+        self.prg_test_progress.setFormat("%p%")
+        self.prg_test_progress.setTextVisible(True)
+        self.prg_test_progress.setMinimumWidth(190)
+        self.prg_test_progress.setMaximumWidth(240)
+
+        # Language selector (EN / ES) — placed right next to the test progress bar
         self.lbl_lang = QLabel()
         self.lbl_lang.setObjectName("TopBarLabel")
         self.cmb_lang = QComboBox()
@@ -1095,7 +1143,6 @@ class MainWin(QMainWindow):
         self.top_fields.setObjectName("TopBarFields")
         fields_flow = FlowLayout(self.top_fields, h_spacing=10, v_spacing=6)
         fields_flow.setContentsMargins(0, 0, 0, 0)
-        control_h = self.cmb_bph.sizeHint().height()
         for lbl, widget in (
             (self.lbl_test_name, self.txt_test_name),
             (self.lbl_caliber, self.cmb_caliber),
@@ -1107,6 +1154,7 @@ class MainWin(QMainWindow):
             (self.lbl_srate, self.cmb_srate),
             (self.lbl_stab, self.cmb_stab),
             (self.lbl_duration, self.cmb_duration),
+            (self.lbl_test_progress, self.prg_test_progress),
             (self.lbl_lang, self.cmb_lang),
         ):
             block = QWidget()
@@ -1129,13 +1177,6 @@ class MainWin(QMainWindow):
             fields_flow.addWidget(block)
         top_layout.addWidget(self.top_fields, stretch=1)
 
-        # MOCK toggle: simulated engine to test the whole GUI (kept in sync with cmb_device)
-        self.btn_mock = QPushButton("MOCK")
-        self.btn_mock.setObjectName("MockButton")
-        self.btn_mock.setCheckable(True)
-        self.btn_mock.setCursor(Qt.CursorShape.PointingHandCursor)
-        top_layout.addWidget(self.btn_mock, alignment=Qt.AlignmentFlag.AlignVCenter)
-
         # "About" (version, licence, folders for bug reports)
         self.btn_about = QPushButton()
         self.btn_about.setObjectName("MockButton")
@@ -1149,6 +1190,9 @@ class MainWin(QMainWindow):
         self.btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_report.clicked.connect(lambda: self.open_report_dialog())
         top_layout.addWidget(self.btn_report, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        self.cmb_stab.currentIndexChanged.connect(lambda _i: self._on_session_timing_changed())
+        self.cmb_duration.currentIndexChanged.connect(lambda _i: self._on_session_timing_changed())
 
         root_layout.addWidget(self.top_bar)
 
@@ -1165,8 +1209,8 @@ class MainWin(QMainWindow):
         self.left_panel.setMinimumWidth(300)
         self.left_panel.setMaximumWidth(390)
         left_layout = QVBoxLayout(self.left_panel)
-        left_layout.setContentsMargins(10, 10, 10, 10)
-        left_layout.setSpacing(8)
+        left_layout.setContentsMargins(10, 8, 10, 8)
+        left_layout.setSpacing(6)
 
         self.card_rate = HudCard("RATE", "s/d", accent_color="#00e5ff")
         self.card_beat_error = HudCard("BEAT ERROR", "ms", accent_color="#00e676")
@@ -1219,7 +1263,7 @@ class MainWin(QMainWindow):
 
         stats_grid = QGridLayout()
         stats_grid.setHorizontalSpacing(8)
-        stats_grid.setVerticalSpacing(3)
+        stats_grid.setVerticalSpacing(2)
 
         self.lbl_stat_max_key = QLabel()
         self.lbl_stat_max_val = QLabel("")
@@ -1304,8 +1348,8 @@ class MainWin(QMainWindow):
         gstats_layout.setSpacing(4)
 
         self.tbl_global_stats = QTableWidget(0, 4)
-        self.tbl_global_stats.setMinimumHeight(95)
-        self.tbl_global_stats.setMaximumHeight(130)
+        self.tbl_global_stats.setMinimumHeight(82)
+        self.tbl_global_stats.setMaximumHeight(120)
         self.tbl_global_stats.verticalHeader().setVisible(False)
         self.tbl_global_stats.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tbl_global_stats.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -1625,11 +1669,20 @@ class MainWin(QMainWindow):
         content_layout.addWidget(self.splitter)
         root_layout.addLayout(content_layout, stretch=1)
 
-        # Status bar: MOCK badge (only visible while simulated data is shown) + session state
+        # Status bar: MOCK badge (left, visible while simulated data is shown) + permanent
+        # right-side controls: MOCK toggle -> session status -> drift -> capture health -> update
         self.lbl_mock_badge = QLabel()
         self.lbl_mock_badge.setObjectName("MockBadge")
         self.lbl_mock_badge.setVisible(False)
         self.statusBar().addWidget(self.lbl_mock_badge)
+
+        # MOCK toggle: simulated engine to test the whole GUI (kept in sync with cmb_device)
+        self.btn_mock = QPushButton("MOCK")
+        self.btn_mock.setObjectName("MockButton")
+        self.btn_mock.setCheckable(True)
+        self.btn_mock.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.statusBar().addPermanentWidget(self.btn_mock)
+
         self.lbl_session_status = QLabel()
         self.lbl_session_status.setObjectName("StatValue")
         self.statusBar().addPermanentWidget(self.lbl_session_status)
@@ -3064,6 +3117,10 @@ class MainWin(QMainWindow):
         self.lbl_srate.setText(tr("sample_rate"))
         self.lbl_stab.setText(tr("stab_time"))
         self.lbl_duration.setText(tr("test_duration"))
+        self.lbl_test_progress.setText(tr("test_progress"))
+        self.prg_test_progress.setToolTip(tr("test_progress_tooltip"))
+        if self._last_progress_elapsed_s is not None:
+            self._update_test_progress(self._last_progress_elapsed_s)
         self.lbl_lang.setText(tr("language"))
 
         if self.cmb_device.count() > 0:
@@ -3186,6 +3243,71 @@ class MainWin(QMainWindow):
             normalize=self.chk_normalize.isChecked(),
         )
 
+    _PROGRESS_BAR_STYLES: dict[str, str] = {
+        "stabilizing": (
+            "QProgressBar#TestProgressBar::chunk { "
+            "background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 #b26a00, stop:1 #d48806); border-radius: 3px; }"
+        ),
+        "done": (
+            "QProgressBar#TestProgressBar::chunk { "
+            "background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 #14804a, stop:1 #00a86b); border-radius: 3px; }"
+        ),
+    }
+
+    @staticmethod
+    def _format_progress_time(seconds: float) -> str:
+        """Compact ``MM:SS`` clock for the test progress bar."""
+        whole = max(0, int(seconds))
+        return f"{whole // 60:02d}:{whole % 60:02d}"
+
+    def _set_test_progress_kind(self, kind: str | None) -> None:
+        """Colour class of the test progress bar; only re-applies QSS on transitions."""
+        if kind == self._test_progress_kind:
+            return
+        self._test_progress_kind = kind
+        self.prg_test_progress.setStyleSheet(
+            "" if kind is None else self._PROGRESS_BAR_STYLES[kind]
+        )
+
+    def _reset_test_progress(self) -> None:
+        """Reset the real-time test progress bar to 0% idle state."""
+        self._last_progress_elapsed_s = None
+        if self.prg_test_progress.value() != 0:
+            self.prg_test_progress.setValue(0)
+        if self.prg_test_progress.format() != "%p%":
+            self.prg_test_progress.setFormat("%p%")
+        self._set_test_progress_kind(None)
+
+    def _on_session_timing_changed(self) -> None:
+        """Clear a finished test's progress readout when duration or stabilization changes."""
+        if self._capture_state == "INACTIVO":
+            self._reset_test_progress()
+
+    def _update_test_progress(self, elapsed_s: float) -> None:
+        """Update the top-bar progress bar in real time for the active session."""
+        stab_s = self.stabilization_s()
+        duration_s = self.duration_s()
+        total_s = stab_s + duration_s
+        clamped_s = min(max(0.0, float(elapsed_s)), total_s)
+        self._last_progress_elapsed_s = clamped_s
+        pct = 100 if total_s <= 0.0 else int(round(100.0 * clamped_s / total_s))
+        pct = max(0, min(100, pct))
+        cur_txt = self._format_progress_time(clamped_s)
+        tot_txt = self._format_progress_time(total_s)
+        if stab_s > 0.0 and clamped_s < stab_s:
+            kind: str | None = "stabilizing"
+            fmt = f"{self.translator.tr('test_progress_stab_short')} {pct}% ({cur_txt}/{tot_txt})"
+        else:
+            kind = "done" if pct >= 100 else None
+            fmt = f"{pct}% ({cur_txt}/{tot_txt})"
+        if self.prg_test_progress.value() != pct:
+            self.prg_test_progress.setValue(pct)
+        if self.prg_test_progress.format() != fmt:
+            self.prg_test_progress.setFormat(fmt)
+        self._set_test_progress_kind(kind)
+
     def _check_session_duration(self) -> None:
         """Automatically stop capture once (stabilization_s + duration_s) has elapsed."""
         if self._capture_start_monotonic is None:
@@ -3202,6 +3324,7 @@ class MainWin(QMainWindow):
         mins = int(display_s) // 60
         secs = display_s % 60.0
         self.lbl_stat_elapsed_val.setText(f"{mins:02d}:{secs:04.1f}")
+        self._update_test_progress(elapsed_s)
 
         if elapsed_s >= total_limit_s:
             logger.info(
@@ -3258,6 +3381,8 @@ class MainWin(QMainWindow):
         self.prg_snr.setValue(0)
         self._set_quality_bar_kind(None)
         self.lbl_snr_value.setText("-- dB")
+        self._reset_test_progress()
+        self._update_test_progress(0.0)
         if isinstance(self.dsp_worker, CaptureStreamWorker):
             for card in (self.card_rate, self.card_beat_error, self.card_amplitude):
                 card.set_value(self.EMPTY_VALUE)
@@ -3637,6 +3762,7 @@ class MainWin(QMainWindow):
             # ~30 FPS display tick), so it never waits for the DSP analysis to finish.
 
         if self._capture_start_monotonic is not None and elapsed_s >= stab_s + duration_s:
+            self._update_test_progress(elapsed_s)
             self.stop_capture()
 
     def _show_mock_beat(self, latest_beat: BeatEvent, fs: float) -> None:
