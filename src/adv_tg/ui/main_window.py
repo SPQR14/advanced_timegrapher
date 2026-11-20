@@ -58,6 +58,7 @@ from PyQt6.QtWidgets import (
 from adv_tg import __version__
 from adv_tg.core.adc_clock import PPM_TO_S_PER_DAY
 from adv_tg.core.models import BeatEvent, BeatTelemetry, TelemetryResult, WatchConfig
+from adv_tg.dsp.engine import _moving_average_same
 from adv_tg.i18n.translator import Translator
 from adv_tg.mock.generator import generate_tick_train, save_wav
 from adv_tg.mock.worker import MockStreamWorker
@@ -459,6 +460,7 @@ class MainWin(QMainWindow):
         # origin of the trace: mid point of the first tic and tac (the rows start around 0)
         self._tape_y0: float | None = None
         self._osc_span_ms: float | None = None
+        self._osc_t_ms: tuple[int, float, NDArray[np.float64]] | None = None
         self._wave_span: tuple[float, float] | None = None
         self._silence_since: float | None = None
         self._silence_warned: bool = False
@@ -3447,7 +3449,12 @@ class MainWin(QMainWindow):
             return
         peak_abs = float(np.max(np.abs(wave))) or 1.0
         norm_wave = wave / peak_abs
-        t_ms = (np.arange(wave.size, dtype=np.float64) / fs) * 1000.0
+        cached = self._osc_t_ms
+        if cached is not None and cached[0] == wave.size and cached[1] == fs:
+            t_ms = cached[2]
+        else:
+            t_ms = (np.arange(wave.size, dtype=np.float64) / fs) * 1000.0
+            self._osc_t_ms = (wave.size, fs, t_ms)
         # Fixed X range (the engine sends a fixed-length window): rescaling the axis on every
         # beat re-laid out the plot and caused visible stutters.
         span_ms = float(t_ms[-1])
@@ -3457,8 +3464,7 @@ class MainWin(QMainWindow):
             self.oscilloscope_plot.setXRange(0.0, span_ms, padding=0.0)
         self.osc_wave_curve.setData(t_ms, norm_wave)
         env_win = max(int(round(0.00015 * fs)), 3)
-        env_kernel = np.ones(env_win, dtype=np.float64) / float(env_win)
-        self.osc_envelope_curve.setData(t_ms, np.convolve(np.abs(norm_wave), env_kernel, "same"))
+        self.osc_envelope_curve.setData(t_ms, _moving_average_same(np.abs(norm_wave), env_win))
         spots = []
         colors = ("#00e676", "#ffab00", "#ff1744")
         stamps = (beat.timestamp_p1, beat.timestamp_p2, beat.timestamp_p3)

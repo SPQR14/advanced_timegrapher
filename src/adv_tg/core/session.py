@@ -449,7 +449,10 @@ class MeasurementSession:
             if math.isfinite(b.reference):
                 self._last_beat = b
         del self._recent_snr[:-SNR_BEATS]
-        metrics = self._tracker.result()
+        # Live 30 s span holds at most 3 windows (< 6 needed for chi2 scaling) and the GUI
+        # never plots per-window rates, so skipping window_rates saves 3 fits per 0.25 s tick.
+        need_windows = self.config.span_s >= 6.0 * self._metrics_config.window_s
+        metrics = self._tracker.result(compute_windows=need_windows)
         self._tape_follow(metrics)
         tape = self._tape(beats)
         tape_shift = self._tape_shift(metrics)

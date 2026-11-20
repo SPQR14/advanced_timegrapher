@@ -132,13 +132,25 @@ def lomb_scargle(t: NDArray, y: NDArray, freqs: NDArray, chunk: int = 512) -> ND
     out = np.zeros(freqs.size)
     if var <= 0.0 or t.size < 3:
         return out
+    n_t = t.size
     for a in range(0, freqs.size, chunk):
         w = 2.0 * np.pi * freqs[a : a + chunk, None]
-        tau = np.arctan2(np.sin(2 * w * t).sum(1), np.cos(2 * w * t).sum(1))[:, None] / (2 * w)
-        arg = w * (t - tau)
-        c, s = np.cos(arg), np.sin(arg)
-        yc, ys = (c * y).sum(1), (s * y).sum(1)
-        cc, ss = (c * c).sum(1), (s * s).sum(1)
+        wt = w * t
+        c0 = np.cos(wt)
+        s0 = np.sin(wt)
+        # Double-angle identities reuse c0/s0 instead of evaluating 4 trig matrices per chunk.
+        s2 = 2.0 * np.einsum("ij,ij->i", s0, c0)
+        c2 = 2.0 * np.einsum("ij,ij->i", c0, c0) - n_t
+        wt_tau = 0.5 * np.arctan2(s2, c2)
+        ct = np.cos(wt_tau)
+        st = np.sin(wt_tau)
+        cy = c0 @ y
+        sy = s0 @ y
+        yc = cy * ct + sy * st
+        ys = sy * ct - cy * st
+        r = np.hypot(c2, s2)
+        cc = 0.5 * (n_t + r)
+        ss = 0.5 * (n_t - r)
         out[a : a + chunk] = 0.5 * (yc**2 / np.maximum(cc, 1e-300) + ys**2 / np.maximum(ss, 1e-300))
     return out / var
 
@@ -314,21 +326,24 @@ def extract_series(
     slope = np.polyfit(k.astype(float), t, 1)[0]
     rate = (beat_period_s(bph) / slope - 1.0) * 86400.0
 
-    # P3 energy: Teager-Kaiser of the band-passed signal over the drop
+    # P3 energy: Teager-Kaiser of the band-passed signal over the drop (O(1) per beat via cumsum)
     sos = butter_bandpass_sos(4, (1000.0, min(15000.0, 0.45 * fs)), fs)
     psi = teager_kaiser(sosfiltfilt(sos, x))
+    psi_cs = np.empty(psi.size + 1, dtype=np.float64)
+    psi_cs[0] = 0.0
+    np.cumsum(psi, out=psi_cs[1:])
     pre, post = (int(round(v * 1e-3 * fs)) for v in ENERGY_WINDOW_MS)
     idx = np.round(t * fs).astype(np.int64)
-    energy = np.array(
-        [psi[max(0, i - pre) : min(psi.size, i + post)].sum() for i in idx], dtype=np.float64
-    )
+    lo_e = np.clip(idx - pre, 0, psi.size)
+    hi_e = np.clip(idx + post, 0, psi.size)
+    energy = psi_cs[hi_e] - psi_cs[lo_e]
     rel = np.empty_like(energy)
     for p in (0, 1):
         sel = k % 2 == p
         med = float(np.median(energy[sel])) if sel.any() else 0.0
         rel[sel] = energy[sel] / med - 1.0 if med > 0 else 0.0
     rel, _ = _detrend(k.astype(float), rel, parity=False)
-    sub = _sub_events(kept, psi, fs, float(bph), float(lift_angle_deg))
+    sub = _sub_events(kept, psi, psi_cs, fs, float(bph), float(lift_angle_deg))
 
     return BeatSeries(
         sample_rate=fs,
@@ -349,7 +364,12 @@ def extract_series(
 
 
 def _sub_events(
-    beats: list[Beat], psi: NDArray, fs: float, bph: float, lift_angle_deg: float
+    beats: list[Beat],
+    psi: NDArray,
+    psi_cs: NDArray,
+    fs: float,
+    bph: float,
+    lift_angle_deg: float,
 ) -> dict[str, NDArray]:
     """Per-beat onsets (s), sub-event energies, pre-P1 peak (dB) and amplitude."""
     p = np.array([[b.p1, b.p2, b.p3] for b in beats], dtype=np.float64).reshape(-1, 3)
@@ -363,6 +383,7 @@ def _sub_events(
         int(round(PRE_P1_WINDOW_MS[0] * 1e-3 * fs)),
         int(round(PRE_P1_WINDOW_MS[1] * 1e-3 * fs)),
     )
+    psi_n = psi.size
     for i, (a, b, c) in enumerate(p):
         if math.isfinite(a):
             i1 = int(round(a))
@@ -372,8 +393,13 @@ def _sub_events(
             if math.isfinite(c):
                 amp[i] = amplitude_from_lift_time((c - a) / fs, lift_angle_deg, bph)
         if math.isfinite(a) and math.isfinite(b) and math.isfinite(c) and a < b < c:
-            i1, i2, i3 = int(round(a)), int(round(b)), int(round(c))
-            e[i] = (psi[i1:i2].sum(), psi[i2:i3].sum(), psi[i3 : min(psi.size, i3 + post)].sum())
+            i1, i2, i3 = (
+                min(max(int(round(a)), 0), psi_n),
+                min(max(int(round(b)), 0), psi_n),
+                min(max(int(round(c)), 0), psi_n),
+            )
+            i4 = min(psi_n, i3 + post)
+            e[i] = (psi_cs[i2] - psi_cs[i1], psi_cs[i3] - psi_cs[i2], psi_cs[i4] - psi_cs[i3])
     return {
         "p1_s": p[:, 0] / fs,
         "p2_s": p[:, 1] / fs,

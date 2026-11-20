@@ -12,6 +12,7 @@ different level and tone.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -83,6 +84,13 @@ def beat_waveform(
     return buf, pre_s, pre_s + dt_p3_s
 
 
+@lru_cache(maxsize=16)
+def _decimate_time_axis(n_trimmed: int, fs: float, bins: int) -> NDArray[np.float64]:
+    arr = np.linspace(0.0, n_trimmed / fs * 1000.0, 2 * bins)
+    arr.flags.writeable = False
+    return arr
+
+
 def minmax_decimate(
     signal: NDArray[np.float64], fs: float, bins: int = 1000
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
@@ -95,7 +103,7 @@ def minmax_decimate(
     values = np.empty(2 * bins, dtype=np.float64)
     values[0::2] = trimmed.min(axis=1)
     values[1::2] = trimmed.max(axis=1)
-    time_ms = np.linspace(0.0, size * bins / fs * 1000.0, 2 * bins)
+    time_ms = _decimate_time_axis(size * bins, float(fs), bins)
     return time_ms, values
 
 

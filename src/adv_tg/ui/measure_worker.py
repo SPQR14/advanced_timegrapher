@@ -69,6 +69,7 @@ _dbg = Debugger.get(__name__)
 logger = _dbg.logger
 
 ANALYSIS_PERIOD_S: float = 0.25
+FEED_PERIOD_S: float = 0.125
 DRIFT_PERIOD_S: float = 1.0
 REPLAY_ENV_VAR: str = "ADV_TG_REPLAY_FILE"
 INPROC_ENV_VAR: str = "ADV_TG_ANALYSIS_INPROC"
@@ -207,6 +208,7 @@ class _SessionHook:
         self._cal_source = config.calibration_source
         self._analyzer = analyzer  # its session was started by the worker
         self._analyzer_dead = False
+        self._next_feed = 0.0
         self._next_analysis = 0.0
         self._next_drift = 0.0
         self._record_path = record_path
@@ -287,8 +289,15 @@ class _SessionHook:
     def tick(self, now: float) -> None:
         t0 = time.perf_counter()
         self._record()
-        self._analyzer.feed(self._stream)
-        if now >= self._next_analysis:
+        do_analysis = now >= self._next_analysis
+        if do_analysis or now >= self._next_feed:
+            self._next_feed = (
+                now + FEED_PERIOD_S
+                if self._next_feed == 0.0
+                else max(self._next_feed + FEED_PERIOD_S, now)
+            )
+            self._analyzer.feed(self._stream)
+        if do_analysis:
             self._next_analysis = max(self._next_analysis + ANALYSIS_PERIOD_S, now)
             self._analyzer.request_update()
         self._emit(self._analyzer.poll())

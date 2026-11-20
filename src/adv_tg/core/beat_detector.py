@@ -154,7 +154,12 @@ from adv_tg.core.beat_types import (
     lift_time_window_s,
 )
 from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
-from adv_tg.dsp.engine import compute_cell_envelope, detect_cell_candidates, sosfilt
+from adv_tg.dsp.engine import (
+    _moving_average_same,
+    compute_cell_envelope,
+    detect_cell_candidates,
+    sosfilt,
+)
 from adv_tg.dsp.filters import butter_bandpass_sos, sosfilt_zi, sosfiltfilt_padlen
 from adv_tg.dsp.interference import InterferenceFilter
 from adv_tg.dsp.normalizer import AudioNormalizer, NormalizerConfig
@@ -652,11 +657,20 @@ class _Cands:
 
 
 class _Tpl:
-    """Template of one parity: last aligned envelope segments, their median and onsets."""
+    """Template of one parity: preallocated ring of aligned envelope segments, median & onsets."""
 
-    def __init__(self, n: int) -> None:
-        self.segs: deque[NDArray] = deque(maxlen=n)
+    def __init__(self, n: int, length: int) -> None:
+        self.maxlen = int(n)
+        self.length = int(length)
+        # Beats as columns: rows are contiguous so in-place partition along axis=1 avoids
+        # per-refresh np.stack copies and allocations.
+        self.buf = np.empty((self.length, self.maxlen), dtype=np.float64)
+        self.scratch = np.empty((self.length, self.maxlen), dtype=np.float64)
+        self.n_segs = 0
+        self.pos = 0
         self.env: NDArray | None = None
+        self.burst_bz: NDArray | None = None
+        self.burst_nb = 0.0
         self.onset_p1 = math.nan
         self.onset_p3 = math.nan  # level onset: the point t_fine marks
         self.onset_front = math.nan  # steep-front onset (alternative for the t_lift)
@@ -674,6 +688,26 @@ class _Tpl:
         self.q_snr: list[float] = []
         self.q_onset: bool | None = None
         self.q_off: deque[float] = deque(maxlen=16)
+
+    def add_seg(self, seg: NDArray[np.float64]) -> None:
+        self.buf[:, self.pos] = seg
+        self.pos = (self.pos + 1) % self.maxlen
+        if self.n_segs < self.maxlen:
+            self.n_segs += 1
+
+    def median_env(self) -> NDArray[np.float64]:
+        """Row-wise median over the stored segments, bit-identical to ``np.median``."""
+        m = self.n_segs
+        if m == 1:
+            return self.buf[:, 0].copy()
+        work = self.scratch[:, :m]
+        np.copyto(work, self.buf[:, :m])
+        h = m >> 1
+        if m & 1:
+            work.partition(h, axis=1)
+            return work[:, h].copy()
+        work.partition((h - 1, h), axis=1)
+        return 0.5 * (work[:, h - 1] + work[:, h])
 
     @property
     def onset_ref(self) -> float:
@@ -840,7 +874,11 @@ class BeatDetector:
         self._tl_obs: deque[float] = deque(maxlen=8)
         self._tl_fwd: deque[float] = deque(maxlen=8)
         self._after_gap = False
-        self._tpl = [_Tpl(self.config.template_beats), _Tpl(self.config.template_beats)]
+        tpl_len = self.tpl_pre + self.tpl_post
+        self._tpl = [
+            _Tpl(self.config.template_beats, tpl_len),
+            _Tpl(self.config.template_beats, tpl_len),
+        ]
         self._fine_center = math.nan  # template onset of the last beat (see _fine)
         self._start_run(0)
 
@@ -1001,7 +1039,7 @@ class BeatDetector:
             out.append(
                 ParityTemplate(
                     parity=parity,
-                    n_beats=len(t.segs),
+                    n_beats=t.n_segs,
                     envelope=t.env.copy(),
                     onset_p1=t.onset_p1,
                     onset_p3=p3,
@@ -1148,15 +1186,8 @@ class BeatDetector:
         x = self._raw.get(a, b)
         f = self._interf
         if f is not None:
-            # noise frames that ended before this cell (fixed grid), then its gains
-            while True:
-                fa, fb = f.next_frame()
-                if fb > c0:
-                    break
-                if fa < self._raw.start:
-                    f.skip_frame()
-                else:
-                    f.add_frame(self._raw.get(fa, fb))
+            # noise frames that ended before this cell (fixed grid), batched in one 2-D rfft
+            f.add_frames(self._raw._a[: self._raw._n], self._raw.start, c0)
             g = f.gains(c0)
             if g is not None:
                 x = f.apply(x, g)
@@ -1401,25 +1432,31 @@ class BeatDetector:
         if n < 3:
             self._coef = None
             return
-        js = np.array([m[0] for m in self._model], dtype=np.float64)
-        ts = np.array([m[1] for m in self._model])
+        js = np.fromiter((m[0] for m in self._model), dtype=np.float64, count=n)
+        ts = np.fromiter((m[1] for m in self._model), dtype=np.float64, count=n)
         jl = int(js[-1])
         t0 = ts[-1]
-        cols = [np.ones(n), js - jl]
         parity = n >= 6
+        X = np.empty((n, 3 if parity else 2), dtype=np.float64)
+        X[:, 0] = 1.0
+        X[:, 1] = js - jl
         if parity:
-            cols.append(np.where(js % 2 == 0, 1.0, -1.0))
-        X = np.stack(cols, axis=1)
+            X[:, 2] = np.where((js.astype(np.int64) & 1) == 0, 1.0, -1.0)
         y = ts - t0
-        w = np.ones(n)
+        w = np.ones(n, dtype=np.float64)
         floor = 0.02e-3 * self.fs
         scale = floor
+        coef = np.zeros(X.shape[1], dtype=np.float64)
         for _ in range(3):
-            sw = np.sqrt(w)
-            coef, *_ = np.linalg.lstsq(X * sw[:, None], y * sw, rcond=None)
-            r = y - X @ coef
-            scale = max(1.4826 * float(np.median(np.abs(r))), floor)
-            w = np.minimum(1.0, 1.5 * scale / np.maximum(np.abs(r), _TINY))
+            Xw = X * w[:, None]
+            try:
+                coef = np.linalg.solve(X.T @ Xw, Xw.T @ y)
+            except np.linalg.LinAlgError:
+                sw = np.sqrt(w)
+                coef, *_ = np.linalg.lstsq(X * sw[:, None], y * sw, rcond=None)
+            r = np.abs(y - X @ coef)
+            scale = max(1.4826 * _median_inplace(r.copy()), floor)
+            w = np.minimum(1.0, 1.5 * scale / np.maximum(r, _TINY))
         a = float(coef[0]) + t0
         b = float(coef[1])
         cpar = float(coef[2]) if parity else 0.0
@@ -1736,6 +1773,27 @@ class BeatDetector:
             t_p1=t_p1,
         )
 
+    @staticmethod
+    def _moving_average_slice(
+        x: NDArray[np.float64], m: int, start: int, stop: int
+    ) -> NDArray[np.float64]:
+        """Exact slice ``_moving_average_same(x, m)[start:stop]`` without smoothing the whole array."""
+        if m <= 1:
+            return x[start:stop]
+        n = x.size
+        half_l = (m - 1) // 2
+        half_r = m - 1 - half_l
+        a = max(0, start - half_r)
+        b = min(n, stop + half_l)
+        sub = x[a:b]
+        c = np.empty(sub.size + 1, dtype=np.float64)
+        c[0] = 0.0
+        np.cumsum(sub, out=c[1:])
+        i = np.arange(start, stop, dtype=np.intp) + half_l
+        hi = np.minimum(i + 1, n) - a
+        lo = np.maximum(i - m + 1, 0) - a
+        return (c[hi] - c[lo]) / m
+
     # ------------------------------------------------------------------ fine timing
     def _fine(self, k: int, a: float, tp: float) -> float:
         """Align this beat to the template of its parity; return ``t_fine`` (or NaN)."""
@@ -1761,21 +1819,25 @@ class BeatDetector:
         if s0 < self._env.start or s1 > self._env.end or self._in_dropout(s0, s1):
             return math.nan
         seg = self._env.get(s0, s1)
+        m_al = self._align_kernel.size
         if t.env is None:
             lag = float(s)
         else:
             b0, b1 = self._align_window(t)
-            kern = self._align_kernel
-            burst = np.convolve(t.env, kern, mode="same")[b0:b1]
-            bz = burst - burst.mean()
-            nb = float(np.sqrt(np.dot(bz, bz)))
-            region = np.convolve(seg, kern, mode="same")[b0 : b0 + burst.size + 2 * s]
+            bz = t.burst_bz
+            if bz is None:
+                burst = self._moving_average_slice(t.env, m_al, b0, b1)
+                bz = burst - burst.mean()
+                t.burst_bz = bz
+                t.burst_nb = float(np.sqrt(np.dot(bz, bz)))
+            nb = t.burst_nb
+            region = self._moving_average_slice(seg, m_al, b0, b0 + bz.size + 2 * s)
             cc = np.correlate(region, bz, mode="valid")
-            i = int(np.argmax(cc))
-            w = region[i : i + burst.size]
+            i = int(cc.argmax())
+            w = region[i : i + bz.size]
             wz = w - w.mean()
             den = nb * float(np.sqrt(np.dot(wz, wz)))
-            warming = len(t.segs) < c.template_min_beats  # median of a few beats: accept all
+            warming = t.n_segs < c.template_min_beats  # median of a few beats: accept all
             if den <= _TINY or (not warming and cc[i] / den < c.template_min_corr):
                 return math.nan
             d = 0.0
@@ -1785,13 +1847,13 @@ class BeatDetector:
             lag = i + d
         origin = s0 + lag  # absolute index of the template's first sample on this beat
         li = int(round(lag))
-        t.segs.append(seg[li : li + pre + post].copy())
+        t.add_seg(seg[li : li + pre + post])
         t.off.append(origin + pre - tp)
         t.pending += 1
-        full = len(t.segs) == c.template_beats
+        full = t.n_segs == c.template_beats
         if t.env is None or not full or t.pending >= self.tpl_refresh:
-            # beats as columns: the median runs over contiguous rows (same values, ~30 % faster)
-            t.env = np.median(np.stack(t.segs, axis=1), axis=1)
+            t.env = t.median_env()
+            t.burst_bz = None
             if c.quartz:
                 t.onset_p3, t.onset_p1 = self._quartz_onset(t.env), math.nan
                 t.onset_front = math.nan
@@ -1805,7 +1867,7 @@ class BeatDetector:
         ref = t.onset_ref
         # the template onset even while the template warms up (quartz onset timing, 8b)
         self._fine_center = origin + ref
-        if len(t.segs) < c.template_min_beats or math.isnan(ref):
+        if t.n_segs < c.template_min_beats or math.isnan(ref):
             return math.nan
         return origin + ref
 
@@ -1919,7 +1981,7 @@ class BeatDetector:
         c = self.config
         s = self.tpl_search
         b0 = self.tpl_pre - self.tpl_burst
-        cur = np.convolve(t.env, self._align_kernel, mode="same")[b0:]
+        cur = _moving_average_same(t.env, self._align_kernel.size)[b0:]
         if t.anchor is None:
             if math.isfinite(t.onset_p3):
                 t.anchor, t.onset_anchor, t.lag = cur, t.onset_p3, 0.0
