@@ -38,7 +38,6 @@ real time.
 from __future__ import annotations
 
 import math
-from collections import deque
 
 import numpy as np
 from numpy.typing import NDArray
@@ -101,18 +100,28 @@ class InterferenceFilter:
         self._band = (f >= band_hz[0]) & (f <= band_hz[1])  # where the reference is taken
         # bins examined: the band and the skirt below it (a strong line there still leaks
         # through the band-pass: mains harmonics at 700-1000 Hz, 20 dB above the beats)
-        self._watch = (f >= skirt * band_hz[0]) & (f <= band_hz[1])
+        self._watch = (f >= min(skirt, 1.0) * band_hz[0]) & (f <= band_hz[1])
+        self._band_in_watch = self._band[self._watch]
+        self._watch_freqs = f[self._watch]
         # below the band the analysis sees the noise through the high-pass side of its
         # band-pass (zero phase: the magnitude counts twice), so that is how it is judged
         # here: the rumble of a quiet room in the skirt is not interference
-        fw = np.maximum(f[self._watch], 1e-9)
+        fw = np.maximum(self._watch_freqs, 1e-9)
         self._weight = np.where(
             fw < band_hz[0], 1.0 / (1.0 + (band_hz[0] / fw) ** (2 * skirt_order)) ** 2, 1.0
         )
         self._widen = int(widen_bins)
         self._win = np.hanning(self.nfft)
         self._taper = np.hanning(self.nfft + 1)[: self.nfft]  # peak at nfft / 2
-        self._frames: deque[tuple[int, NDArray[np.float64]]] = deque()  # (end index, PSD)
+        # Preallocated 2-D ring buffer storing only the watched bins (eliminates per-cell
+        # np.stack copies of full 1025-bin spectra).
+        n_watch = int(np.count_nonzero(self._watch))
+        self._cap = max(self.min_frames + 8, int(math.ceil(self.history / self.hop)) + 32)
+        self._buf = np.empty((self._cap, n_watch), dtype=np.float64)
+        self._ends = np.empty(self._cap, dtype=np.int64)
+        self._scratch = np.empty((self._cap, n_watch), dtype=np.float64)
+        self._head = 0
+        self._count = 0
         self._next = 0  # index of the next frame of the grid
         self.active_bins = 0  # bins attenuated by the last gains (diagnostics)
         self.max_attenuation_db = 0.0  # largest attenuation of the last gains (diagnostics)
@@ -122,7 +131,8 @@ class InterferenceFilter:
 
     def reset(self, start: int) -> None:
         """Forget the noise frames; the next frame starts at or after ``start``."""
-        self._frames.clear()
+        self._head = 0
+        self._count = 0
         self._next = -(-int(start) // self.hop)  # ceil
         self.active_bins = 0
         self.max_attenuation_db = 0.0
@@ -136,6 +146,33 @@ class InterferenceFilter:
         """Leave out the next frame of the grid (its samples are not available)."""
         self._next += 1
 
+    def _grow_ring(self, min_cap: int) -> None:
+        new_cap = max(2 * self._cap, min_cap)
+        n_watch = self._buf.shape[1]
+        new_buf = np.empty((new_cap, n_watch), dtype=np.float64)
+        new_ends = np.empty(new_cap, dtype=np.int64)
+        if self._count:
+            h, c, cap = self._head, self._count, self._cap
+            first = min(c, cap - h)
+            new_buf[:first] = self._buf[h : h + first]
+            new_ends[:first] = self._ends[h : h + first]
+            if first < c:
+                new_buf[first:c] = self._buf[: c - first]
+                new_ends[first:c] = self._ends[: c - first]
+        self._buf = new_buf
+        self._ends = new_ends
+        self._scratch = np.empty((new_cap, n_watch), dtype=np.float64)
+        self._cap = new_cap
+        self._head = 0
+
+    def _push_psd(self, end: int, psd_w: NDArray[np.float64]) -> None:
+        if self._count == self._cap:
+            self._grow_ring(self._cap + 1)
+        slot = (self._head + self._count) % self._cap
+        self._buf[slot] = psd_w
+        self._ends[slot] = end
+        self._count += 1
+
     def add_frame(self, samples: NDArray[np.float64]) -> None:
         """Add the next frame of the grid (``nfft`` samples from ``next_frame()[0]``).
 
@@ -145,31 +182,79 @@ class InterferenceFilter:
             raise ValueError(f"se esperaban {self.nfft} muestras, llegaron {samples.size}")
         end = self._next * self.hop + self.nfft
         self._next += 1
-        spec = np.fft.rfft(samples * self._win)
-        psd = spec.real**2 + spec.imag**2
-        if float(psd[self._band].sum()) <= 0.0:
+        spec_w = np.fft.rfft(samples * self._win)[self._watch]
+        psd_w = spec_w.real**2 + spec_w.imag**2
+        if float(psd_w[self._band_in_watch].sum()) <= 0.0:
             return
-        self._frames.append((end, psd))
+        self._push_psd(end, psd_w)
+
+    def add_frames(self, buf: NDArray[np.float64], buf_start: int, up_to: int) -> None:
+        """Add all pending grid frames ending at or before ``up_to`` in one batched 2-D rfft."""
+        hop, nfft = self.hop, self.nfft
+        buf_end = buf_start + buf.size
+        # Skip grid frames whose start fell before the available buffer
+        if self._next * hop < buf_start:
+            self._next = -(-buf_start // hop)
+        first_idx = self._next
+        last_start = min(up_to, buf_end) - nfft
+        if first_idx * hop > last_start:
+            return
+        n_frames = (last_start - first_idx * hop) // hop + 1
+        if n_frames == 1:
+            fa = first_idx * hop - buf_start
+            self.add_frame(buf[fa : fa + nfft])
+            return
+        fa0 = first_idx * hop - buf_start
+        span = (n_frames - 1) * hop + nfft
+        frames = np.lib.stride_tricks.sliding_window_view(buf[fa0 : fa0 + span], nfft)[::hop]
+        spec_w = np.fft.rfft(frames * self._win, axis=1)[:, self._watch]
+        psd_w = spec_w.real**2 + spec_w.imag**2
+        band_sum = psd_w[:, self._band_in_watch].sum(axis=1)
+        for i in range(n_frames):
+            end = (first_idx + i) * hop + nfft
+            if float(band_sum[i]) > 0.0:
+                self._push_psd(end, psd_w[i])
+        self._next = first_idx + n_frames
 
     def gains(self, at: int) -> NDArray[np.float64] | None:
         """Gains per FFT bin for audio from ``at`` on, or None when nothing is attenuated.
 
         Only frames that ended at or before ``at`` and started within ``history_s`` count.
         """
-        while self._frames and self._frames[0][0] - self.nfft < at - self.history:
-            self._frames.popleft()
-        rows = [p for end, p in self._frames if end <= at]
+        cutoff = at - self.history + self.nfft
+        cap = self._cap
+        while self._count and int(self._ends[self._head]) < cutoff:
+            self._head = (self._head + 1) % cap
+            self._count -= 1
         self.active_bins = 0
         self.max_attenuation_db = 0.0
         self.peak_hz, self.peak_excess_db = math.nan, 0.0
-        if len(rows) < self.min_frames:
+        c = self._count
+        if c < self.min_frames:
+            return None
+        # Copy the contiguous ring slice(s) into _scratch (usually all c rows satisfy end <= at)
+        h = self._head
+        first = min(c, cap - h)
+        if int(self._ends[(h + c - 1) % cap]) <= at:
+            m = c
+            self._scratch[:first] = self._buf[h : h + first]
+            if first < c:
+                self._scratch[first:c] = self._buf[: c - first]
+        else:
+            m = 0
+            for j in range(c):
+                slot = (h + j) % cap
+                if int(self._ends[slot]) <= at:
+                    self._scratch[m] = self._buf[slot]
+                    m += 1
+        if m < self.min_frames:
             return None
         watch = self._watch
-        # percentile over the frames by partial sorting (np.percentile was half the cost)
-        block = np.stack(rows)[:, watch]
-        k = min(len(rows) - 1, int(round(self.percentile / 100.0 * (len(rows) - 1))))
-        noise = np.partition(block, k, axis=0)[k] * self._weight
-        ref = float(np.median(noise[self._band[watch]]))
+        block = self._scratch[:m]
+        k = min(m - 1, int(round(self.percentile / 100.0 * (m - 1))))
+        block.partition(k, axis=0)
+        noise = block[k] * self._weight
+        ref = float(np.median(noise[self._band_in_watch]))
         if not ref > 0.0:
             return None
         limit = self._excess * ref
@@ -186,7 +271,7 @@ class InterferenceFilter:
         self.active_bins = n_over
         self.max_attenuation_db = -20.0 * math.log10(float(gb.min()))
         top = int(np.argmax(noise))
-        self.peak_hz = float(self._freqs[watch][top])
+        self.peak_hz = float(self._watch_freqs[top])
         self.peak_excess_db = 10.0 * math.log10(float(noise[top]) / ref)
         return g
 

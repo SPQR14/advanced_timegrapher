@@ -104,45 +104,47 @@ def _biquad_kernels(
     return T, G, P, (float(M[0, 0]), float(M[0, 1]), float(M[1, 0]), float(M[1, 1]))
 
 
-def _biquad(
-    coeffs: tuple[float, float, float, float, float], x: NDArray[np.float64], s0: NDArray | None
-) -> NDArray[np.float64]:
-    """One normalised biquad (transposed direct form II, state ``s0``) over ``x``."""
-    n = x.size
-    L = _BLOCK
-    T, G, P, (m00, m01, m10, m11) = _biquad_kernels(coeffs, L)
-    nb = -(-n // L)
-    X = np.zeros(nb * L)
-    X[:n] = x  # causal filter: zero padding at the end does not change the first n outputs
-    X = X.reshape(nb, L)
-    Y = X @ T
-    U = X @ G  # state contribution of each block's own input
-    # scalar recurrence of the state at the start of each block
-    S = np.empty((nb, 2))
-    z1, z2 = (0.0, 0.0) if s0 is None else (float(s0[0]), float(s0[1]))
-    u1 = U[:, 0].tolist()
-    u2 = U[:, 1].tolist()
-    s1l = [0.0] * nb
-    s2l = [0.0] * nb
-    for b in range(nb):
-        s1l[b] = z1
-        s2l[b] = z2
-        z1, z2 = m00 * z1 + m01 * z2 + u1[b], m10 * z1 + m11 * z2 + u2[b]
-    S[:, 0] = s1l
-    S[:, 1] = s2l
-    Y += S @ P
-    return Y.reshape(-1)[:n]
-
-
 def _sosfilt_core(
     sos: NDArray[np.float64], x: NDArray[np.float64], zi: NDArray | None
 ) -> NDArray[np.float64]:
-    y = x
-    for s in range(sos.shape[0]):
+    """Cascade all biquad sections reusing a single pair of ping-pong ``(nb, _BLOCK)`` buffers."""
+    n = x.size
+    if n == 0:
+        return np.zeros(0, dtype=np.float64)
+    L = _BLOCK
+    nb = -(-n // L)
+    rem = nb * L - n
+    X = np.empty(nb * L, dtype=np.float64)
+    X[:n] = x
+    if rem:
+        X[n:] = 0.0
+    X2 = X.reshape(nb, L)
+    Y2 = np.empty_like(X2)
+    U = np.empty((nb, 2), dtype=np.float64)
+    S = np.empty((nb, 2), dtype=np.float64)
+    n_sec = sos.shape[0]
+    for s in range(n_sec):
         b0, b1, b2, a0, a1, a2 = (float(v) for v in sos[s])
         coeffs = (b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0)
-        y = _biquad(coeffs, y, None if zi is None else zi[s])
-    return y
+        T, G, P, (m00, m01, m10, m11) = _biquad_kernels(coeffs, L)
+        np.matmul(X2, T, out=Y2)
+        np.matmul(X2, G, out=U)
+        z1, z2 = (0.0, 0.0) if zi is None else (float(zi[s, 0]), float(zi[s, 1]))
+        u1 = U[:, 0].tolist()
+        u2 = U[:, 1].tolist()
+        s1l = [0.0] * nb
+        s2l = [0.0] * nb
+        for b in range(nb):
+            s1l[b] = z1
+            s2l[b] = z2
+            z1, z2 = m00 * z1 + m01 * z2 + u1[b], m10 * z1 + m11 * z2 + u2[b]
+        S[:, 0] = s1l
+        S[:, 1] = s2l
+        Y2 += S @ P
+        X2, Y2 = Y2, X2
+        if rem and s + 1 < n_sec:
+            X2[-1, L - rem :] = 0.0
+    return X2.reshape(-1)[:n]
 
 
 # ---------------------------------------------------------------------- filters
@@ -254,23 +256,33 @@ def compute_cell_envelope(
     return np.array(e[crop_start:crop_end])
 
 
-def find_local_maxima(x: NDArray[np.float64]) -> NDArray[np.intp]:
-    """``scipy.signal.find_peaks(x)[0]``: strict local maxima, plateaus at their middle sample.
-
-    A plateau touching either end of ``x`` is not a peak (as in SciPy).
-    """
+def _find_local_maxima_runs(
+    x: NDArray[np.float64],
+) -> tuple[NDArray[np.intp], NDArray[np.intp], NDArray[np.intp]]:
+    """Return ``(midpoints, run_starts, run_ends)`` of all strict local maxima of ``x``."""
     n = x.size
+    empty = np.zeros(0, dtype=np.intp)
     if n < 3:
-        return np.zeros(0, dtype=np.intp)
+        return empty, empty, empty
     change = np.flatnonzero(x[1:] != x[:-1]) + 1
     starts = np.concatenate(([0], change))  # runs of equal values
     ends = np.concatenate((change - 1, [n - 1]))
     v = x[starts]
     if v.size < 3:
-        return np.zeros(0, dtype=np.intp)
+        return empty, empty, empty
     peak = (v[1:-1] > v[:-2]) & (v[1:-1] > v[2:])
     k = np.flatnonzero(peak) + 1
-    return ((starts[k] + ends[k]) // 2).astype(np.intp)
+    rs = starts[k].astype(np.intp, copy=False)
+    re = ends[k].astype(np.intp, copy=False)
+    return ((rs + re) // 2).astype(np.intp), rs, re
+
+
+def find_local_maxima(x: NDArray[np.float64]) -> NDArray[np.intp]:
+    """``scipy.signal.find_peaks(x)[0]``: strict local maxima, plateaus at their middle sample.
+
+    A plateau touching either end of ``x`` is not a peak (as in SciPy).
+    """
+    return _find_local_maxima_runs(x)[0]
 
 
 def detect_cell_candidates(
@@ -308,17 +320,39 @@ def detect_cell_candidates(
         ends = np.maximum.reduceat(ends, np.flatnonzero(keep))
         starts = starts[keep]
     above_hi = env > thr_hi
+    # Vectorised O(1) hysteresis pre-filter: drop runs that never cross threshold_hi
+    cs_hi = np.empty(n + 1, dtype=np.intp)
+    cs_hi[0] = 0
+    np.cumsum(above_hi, out=cs_hi[1:])
+    has_hi = (cs_hi[ends] - cs_hi[starts]) > 0
+    if not has_hi.any():
+        return [], [], [], []
+    starts = starts[has_hi]
+    ends = ends[has_hi]
+
+    # One cell-wide peak pass instead of calling find_local_maxima per run; checking
+    # run_start > s and run_end < t - 1 reproduces find_local_maxima(env[s:t]) exactly.
+    all_peaks, all_rs, all_re = _find_local_maxima_runs(env)
+    p_lo = np.searchsorted(all_peaks, starts + 1, side="left")
+    p_hi = np.searchsorted(all_peaks, ends - 1, side="left")
+
     on_l: list[float] = []
     pk_l: list[float] = []
     fl_l: list[float] = []
     sp_l: list[float] = []
-    for s, t in zip(starts.tolist(), ends.tolist(), strict=True):
-        if not above_hi[s:t].any():  # hysteresis: must reach the high threshold
-            continue
+    min_sp_int = int(min_spacing_samples)
+    for s, t, i0, i1 in zip(
+        starts.tolist(), ends.tolist(), p_lo.tolist(), p_hi.tolist(), strict=True
+    ):
         seg = env[s:t]
-        peaks = find_local_maxima(seg)
+        if i1 > i0:
+            pk_sub = all_peaks[i0:i1]
+            interior = (all_rs[i0:i1] > s) & (all_re[i0:i1] < t - 1)
+            peaks = pk_sub[interior] - s
+        else:
+            peaks = np.zeros(0, dtype=np.intp)
         if peaks.size == 0:
-            peaks = np.array([int(np.argmax(seg))])
+            peaks = np.array([int(seg.argmax())], dtype=np.intp)
         peaks = peaks[above_hi[s + peaks]]
         if peaks.size == 0:
             continue
@@ -328,7 +362,7 @@ def detect_cell_candidates(
                 groups.append([p, -1])
                 continue
             cur = groups[-1]
-            v_rel = cur[0] + int(np.argmin(seg[cur[0] : p + 1]))
+            v_rel = cur[0] + int(seg[cur[0] : p + 1].argmin())
             valley = max(float(seg[v_rel]), float(f[s + p]))
             if seg[p] >= split_ratio * valley and (p - cur[0]) >= min_spacing_samples:
                 groups.append([p, v_rel])
@@ -339,7 +373,7 @@ def detect_cell_candidates(
             base = 0.0 if v_rel < 0 else max(float(seg[v_rel]), float(f[i]))
             level = base + onset_fraction * (float(env[i]) - base)
             level = max(level, float(f[i] + threshold_lo * d[i]))
-            j0 = s + v_rel if v_rel >= 0 else max(0, s - int(min_spacing_samples))
+            j0 = s + v_rel if v_rel >= 0 else max(0, s - min_sp_int)
             below = np.flatnonzero(env[j0:i] < level)
             if below.size == 0:
                 onset = float(j0)

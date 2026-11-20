@@ -179,6 +179,7 @@ class PpsDetector:
         self._history = self._gap + self._base + self._quiet + 2
         self._n_hist = max(1, int(round(NOISE_HISTORY_S / NOISE_BLOCK_S)))
         self._fir = lowpass_fir(self.fs, LOWPASS_HZ)
+        self._fir_rev = np.ascontiguousarray(self._fir[::-1])
         self._delay = (self._fir.size - 1) // 2
         self.reset(0)
 
@@ -247,10 +248,10 @@ class PpsDetector:
             self._tail = np.full(n, x[0])
         ext = np.concatenate((self._tail, x))
         self._tail = ext[-n:].copy()
-        # row by row, not np.convolve: its rounding depends on the chunk length and the
-        # result must not depend on how the audio is chunked
+        # BLAS matvec over sliding windows (not np.convolve, whose rounding depends on chunk
+        # length): keeps exact chunk invariance while avoiding a 2-D temporary allocation.
         win = np.lib.stride_tricks.sliding_window_view(ext, self._fir.size)
-        return np.sum(win * self._fir[::-1], axis=1)
+        return win @ self._fir_rev
 
     # ------------------------------------------------------------------ detection
     def _trim(self) -> None:
