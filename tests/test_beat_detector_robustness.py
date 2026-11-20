@@ -256,6 +256,13 @@ def test_advance_from_realtime_producer_thread() -> None:
     np.testing.assert_allclose(beat_array(got), offline, atol=1e-6, rtol=0)
 
 
+def test_quartz_phase_gate_config_validation() -> None:
+    with pytest.raises(ValueError, match="quartz_outlier_min_ms"):
+        BeatDetectorConfig(sample_rate=FS, bph=57600, quartz=True, quartz_outlier_min_ms=0.0)
+    with pytest.raises(ValueError, match="quartz_reseed_beats"):
+        BeatDetectorConfig(sample_rate=FS, bph=57600, quartz=True, quartz_reseed_beats=2)
+
+
 # ---------------------------------------------------------------------- speed
 def test_realtime_factor_at_48k() -> None:
     x, _ = synth_watch(snr_db=25, seconds=20, seed=38, **REALISM)

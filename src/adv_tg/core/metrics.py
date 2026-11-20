@@ -342,6 +342,9 @@ class Metrics:
     lift_angle_deg: float = DEFAULT_LIFT_ANGLE_DEG
     sigma_even_us: float = math.nan
     sigma_odd_us: float = math.nan
+    # beat-to-beat timing scatter from second differences (insensitive to slow gear-train wander)
+    pair_sigma_even_us: float = math.nan
+    pair_sigma_odd_us: float = math.nan
     # timing point of the rate for (tic, tac): "t_fine" (drop) or "p1" (unlocking front)
     rate_point: tuple[str, str] = ("t_fine", "t_fine")
     windows: list[WindowRate] = field(default_factory=list)
@@ -1018,12 +1021,20 @@ def _window_sigma_factor(m: Metrics) -> float:
 
 
 def timing_confidence(m: Metrics, config: MetricsConfig) -> float:
-    """Confidence of the rate and beat error: ``q_n * q_sigma * q_excl`` (module docstring)."""
+    """Confidence of the rate and beat error: ``q_n * q_sigma * q_excl`` (module docstring).
+
+    When the short-term beat-to-beat scatter (``pair_sigma_*_us``) is available, ``q_sigma``
+    uses ``min(line_sigma, pair_sigma)`` so slow physical gear-train wander in long takes does
+    not masquerade as noisy acoustics (while rate uncertainty still carries the full wander
+    through ``sigma_*_us`` and the block jackknife).
+    """
     if not math.isfinite(m.rate_s_per_day):
         return 0.0
     n_min = min(m.n_used_even, m.n_used_odd)
     q_n = min(1.0, n_min / (3.0 * config.min_beats_per_parity))
-    s_max = max(m.sigma_even_us, m.sigma_odd_us)
+    s_line = max(m.sigma_even_us, m.sigma_odd_us)
+    s_pair = max(m.pair_sigma_even_us, m.pair_sigma_odd_us)
+    s_max = min(s_line, s_pair) if (math.isfinite(s_line) and math.isfinite(s_pair)) else s_line
     q_sigma = 1.0 / (1.0 + s_max / 500.0) if math.isfinite(s_max) else 0.0
     q_excl = max(0.0, 1.0 - m.excluded_fraction)
     return float(min(1.0, max(0.0, q_n * q_sigma * q_excl)))
@@ -1106,6 +1117,14 @@ def _compute_metrics(
     m.n_used_even, m.n_used_odd = fit.n_even, fit.n_odd
     m.sigma_even_us = fit.sigma_even / fs * 1e6
     m.sigma_odd_us = fit.sigma_odd / fs * 1e6
+    ki = k.astype(np.int64)
+    even_m = (ki & 1) == 0
+    pe = _pair_sigma(ki[even_m], t[even_m])
+    po = _pair_sigma(ki[~even_m], t[~even_m])
+    if math.isfinite(pe):
+        m.pair_sigma_even_us = pe / fs * 1e6
+    if math.isfinite(po):
+        m.pair_sigma_odd_us = po / fs * 1e6
     m.rate_s_per_day, m.rate_sigma_s_per_day = rate_from_period(
         fit.period, fit.period_sigma, config
     )

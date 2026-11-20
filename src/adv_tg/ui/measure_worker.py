@@ -157,9 +157,15 @@ def snapshot_to_telemetry(snap: SessionSnapshot, fs: float) -> BeatTelemetry:
                 "la amplitud es orientativa"
             )
     if snap.saturated_beats:
-        warnings.append(
-            f"{snap.saturated_beats} batimientos saturados: baja la ganancia del micrófono"
-        )
+        if not snap.normalized and snap.saturated_beats >= 5:
+            warnings.append(
+                f"{snap.saturated_beats} batimientos saturados: baja la ganancia del micrófono "
+                "o activa 'Normalizar audio'"
+            )
+        else:
+            warnings.append(
+                f"{snap.saturated_beats} batimientos saturados: baja la ganancia del micrófono"
+            )
     return BeatTelemetry(
         rate_spd=shown.rate_s_per_day,
         beat_error_ms=shown.beat_error_ms,

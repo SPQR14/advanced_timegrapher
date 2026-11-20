@@ -410,6 +410,8 @@ class BeatDetectorConfig:
     template_anchor: bool | None = None
     quartz: bool = False
     quartz_template_ms: float = 25.0
+    quartz_outlier_min_ms: float = 1.0
+    quartz_reseed_beats: int = 3
     quartz_onset: bool = True
     quartz_onset_snr_db: float = 26.0
     quartz_onset_beat_snr_db: float = 20.0
@@ -496,6 +498,10 @@ class BeatDetectorConfig:
             )
         if not self.quartz_template_ms > 0:
             raise ValueError("quartz_template_ms debe ser positivo")
+        if not self.quartz_outlier_min_ms > 0:
+            raise ValueError("quartz_outlier_min_ms debe ser positivo")
+        if self.quartz_reseed_beats < 3:
+            raise ValueError("quartz_reseed_beats debe ser >= 3")
         if not (self.quartz_onset_sigma > 0 and self.quartz_onset_lowpass_hz > 0):
             raise ValueError("quartz_onset_sigma y quartz_onset_lowpass_hz deben ser positivos")
         if not 1 <= self.template_min_beats <= self.template_beats:
@@ -1354,7 +1360,9 @@ class BeatDetector:
         self._model: deque[tuple[int, float]] = deque(maxlen=c.model_beats)
         self._coef: tuple[float, float, float, int, float] | None = None
         self._missed_run = 0
-        self._outliers: deque[tuple[int, float, float]] = deque(maxlen=3)
+        self._outliers: deque[tuple[int, float, float]] = deque(
+            maxlen=c.quartz_reseed_beats if c.quartz else 3
+        )
         self._k_offset: int | None = None
         for t in self._tpl:
             t.off.clear()
@@ -1490,10 +1498,11 @@ class BeatDetector:
         return None
 
     def _maybe_reseed(self) -> None:
-        """Three consecutive outliers that agree with each other mean the timing really
-        moved (e.g. the reference switched sub-event): restart the model from them."""
+        """Consecutive outliers that agree with each other mean the timing really moved
+        (e.g. the reference switched sub-event): restart the model from them."""
         gate = self._gate()
-        if len(self._outliers) < 3 or gate is None:
+        need = self.config.quartz_reseed_beats if self.config.quartz else 3
+        if len(self._outliers) < need or gate is None:
             return
         res = np.array([o[2] for o in self._outliers])
         if np.ptp(res) <= 2.0 * gate:
@@ -1508,7 +1517,8 @@ class BeatDetector:
         if self._coef is None or len(self._model) < 6:
             return None
         c = self.config
-        return max(c.outlier_sigma * self._coef[4], c.outlier_min_ms * 1e-3 * self.fs)
+        min_ms = max(c.outlier_min_ms, c.quartz_outlier_min_ms) if c.quartz else c.outlier_min_ms
+        return max(c.outlier_sigma * self._coef[4], min_ms * 1e-3 * self.fs)
 
     def _confirm_lift(self, tl: float, history: deque[float]) -> bool:
         """Record a P1 candidate's lift time; True if >= 2 of the last 8 beats agree.

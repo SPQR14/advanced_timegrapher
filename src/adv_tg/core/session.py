@@ -206,6 +206,7 @@ class SessionSnapshot:
     tape_offset_ms: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
     tape_parity: NDArray[np.int8] = field(default_factory=lambda: np.zeros(0, np.int8))
     tape_shift_ms: tuple[float, float] = (0.0, 0.0)
+    normalized: bool = False
 
 
 class MeasurementSession:
@@ -503,6 +504,7 @@ class MeasurementSession:
             tape_offset_ms=tape[1],
             tape_parity=tape[2],
             tape_shift_ms=tape_shift,
+            normalized=self.config.normalize,
         )
 
     @property
