@@ -93,6 +93,10 @@ which update-desktop-database &>/dev/null && update-desktop-database %{_datadir}
 which gtk-update-icon-cache &>/dev/null && gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 
 %changelog
+* Fri Nov 20 2026 Alberto Pico <albertopicolara@gmail.com> - 1.1.0-1
+- Release version 1.1.0: vectorized DSP/metrics kernels (1.5-2x faster analysis),
+  quartz phase-gate stability, short-term jitter confidence, saturation guidance,
+  and test progress bar with FHD display layout improvements.
 * Sat Nov 14 2026 Alberto Pico <albertopicolara@gmail.com> - 1.0.1-1
 - Release version 1.0.1: GUI contrast improvements in About and Report dialogs,
   compact HUD metric cards, and immediate Clock Drift status synchronization.

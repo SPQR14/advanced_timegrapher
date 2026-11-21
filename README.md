@@ -79,8 +79,9 @@ Pick **one** file; each one includes everything the program needs (PortAudio too
 distribution from 2022 or later (glibc 2.34: Debian 12, Ubuntu 22.04, RHEL 9, Fedora...).
 
 - **Debian, Ubuntu, Mint**: download the `.deb` and run `sudo apt install ./adv-tg_*.deb`.
-- **Fedora, RHEL, AlmaLinux, Rocky, openSUSE**: download the `.rpm` and run
-  `sudo dnf install ./adv-tg-*.rpm` (`sudo zypper install` on openSUSE).
+- **Fedora, RHEL, AlmaLinux, Rocky, openSUSE**: import the signing key once
+  (`sudo rpm --import https://sqpr14-software.org/RPM-GPG-KEY-adv-tg`), then download the `.rpm`
+  and run `sudo dnf install ./adv-tg-*.rpm` (`sudo zypper install` on openSUSE).
 - **Any other distribution**: download the `.AppImage`, make it executable
   (`chmod +x adv-tg-*.AppImage`) and run it. No installation.
 
@@ -456,8 +457,9 @@ requiere una distribución de 2022 o posterior (glibc 2.34: Debian 12, Ubuntu 22
 Fedora...).
 
 - **Debian, Ubuntu, Mint**: descarga el `.deb` y ejecuta `sudo apt install ./adv-tg_*.deb`.
-- **Fedora, RHEL, AlmaLinux, Rocky, openSUSE**: descarga el `.rpm` y ejecuta
-  `sudo dnf install ./adv-tg-*.rpm` (`sudo zypper install` en openSUSE).
+- **Fedora, RHEL, AlmaLinux, Rocky, openSUSE**: importa la clave de firma una vez
+  (`sudo rpm --import https://sqpr14-software.org/RPM-GPG-KEY-adv-tg`), descarga el `.rpm` y
+  ejecuta `sudo dnf install ./adv-tg-*.rpm` (`sudo zypper install` en openSUSE).
 - **Cualquier otra distribución**: descarga el `.AppImage`, dale permiso de ejecución
   (`chmod +x adv-tg-*.AppImage`) y ábrelo. No hay que instalar nada.
 
