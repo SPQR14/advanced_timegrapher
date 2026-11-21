@@ -46,6 +46,11 @@ class NormalizerConfig:
         release_s: Time constant of the decay after the hold (default 10 s).
         max_gain_db: Largest gain applied to quiet inputs (default +24 dB).
         clip_level: |x| at or above this counts as a clipped input sample (default 0.99).
+        min_follower: Lower bound on the peak follower (default 0.0). Setting ``1.0``
+            together with ``release_s=math.inf`` gives fixed ``target`` headroom on all
+            ``[-1, 1]`` inputs (constant ``-6.02 dB`` at default ``target=0.5``) while still
+            monotonically attenuating unclipped float streams above full scale, avoiding
+            quiet-input boosting, noise-floor lag and gain pumping in ``BeatDetector``.
     """
 
     sample_rate: float
@@ -55,21 +60,25 @@ class NormalizerConfig:
     release_s: float = 10.0
     max_gain_db: float = 24.0
     clip_level: float = 0.99
+    min_follower: float = 0.0
 
     def __post_init__(self) -> None:
         if not (math.isfinite(self.sample_rate) and self.sample_rate > 0):
             raise ValueError(f"sample_rate no válido: {self.sample_rate}")
         if not 0.0 < self.target < 1.0:
             raise ValueError(f"target fuera de (0, 1): {self.target}")
-        for name in ("block_s", "release_s"):
-            if not getattr(self, name) > 0:
-                raise ValueError(f"{name} debe ser positivo (recibido {getattr(self, name)})")
-        if not self.hold_s >= 0:
+        if not (math.isfinite(self.block_s) and self.block_s > 0):
+            raise ValueError(f"block_s debe ser positivo (recibido {self.block_s})")
+        if not self.release_s > 0:
+            raise ValueError(f"release_s debe ser positivo (recibido {self.release_s})")
+        if not (math.isfinite(self.hold_s) and self.hold_s >= 0):
             raise ValueError(f"hold_s debe ser >= 0 (recibido {self.hold_s})")
-        if not self.max_gain_db >= 0:
+        if not (math.isfinite(self.max_gain_db) and self.max_gain_db >= 0):
             raise ValueError(f"max_gain_db debe ser >= 0 (recibido {self.max_gain_db})")
         if not 0.0 < self.clip_level <= 1.0:
             raise ValueError(f"clip_level fuera de (0, 1]: {self.clip_level}")
+        if not (math.isfinite(self.min_follower) and self.min_follower >= 0.0):
+            raise ValueError(f"min_follower debe ser >= 0 (recibido {self.min_follower})")
 
 
 class AudioNormalizer:
@@ -86,9 +95,11 @@ class AudioNormalizer:
         fs = float(config.sample_rate)
         self.block = max(1, int(round(config.block_s * fs)))
         self._hold_blocks = int(math.ceil(config.hold_s / (self.block / fs) - 1e-9))
-        self._decay = math.exp(-(self.block / fs) / config.release_s)
+        self._decay = (
+            1.0 if math.isinf(config.release_s) else math.exp(-(self.block / fs) / config.release_s)
+        )
         self._max_gain = 10.0 ** (config.max_gain_db / 20.0)
-        self._floor = config.target / self._max_gain
+        self._floor = max(config.target / self._max_gain, config.min_follower)
         self.reset()
 
     def reset(self) -> None:

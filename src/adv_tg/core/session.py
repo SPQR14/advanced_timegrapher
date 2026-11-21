@@ -418,7 +418,7 @@ class MeasurementSession:
             for b in self._tracker.beats:
                 parity = b.k & 1
                 if point == "p1":
-                    p1 = b.t_fine - tpl_off[parity]
+                    p1 = b.t_p1_tpl if math.isfinite(b.t_p1_tpl) else b.t_fine - tpl_off[parity]
                 else:
                     p1 = b.p1 if point == "p1_beat" else b.t_p1
                 v = (self._tape_instant(b) - p1) / fs * 1e3

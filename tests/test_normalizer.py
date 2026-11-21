@@ -54,6 +54,34 @@ def test_config_validation() -> None:
         NormalizerConfig(48000.0, target=1.0)
     with pytest.raises(ValueError):
         NormalizerConfig(48000.0, block_s=0.0)
+    with pytest.raises(ValueError):
+        NormalizerConfig(48000.0, block_s=math.inf)
+    with pytest.raises(ValueError):
+        NormalizerConfig(48000.0, min_follower=-0.1)
+    with pytest.raises(ValueError):
+        NormalizerConfig(48000.0, min_follower=math.inf)
+
+
+def test_min_follower_and_infinite_release_keep_constant_gain() -> None:
+    fs = 48_000
+    rng = np.random.default_rng(9)
+    # quiet start, loud burst, quiet middle, float overshoot > 1.0, then quiet tail
+    x = np.concatenate(
+        [
+            0.005 * rng.standard_normal(fs),
+            0.9 * rng.standard_normal(fs).clip(-1.0, 1.0),
+            0.02 * rng.standard_normal(fs),
+            1.6 * np.sin(2 * np.pi * 1000 * np.arange(fs) / fs),
+            0.01 * rng.standard_normal(fs),
+        ]
+    )
+    y, clipped = _normalize(x, fs, 1024, min_follower=1.0, release_s=math.inf)
+    assert np.max(np.abs(y)) <= 0.5 + 1e-12
+    # before the >1.0 burst the gain is strictly constant 0.5 (no quiet boost, no pumping)
+    np.testing.assert_allclose(y[: 3 * fs], 0.5 * x[: 3 * fs], rtol=0, atol=1e-15)
+    # after the 1.6 peak the gain stays monotonically at 0.5 / 1.6 (no release pumping)
+    np.testing.assert_allclose(y[4 * fs :], (0.5 / 1.6) * x[4 * fs :], rtol=1e-4, atol=1e-12)
+    assert clipped == int(np.count_nonzero(np.abs(x) >= 0.99))
 
 
 @pytest.mark.parametrize("fs", [44_100, 48_000])
@@ -149,3 +177,88 @@ def test_normalization_does_not_change_the_timing() -> None:
 def test_session_passes_the_option_to_the_detector() -> None:
     s = MeasurementSession(SessionConfig(sample_rate=44_100, bph=3600, quartz=True, normalize=True))
     assert s._detector.config.normalize and s._detector.normalizer_gain_db == 0.0
+
+
+def test_normalize_preserves_p1_and_amplitude_with_startup_silence_and_variation() -> None:
+    """With quiet startup, a loud transient and beat-to-beat level variation, software
+    normalization must keep exact scale-invariant parity (no P1 loss, no amplitude bias)."""
+    from tests.synth import REALISM
+
+    fs = 48_000
+    x, _ = synth_watch(
+        bph=21600,
+        rate_s_per_day=2.0,
+        beat_error_ms=0.2,
+        amplitude_deg=280.0,
+        lift_angle_deg=51.0,
+        seconds=25,
+        snr_db=30,
+        p1_gain=0.22,
+        seed=12,
+        **REALISM,
+    )
+    # scale below saturation, prepend quiet startup + handling bump (as in a live session)
+    x = 0.6 * x / np.max(np.abs(x))
+    rng = np.random.default_rng(12)
+    lead = 0.002 * rng.standard_normal(int(0.6 * fs))
+    lead[int(0.25 * fs) : int(0.26 * fs)] += 0.85 * np.sin(
+        2 * np.pi * 1500 * np.arange(int(0.01 * fs)) / fs
+    )
+    sig = np.concatenate([lead, x])
+    out = {}
+    for normalize in (False, True):
+        det = BeatDetector(
+            BeatDetectorConfig(sample_rate=fs, bph=21600, lift_angle_deg=51.0, normalize=normalize)
+        )
+        beats = []
+        for i in range(0, sig.size, 4096):
+            beats += det.process(sig[i : i + 4096], i)
+        beats += det.flush()
+        m = compute_metrics(
+            beats, det.templates(), MetricsConfig(sample_rate=fs, bph=21600, lift_angle_deg=51.0)
+        )
+        out[normalize] = (beats, m)
+    b0, m0 = out[False]
+    b1, m1 = out[True]
+    assert len(b1) == len(b0)
+    assert sum(math.isfinite(b.p1) for b in b1) == sum(math.isfinite(b.p1) for b in b0)
+    np.testing.assert_allclose(
+        [b.t_fine for b in b1], [b.t_fine for b in b0], atol=1e-9, equal_nan=True
+    )
+    assert m1.rate_s_per_day == pytest.approx(m0.rate_s_per_day, abs=1e-6)
+    assert m1.beat_error_ms == pytest.approx(m0.beat_error_ms, abs=1e-6)
+    assert m1.amplitude_deg == pytest.approx(m0.amplitude_deg, abs=1e-6)
+
+
+def test_clipped_mechanical_watch_recovers_p1_and_metrics_with_normalization() -> None:
+    """ETA C07-like watch clipping at full scale: normalization removes SATURATED flags and
+    recovers rate, beat error and amplitude with P1 detected."""
+    fs = 48_000
+    x, _ = synth_watch(
+        bph=21600,
+        rate_s_per_day=1.5,
+        beat_error_ms=0.2,
+        amplitude_deg=280.0,
+        lift_angle_deg=51.0,
+        seconds=30,
+        snr_db=32,
+        p1_gain=0.25,
+        clip_level=0.35,
+        seed=15,
+    )
+    det = BeatDetector(
+        BeatDetectorConfig(sample_rate=fs, bph=21600, lift_angle_deg=51.0, normalize=True)
+    )
+    beats = []
+    for i in range(0, x.size, 4096):
+        beats += det.process(x[i : i + 4096], i)
+    beats += det.flush()
+    assert det.normalizer_clipped_samples and det.normalizer_clipped_samples > 0
+    assert sum(1 for b in beats if b.flags & BeatFlags.SATURATED) == 0
+    m = compute_metrics(
+        beats, det.templates(), MetricsConfig(sample_rate=fs, bph=21600, lift_angle_deg=51.0)
+    )
+    assert m.beat_error_point in ("p1", "p1_beat", "p1_fine")
+    assert m.rate_s_per_day == pytest.approx(1.5, abs=0.4)
+    assert m.beat_error_ms == pytest.approx(0.2, abs=0.08)
+    assert m.amplitude_deg == pytest.approx(280.0, rel=0.05)
