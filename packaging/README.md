@@ -16,6 +16,10 @@ Este directorio contiene las especificaciones y utilidades para construir **un i
 | `macos/adv-tg.icns` | Icono multi-resolución de macOS (16x16 hasta 1024x1024) |
 | `windows/installer.iss` | Instalador de Windows (Inno Setup 6): asistente, acceso en el menú Inicio, desinstalador y actualización |
 | `windows/adv-tg.ico` | Icono estándar para ejecutables de Windows |
+| `windows/build_msix.ps1` | Empaquetado MSIX sin firmar para Microsoft Store (`makepri` + `makeappx`) y verificación opcional `-Verify` con instalación real (`Add-AppxPackage`) |
+| `windows/msix/AppxManifest.xml.in` | Manifiesto MSIX (`runFullTrust`, `microphone`, `AppExecutionAlias`) parametrizado para Partner Center |
+| `windows/msix/Assets/*`, `windows/generate_msix_assets.py` | Iconos PNG multi-escala/unplated para MSIX y `StoreListing/AppIcon-300x300.png` generados desde `adv-tg.svg` |
+| `windows/MSIX_STORE_GUIDE.md` | Guía paso a paso para alta gratuita en Microsoft Partner Center y envío a Microsoft Store |
 
 ---
 
@@ -112,15 +116,23 @@ El paquete puede estar instalado en directorios de solo lectura (como `/Applicat
 - El RPM se construye sin enlaces `/usr/lib/.build-id` (chocaban con los paquetes del sistema
   que traen las mismas librerías) y sin etiqueta de distribución.
 
-### 8. Instalador de Windows (Inno Setup)
-- `packaging\windows\installer.iss` empaqueta `dist\adv-tg` completo:
+### 8. Instalador de Windows (Inno Setup) y MSIX (Microsoft Store)
+- **Inno Setup (GitHub Releases):** `packaging\windows\installer.iss` empaqueta `dist\adv-tg` completo:
   `iscc /DMyAppVersion=<versión> packaging\windows\installer.iss` genera
   `dist\adv-tg-<versión>-windows-x64-setup.exe`.
-- Asistente en inglés y español; instala para el usuario actual sin permisos de administrador
+  Asistente en inglés y español; instala para el usuario actual sin permisos de administrador
   (o en `Program Files` si se elige "para todos los usuarios"), con acceso en el menú Inicio y
   desinstalador. Una versión nueva se instala sobre la anterior. **No cambiar nunca el
-  `AppId`** de `installer.iss`.
-- Instalación desatendida: `adv-tg-<versión>-windows-x64-setup.exe /VERYSILENT /NORESTART`.
+  `AppId`** de `installer.iss`. Instalación desatendida: `/VERYSILENT /NORESTART`.
+- **MSIX (Microsoft Store):** `packaging\windows\build_msix.ps1` empaqueta el mismo `dist\adv-tg`
+  en un `.msix` **sin firmar** (`dist\adv-tg-<versión>-windows-x64.msix`), subido en GitHub
+  Actions como artefacto `store-windows-msix` (separado de `release-*` porque un `.msix` sin
+  firmar está pensado para que Microsoft Store lo firme al certificarlo).
+  Lleva configurada por defecto la identidad de Partner Center (`AlbertoPico.AdvancedTimegrapher`,
+  Store ID `9NNSNDLJ3HV9`; ver `packaging/windows/MSIX_STORE_GUIDE.md`).
+  En tiempo de ejecución, `adv_tg.utils.msix.is_msix_packaged()` detecta la identidad MSIX para
+  ocultar el botón externo de donación (política 10.8), desactivar el aviso de GitHub Releases
+  (política 10.2.2) y abrir las rutas físicas `LocalCache` en el Explorador de Windows.
 
 ### 9. Aviso de versión nueva y certificados TLS
 - `adv_tg.utils.update_check` consulta la API pública de GitHub (releases del repositorio) y la

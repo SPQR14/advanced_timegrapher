@@ -90,6 +90,7 @@ from adv_tg.utils.adc_calibration import (
 from adv_tg.utils.audio_io import AudioDeviceInfo, list_input_devices
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
+from adv_tg.utils.msix import is_msix_packaged
 from adv_tg.utils.security import safe_filename_base, sanitize_csv_cell
 from adv_tg.utils.update_check import ReleaseInfo, UpdateState
 from adv_tg.utils.watch_db import load_watch_db
@@ -1745,6 +1746,10 @@ class MainWin(QMainWindow):
         self.action_auto_update.setChecked(self._update_state.enabled)
         self.action_auto_update.toggled.connect(self._on_auto_update_toggled)
         self.menu_help.addAction(self.action_auto_update)
+        if is_msix_packaged():
+            # Microsoft Store delivers updates for MSIX packages (Store Policy 10.2.2)
+            self.action_check_updates.setVisible(False)
+            self.action_auto_update.setVisible(False)
         self.menu_help.addSeparator()
 
         self.action_about = QAction(self)
@@ -2715,7 +2720,8 @@ class MainWin(QMainWindow):
 
     def open_about_dialog(self, exec_dialog: bool = True) -> AboutDialog:
         """Version, licence, links and the configuration and log folders."""
-        dlg = AboutDialog(self.translator, parent=self, updates=self.update_notifier)
+        updates = None if is_msix_packaged() else self.update_notifier
+        dlg = AboutDialog(self.translator, parent=self, updates=updates)
         if exec_dialog:
             dlg.exec()
         return dlg
@@ -2735,6 +2741,8 @@ class MainWin(QMainWindow):
 
     def check_for_updates(self) -> bool:
         """Check requested by the user (menu Help). False when one is already running."""
+        if is_msix_packaged():
+            return False
         started = self.update_notifier.start(manual=True)
         if started:
             self.statusBar().showMessage(self.translator.tr("update_checking"), 6000)
