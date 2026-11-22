@@ -375,3 +375,52 @@ def test_reference_result_goes_to_the_manual_tab(qtbot, tmp_path) -> None:
 def test_constants_are_consistent() -> None:
     assert pps.READY_SIGMA_PPM > pps.REFERENCE_SIGMA_PPM
     assert pps.HOLDOFF_S < 0.5 < pps.READY_SPAN_S
+
+
+@pytest.mark.parametrize("locale", ["es", "en"])
+def test_dialog_pps_explains_high_uncertainty_separately_from_short_duration(
+    qtbot, tmp_path, monkeypatch, locale: str
+) -> None:
+    """A >120 s recording whose uncertainty exceeds READY_SIGMA_PPM must report high
+    uncertainty (not 'at least 120 s' / 'Measuring…') in both status and save prompt."""
+    pytest.importorskip("PyQt6")
+    from PyQt6.QtWidgets import QMessageBox
+
+    from adv_tg.i18n.translator import Translator
+    from adv_tg.ui.dialogs import CalibrationDialog
+    from adv_tg.utils.adc_calibration import CalibrationStore
+    from adv_tg.utils.audio_files import write_audio
+
+    store = CalibrationStore(tmp_path / f"c_{locale}.json")
+    dlg = CalibrationDialog(Translator(locale), "Fake CM18", FS, store=store)
+    qtbot.addWidget(dlg)
+
+    # 1) Long recording (>= 120 s) with heavy jitter -> span ok, sigma > READY_SIGMA_PPM
+    x_long, _ = synth_pps(180.0, ppm=9.0, jitter_us=300.0, seed=19)
+    f_long = write_audio(tmp_path / f"long_noisy_{locale}.flac", x_long, FS, subtype="PCM_24")
+    est_long = dlg.analyze_pps_file(f_long)
+    assert est_long is not None and est_long.valid and not est_long.ready
+    assert est_long.span_s >= pps.READY_SPAN_S
+    assert est_long.drift.uncertainty_ppm > pps.READY_SIGMA_PPM
+    status_long = dlg.lbl_pps_status.text()
+    assert f"±{pps.READY_SIGMA_PPM:.2f} ppm" in status_long
+    assert f"{int(pps.READY_SPAN_S)} s" not in status_long
+    prompts: list[str] = []
+    no = QMessageBox.StandardButton.No
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: prompts.append(a[2]) or no)
+    assert not dlg.save_pps(confirm=True)
+    assert f"±{pps.READY_SIGMA_PPM:.2f} ppm" in prompts[-1]
+    assert f"{int(pps.READY_SPAN_S)} s" not in prompts[-1]
+
+    # 2) Short recording (< 120 s) -> stopped file message mentions short duration, not live run
+    x_short, _ = synth_pps(40.0, ppm=9.0, jitter_us=5.0, seed=20)
+    f_short = write_audio(tmp_path / f"short_{locale}.flac", x_short, FS, subtype="PCM_24")
+    est_short = dlg.analyze_pps_file(f_short)
+    assert est_short is not None and est_short.valid and not est_short.ready
+    assert est_short.span_s < pps.READY_SPAN_S
+    status_short = dlg.lbl_pps_status.text()
+    assert f"{int(pps.READY_SPAN_S)} s" in status_short
+    assert "…" not in status_short
+    assert not dlg.save_pps(confirm=True)
+    assert f"{int(pps.READY_SPAN_S)} s" in prompts[-1]
+    assert f"±{pps.READY_SIGMA_PPM:.2f} ppm" in prompts[-1]

@@ -145,6 +145,11 @@ class Beat:
             from the silence before it (``BeatDetector``, pipeline step 8c). On most calibres
             it is the sharpest front of the beat (15-60 µs from beat to beat on the real
             takes, against 100-700 µs for ``t_fine``). NaN when no clean front was found.
+        t_p1_tpl: Template P1 instant placed on this beat (``origin + template.onset_p1``),
+            emitted once the parity template is full (``template_beats``). Staying in each
+            beat's own template frame prevents spurious beat-error jumps when ``onset_p3``
+            (and therefore ``t_fine``) steps between lobes of the drop. NaN while warming up,
+            in quartz mode, or when ``onset_p1`` is not resolved.
     """
 
     k: int
@@ -159,6 +164,7 @@ class Beat:
     flags: BeatFlags
     t_fine: float = math.nan
     t_p1: float = math.nan
+    t_p1_tpl: float = math.nan
 
     @property
     def reference(self) -> float:

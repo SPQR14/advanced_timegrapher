@@ -459,8 +459,19 @@ class CalibrationDialog(QDialog):
             status = tr("cal_pps_collecting").format(n=est.used)
         elif est.ready:
             status = tr("cal_pps_ready")
+        elif est.span_s < READY_SPAN_S:
+            key = "cal_pps_converging" if listening else "cal_pps_short"
+            status = tr(key).format(
+                span=est.span_s, min_s=int(READY_SPAN_S), target=READY_SIGMA_PPM
+            )
         else:
-            status = tr("cal_pps_converging").format(min_s=int(READY_SPAN_S))
+            key = "cal_pps_converging_sigma" if listening else "cal_pps_imprecise"
+            status = tr(key).format(
+                span=est.span_s,
+                sigma=est.drift.uncertainty_ppm,
+                target=READY_SIGMA_PPM,
+                jitter=est.jitter_us,
+            )
         if est.jumps:
             status += " " + tr("cal_pps_jumped").format(n=est.jumps)
         if self.pps_source:
@@ -528,11 +539,16 @@ class CalibrationDialog(QDialog):
             if answer != QMessageBox.StandardButton.Yes:
                 return False
         if confirm and not est.ready:
+            key = "cal_pps_not_ready" if est.span_s < READY_SPAN_S else "cal_pps_not_ready_sigma"
             answer = QMessageBox.question(
                 self,
                 tr("cal_title"),
-                tr("cal_pps_not_ready").format(
-                    span=est.span_s, sigma=est.drift.uncertainty_ppm, min_s=int(READY_SPAN_S)
+                tr(key).format(
+                    span=est.span_s,
+                    sigma=est.drift.uncertainty_ppm,
+                    min_s=int(READY_SPAN_S),
+                    target=READY_SIGMA_PPM,
+                    jitter=est.jitter_us,
                 ),
             )
             if answer != QMessageBox.StandardButton.Yes:

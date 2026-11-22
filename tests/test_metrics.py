@@ -201,6 +201,45 @@ def test_beat_error_p1_uses_each_parity_offset() -> None:
     assert m.beat_error_ms == pytest.approx(0.2, abs=1e-6)
 
 
+def test_beat_error_ignores_onset_p3_step_when_beats_carry_t_p1_tpl() -> None:
+    """When one parity's template ``onset_p3`` (and ``onset_ref``) jumps to an earlier drop
+    lobe on the last beats, subtracting only the latest ``onset_ref - onset_p1`` from past
+    ``t_fine`` values would inject a fake +1.6 ms beat-error jump. Per-beat ``t_p1_tpl``
+    keeps each beat in its own template frame and stays at the true beat error."""
+    tic, tac = _templates()
+    step = -0.0016 * FS  # -1.6 ms lobe jump on parity 1 at the end of the window
+    period = 3600.0 / BPH / (1.0 + 4.0 / 86400.0) * FS
+    beats = []
+    for k in range(200):
+        t_p1 = 1000.0 + k * period + 0.5 * 0.2e-3 * FS * (-1) ** k
+        ref = tic.onset_ref if k % 2 == 0 else tac.onset_ref + (step if k >= 180 else 0.0)
+        p1_off = tic.onset_p1 if k % 2 == 0 else tac.onset_p1
+        t_fine = t_p1 + (ref - p1_off)
+        beats.append(
+            Beat(
+                k,
+                math.nan,
+                math.nan,
+                t_fine,
+                2,
+                -6.0,
+                30.0,
+                0.0,
+                0.9,
+                BeatFlags.NONE,
+                t_fine=t_fine,
+                t_p1_tpl=t_p1 if k >= 48 else math.nan,
+            )
+        )
+    # latest tac template has the stepped onset_ref while its onset_p1 did not move
+    tac_stepped = ParityTemplate(
+        1, 24, tac.envelope, tac.onset_p1, tac.onset_p3, tac.onset_ref + step
+    )
+    m = compute_metrics(beats, (tic, tac_stepped), _cfg())
+    assert m.beat_error_point == "p1"
+    assert m.beat_error_ms == pytest.approx(0.2, abs=1e-3)
+
+
 def test_beat_error_uses_each_beats_p1_when_a_template_has_none() -> None:
     tic, tac = _templates()
     tac = ParityTemplate(1, 24, tac.envelope, math.nan, tac.onset_p3, tac.onset_ref)
