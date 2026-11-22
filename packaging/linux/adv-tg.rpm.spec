@@ -93,6 +93,10 @@ which update-desktop-database &>/dev/null && update-desktop-database %{_datadir}
 which gtk-update-icon-cache &>/dev/null && gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 
 %changelog
+* Sat Nov 21 2026 Alberto Pico <albertopicolara@gmail.com> - 1.1.1-1
+- Release version 1.1.1: constant-headroom normalization preserving P1 and template
+  accuracy, beat-error stability across drop-lobe jumps, clearer PPS calibration
+  uncertainty messages, and Microsoft Store MSIX packaging support.
 * Fri Nov 20 2026 Alberto Pico <albertopicolara@gmail.com> - 1.1.0-1
 - Release version 1.1.0: vectorized DSP/metrics kernels (1.5-2x faster analysis),
   quartz phase-gate stability, short-term jitter confidence, saturation guidance,
