@@ -75,10 +75,12 @@ Model and conventions
 * **Beat error** at P1: ``2 |c|`` of the same regression (half the difference between the
   tic->tac and tac->tic intervals) on one of three sets of P1 instants:
 
-  - ``"p1"``: projected from the parity template, ``t_p1 = t_fine - (onset_ref - onset_p1)``.
-    Best when P1 is weak (H-50, Miyota), but it inherits the alignment on the drop: when the
-    drop of one parity wanders against a clean unlock (Seiko 4R34: ~3 ms), it is off by
-    1-3 ms;
+  - ``"p1"``: projected from the parity template, using each beat's own template-frame P1
+    (``Beat.t_p1_tpl = origin + onset_p1``) once the templates are full, falling back to
+    ``t_fine - (onset_ref - onset_p1)`` from the latest templates during warm-up or when
+    ``t_p1_tpl`` is absent. Best when P1 is weak (H-50, Miyota), and immune to ``onset_p3``
+    jumps between drop lobes; it still inherits the drop alignment when the drop itself
+    wanders against a clean unlock;
   - ``"p1_beat"``: each beat's own P1 onset (``Beat.p1``). Exact on a clean unlock front
     (4R34 and 4R36: 25-40 µs), noisy on a weak one;
   - ``"p1_fine"``: the unlocking front of each beat (``Beat.t_p1``), only when both parities
@@ -1241,13 +1243,27 @@ def _beat_error(
     parities are timed there (else None).
     """
     candidates: list[tuple[str, tuple[float, float, float, float]]] = []
-    offsets = [tp.onset_ref - tp.onset_p1 if tp is not None else math.nan for tp in templates]
-    if all(math.isfinite(v) for v in offsets):
-        # Shifting even by -off0 and odd by -off1 only shifts c by -0.5 * (off0 - off1);
-        # reusing (k, t) hits the memoized drop fits directly.
-        res = _beat_error_candidate(k, t, config, c_shift=-0.5 * (offsets[0] - offsets[1]))
-        if res is not None:
-            candidates.append(("p1", res))
+    # Template P1: prefer each beat's own template-frame P1 (t_p1_tpl = origin + onset_p1)
+    # once mature beats exist for both parities. Subtracting only the latest template's
+    # (onset_ref - onset_p1) from past t_fine values injects a spurious beat-error jump
+    # whenever onset_p3 hops between drop lobes. Fall back to the latest-template shift
+    # during template warm-up and for beats constructed without t_p1_tpl.
+    tpl_beats = [
+        b for b in beats if math.isfinite(b.t_p1_tpl) and not _bits(b.flags, _EXCLUDE_BITS)
+    ]
+    res = None
+    if tpl_beats:
+        kt = np.asarray([b.k for b in tpl_beats], dtype=np.float64)
+        tt = np.asarray([b.t_p1_tpl for b in tpl_beats], dtype=np.float64)
+        res = _beat_error_candidate(kt, tt, config)
+    if res is None:
+        offsets = [tp.onset_ref - tp.onset_p1 if tp is not None else math.nan for tp in templates]
+        if all(math.isfinite(v) for v in offsets):
+            # Shifting even by -off0 and odd by -off1 only shifts c by -0.5 * (off0 - off1);
+            # reusing (k, t) hits the memoized drop fits directly.
+            res = _beat_error_candidate(k, t, config, c_shift=-0.5 * (offsets[0] - offsets[1]))
+    if res is not None:
+        candidates.append(("p1", res))
     # each beat's own P1 onset: exact where P1 is a clean front, noisy where it is weak
     own = [b for b in beats if math.isfinite(b.p1) and not _bits(b.flags, _EXCLUDE_BITS)]
     kb = np.asarray([b.k for b in own], dtype=np.float64)
@@ -1262,10 +1278,17 @@ def _beat_error(
     if candidates:
         # the template P1 (validated against tg/WAM) unless a per-beat P1 is clearly more
         # precise: the block jackknife of the uncertainty scatters ~30 % itself, so only a
-        # ratio beyond 1 + 2 x 0.3 counts as a real difference, not a near tie
+        # ratio beyond 1 + 2 x 0.3 counts as a real difference, not a near tie. For p1_fine
+        # (already validated on both parities by select_timing), a real watch wander can put
+        # a floor under either the covariance or block sigma of both estimators, so winning
+        # clearly on either component with no worse total uncertainty also selects it.
         point, res = candidates[0]
         for name, cand in candidates[1:]:
-            if cand[3] < _BE_SWITCH_RATIO * res[3]:
+            if cand[3] < _BE_SWITCH_RATIO * res[3] or (
+                name == "p1_fine"
+                and cand[3] <= res[3]
+                and (cand[1] < _BE_SWITCH_RATIO * res[1] or cand[2] < _BE_SWITCH_RATIO * res[2])
+            ):
                 point, res = name, cand
     else:
         point = "t_fine"

@@ -345,11 +345,13 @@ class BeatDetectorConfig:
         p1_onset_min_ms: The rise must last this long (default 0.1 ms; blips are shorter).
         p1_onset_peak_ms: The peak is searched this long after the first rise (0.5 ms).
         normalize: Software level normalization of the input (``adv_tg.dsp.normalizer``),
-            default off. For inputs whose gain cannot be lowered: the peaks are brought to
-            -6 dBFS before the analysis, so beats that reached full scale at the input are no
-            longer flagged ``SATURATED`` (and excluded from the figures). Clipping is not
-            undone; ``normalizer_clipped_samples`` still counts it. Delays the analysis by
-            at most one normalizer block (0.1 s); the output stays chunking-invariant.
+            default off. For inputs whose gain cannot be lowered: attenuates full-scale
+            ``[-1, 1]`` audio by a constant ``-6 dBFS`` (and monotonically caps unclipped
+            float inputs above full scale) without boosting quiet passages or pumping gain,
+            so saturated beats are no longer flagged ``SATURATED`` while keeping exact scale
+            invariance and template integrity. Clipping is not undone;
+            ``normalizer_clipped_samples`` still counts it. Delays the analysis by at most
+            one normalizer block (0.1 s); the output stays chunking-invariant.
         template_align_smooth_ms: Moving average applied to the envelope ONLY for the
             alignment (default 1 ms): it fuses the lobes of the drop into one burst, so the
             correlation does not jump between lobes whose relative level changes from beat to
@@ -840,8 +842,20 @@ class BeatDetector:
         self._p1_peak = max(1, int(round(c.p1_onset_peak_ms * ms)))
         n_al = max(1, int(round(c.template_align_smooth_ms * ms)))
         self._align_kernel = np.full(n_al, 1.0 / n_al)
+        # BeatDetector is scale-invariant except for the SATURATED peak check; boosting quiet
+        # startup segments or pumping gain over time inflates the 1 s noise floor and warps the
+        # median templates (losing weak P1s and biasing amplitude). Fixed -6 dBFS headroom on
+        # [-1, 1] inputs (with monotonic attenuation if float input exceeds full scale) keeps
+        # exact scale invariance while clearing SATURATED flags.
         self._normalizer = (
-            AudioNormalizer(NormalizerConfig(fs, clip_level=c.saturation_level))
+            AudioNormalizer(
+                NormalizerConfig(
+                    fs,
+                    clip_level=c.saturation_level,
+                    min_follower=1.0,
+                    release_s=math.inf,
+                )
+            )
             if c.normalize
             else None
         )
@@ -886,6 +900,7 @@ class BeatDetector:
             _Tpl(self.config.template_beats, tpl_len),
         ]
         self._fine_center = math.nan  # template onset of the last beat (see _fine)
+        self._fine_p1_tpl = math.nan  # template P1 instant of the last beat (see _fine)
         self._start_run(0)
 
     def process(self, chunk: ArrayLike, start_index: int) -> list[Beat]:
@@ -1759,7 +1774,9 @@ class BeatDetector:
         self._last_k = k
         self._last_ref = t_ref
         self._fine_center = math.nan
+        self._fine_p1_tpl = math.nan
         t_fine = self._fine(k, a, tp)
+        t_p1_tpl = self._fine_p1_tpl
         if self._q_on:
             t_fine = self._quartz_fine(k, t_fine)
         t_p1 = self._p1_fine(k, t_fine, p1) if self._p1_on else math.nan
@@ -1781,6 +1798,7 @@ class BeatDetector:
             flags=flags,
             t_fine=t_fine,
             t_p1=t_p1,
+            t_p1_tpl=t_p1_tpl,
         )
 
     @staticmethod
@@ -1879,6 +1897,8 @@ class BeatDetector:
         self._fine_center = origin + ref
         if t.n_segs < c.template_min_beats or math.isnan(ref):
             return math.nan
+        if not c.quartz and t.n_segs >= c.template_beats and math.isfinite(t.onset_p1):
+            self._fine_p1_tpl = origin + t.onset_p1
         return origin + ref
 
     def _p1_fine(self, k: int, t_fine: float, p1: float) -> float:
