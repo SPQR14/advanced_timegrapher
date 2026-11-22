@@ -48,12 +48,12 @@ class _FakeKernel32:
 
 def test_appmodel_query_packaged_and_unpackaged() -> None:
     fake = _FakeKernel32(
-        full="SPQR14.AdvancedTimegrapher_1.1.0.0_x64__abc123def4567",
+        full="SPQR14.AdvancedTimegrapher_1.1.1.0_x64__abc123def4567",
         family="SPQR14.AdvancedTimegrapher_abc123def4567",
     )
     assert (
         msix._query_appmodel_string("GetCurrentPackageFullName", _kernel32=fake)
-        == "SPQR14.AdvancedTimegrapher_1.1.0.0_x64__abc123def4567"
+        == "SPQR14.AdvancedTimegrapher_1.1.1.0_x64__abc123def4567"
     )
     assert (
         msix._query_appmodel_string("GetCurrentPackageFamilyName", _kernel32=fake)
@@ -188,7 +188,7 @@ def test_msix_manifest_template_is_valid_and_store_compliant() -> None:
         .replace("@MSIX_IDENTITY_NAME@", identity_name)
         .replace("@MSIX_PUBLISHER@", publisher)
         .replace("@MSIX_PUBLISHER_DISPLAY_NAME@", publisher_display)
-        .replace("@MSIX_VERSION@", "1.1.0.0")
+        .replace("@MSIX_VERSION@", "1.1.1.0")
     )
     root = ET.fromstring(text)
     ns_f = "http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -202,7 +202,7 @@ def test_msix_manifest_template_is_valid_and_store_compliant() -> None:
     identity = root.find(f"{{{ns_f}}}Identity")
     assert identity is not None
     assert identity.attrib["ProcessorArchitecture"] == "x64"
-    assert identity.attrib["Version"] == "1.1.0.0"
+    assert identity.attrib["Version"] == "1.1.1.0"
 
     tdf = root.find(f"{{{ns_f}}}Dependencies/{{{ns_f}}}TargetDeviceFamily")
     assert tdf is not None and tdf.attrib["Name"] == "Windows.Desktop"
