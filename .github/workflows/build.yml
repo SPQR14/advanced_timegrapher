@@ -363,7 +363,7 @@ jobs:
 
   # ------------------------------------------------------------------ Windows
   windows:
-    name: Windows (setup.exe)
+    name: Windows (setup.exe & Store MSIX)
     needs: meta
     runs-on: windows-latest
     timeout-minutes: 45
@@ -442,6 +442,35 @@ jobs:
         with:
           name: release-windows-setup
           path: dist/adv-tg-${{ env.VERSION }}-windows-x64-setup.exe
+          if-no-files-found: error
+          compression-level: 0
+
+      # Build an unsigned Microsoft Store-ready .msix from the same PyInstaller bundle and
+      # verify real MSIX installation + execution through its AppExecutionAlias (-Verify signs
+      # only a temporary copy with an ephemeral self-signed certificate).
+      - name: Build and verify MSIX (Microsoft Store)
+        env:
+          MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          $idName = if ($env:MSIX_IDENTITY_NAME) { $env:MSIX_IDENTITY_NAME } else { "AlbertoPico.AdvancedTimegrapher" }
+          $pub = if ($env:MSIX_PUBLISHER) { $env:MSIX_PUBLISHER } else { "CN=2B353A7B-439C-4198-A61A-63000DFBF72B" }
+          $pubDisplay = if ($env:MSIX_PUBLISHER_DISPLAY_NAME) { $env:MSIX_PUBLISHER_DISPLAY_NAME } else { "Alberto Pico" }
+          & packaging\windows\build_msix.ps1 `
+            -Version $env:VERSION `
+            -IdentityName $idName `
+            -Publisher $pub `
+            -PublisherDisplayName $pubDisplay `
+            -Verify
+
+      # Uploaded separately from release-* so GitHub Releases keeps setup.exe while the
+      # unsigned .msix is ready to download and submit to Microsoft Partner Center.
+      - name: Upload MSIX (Microsoft Store)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: store-windows-msix
+          path: dist/adv-tg-${{ env.VERSION }}-windows-x64.msix
           if-no-files-found: error
           compression-level: 0
 

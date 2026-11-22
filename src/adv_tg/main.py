@@ -15,6 +15,7 @@ from typing import TextIO
 from adv_tg import __version__
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
+from adv_tg.utils.msix import is_msix_packaged, package_family_name
 
 dbg = Debugger.get("adv_tg.main")
 logger = dbg.logger
@@ -59,14 +60,17 @@ def _log_environment() -> None:
     import numpy
     from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR
 
+    msix_family = package_family_name()
+    msix_suffix = f" | MSIX {msix_family}" if msix_family else ""
     logger.info(
-        "Advanced Timegrapher %s | %s | Python %s | PyQt6 %s (Qt %s) | numpy %s",
+        "Advanced Timegrapher %s | %s | Python %s | PyQt6 %s (Qt %s) | numpy %s%s",
         __version__,
         platform.platform(),
         platform.python_version(),
         PYQT_VERSION_STR,
         QT_VERSION_STR,
         numpy.__version__,
+        msix_suffix,
     )
 
 
@@ -278,6 +282,34 @@ def main(argv: Sequence[str] | None = None) -> int:
                 logger.critical("Smoke test failed on the PPS reference: %s", exc, exc_info=True)
                 window.close()
                 return 1
+
+            # 7. MSIX Store compliance verification (when launched with package identity)
+            if is_msix_packaged():
+                try:
+                    about = window.open_about_dialog(exec_dialog=False)
+                    try:
+                        if (
+                            window.action_check_updates.isVisible()
+                            or window.action_auto_update.isVisible()
+                            or window.schedule_update_check()
+                            or about.btn_check_updates.isVisible()
+                            or about.btn_buy_coffee.isVisible()
+                        ):
+                            raise RuntimeError(
+                                "MSIX build exposed external update check or donation button"
+                            )
+                    finally:
+                        about.close()
+                    logger.info(
+                        "Smoke test MSIX verified: family=%s (updates & donation hidden)",
+                        package_family_name(),
+                    )
+                except Exception as exc:
+                    logger.critical(
+                        "Smoke test failed on MSIX compliance check: %s", exc, exc_info=True
+                    )
+                    window.close()
+                    return 1
 
             logger.info("Smoke test passed: application initialized and DSP verified successfully")
             window.close()

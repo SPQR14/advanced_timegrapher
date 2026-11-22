@@ -68,6 +68,7 @@ from adv_tg.utils.adc_calibration import (
 from adv_tg.utils.audio_files import read_mono, read_tags
 from adv_tg.utils.debugger import Debugger
 from adv_tg.utils.logger_setup import LoggerSetup
+from adv_tg.utils.msix import is_msix_packaged, msix_external_path
 from adv_tg.utils.report import ISSUES_URL, build_report, default_report_name
 
 __all__ = [
@@ -96,11 +97,12 @@ def open_folder(path: Path) -> bool:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         logger.warning("No se pudo crear la carpeta %s: %s", path, exc)
-    ok = bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve()))))
+    target = msix_external_path(path)
+    ok = bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.resolve()))))
     if ok:
-        logger.info("Carpeta abierta: %s", path)
+        logger.info("Carpeta abierta: %s", target)
     else:
-        logger.warning("No se pudo abrir la carpeta: %s", path)
+        logger.warning("No se pudo abrir la carpeta: %s", target)
     return ok
 
 
@@ -457,8 +459,19 @@ class CalibrationDialog(QDialog):
             status = tr("cal_pps_collecting").format(n=est.used)
         elif est.ready:
             status = tr("cal_pps_ready")
+        elif est.span_s < READY_SPAN_S:
+            key = "cal_pps_converging" if listening else "cal_pps_short"
+            status = tr(key).format(
+                span=est.span_s, min_s=int(READY_SPAN_S), target=READY_SIGMA_PPM
+            )
         else:
-            status = tr("cal_pps_converging").format(min_s=int(READY_SPAN_S))
+            key = "cal_pps_converging_sigma" if listening else "cal_pps_imprecise"
+            status = tr(key).format(
+                span=est.span_s,
+                sigma=est.drift.uncertainty_ppm,
+                target=READY_SIGMA_PPM,
+                jitter=est.jitter_us,
+            )
         if est.jumps:
             status += " " + tr("cal_pps_jumped").format(n=est.jumps)
         if self.pps_source:
@@ -526,11 +539,16 @@ class CalibrationDialog(QDialog):
             if answer != QMessageBox.StandardButton.Yes:
                 return False
         if confirm and not est.ready:
+            key = "cal_pps_not_ready" if est.span_s < READY_SPAN_S else "cal_pps_not_ready_sigma"
             answer = QMessageBox.question(
                 self,
                 tr("cal_title"),
-                tr("cal_pps_not_ready").format(
-                    span=est.span_s, sigma=est.drift.uncertainty_ppm, min_s=int(READY_SPAN_S)
+                tr(key).format(
+                    span=est.span_s,
+                    sigma=est.drift.uncertainty_ppm,
+                    min_s=int(READY_SPAN_S),
+                    target=READY_SIGMA_PPM,
+                    jitter=est.jitter_us,
                 ),
             )
             if answer != QMessageBox.StandardButton.Yes:
@@ -700,7 +718,8 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         tr = translator.tr
         self._tr = tr
-        self._updates = updates
+        msix = is_msix_packaged()
+        self._updates = None if msix else updates
         self.setWindowTitle(tr("about_title"))
         self.setMinimumWidth(480)
         layout = QVBoxLayout(self)
@@ -715,8 +734,8 @@ class AboutDialog(QDialog):
                 qt=html.escape(QT_VERSION_STR),
                 pyqt=html.escape(PYQT_VERSION_STR),
                 system=html.escape(f"{platform.system()} {platform.release()} ({sys.platform})"),
-                config=html.escape(str(config_dir())),
-                logs=html.escape(str(LoggerSetup.LOG_DIR)),
+                config=html.escape(str(msix_external_path(config_dir()))),
+                logs=html.escape(str(msix_external_path(LoggerSetup.LOG_DIR))),
             )
         )
         body.setTextFormat(Qt.TextFormat.RichText)
@@ -739,7 +758,8 @@ class AboutDialog(QDialog):
         folder_layout.addWidget(self.btn_open_config)
         layout.addLayout(folder_layout)
 
-        # Manual update check; the result is shown here (it only links to the download page)
+        # Manual update check; the result is shown here (it only links to the download page).
+        # Hidden in Microsoft Store MSIX builds: the Store delivers updates (Policy 10.2.2).
         self.btn_check_updates = QPushButton(tr("update_check_now"))
         self.btn_check_updates.setObjectName("MockButton")
         self.btn_check_updates.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -747,29 +767,37 @@ class AboutDialog(QDialog):
         self.lbl_update.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_update.setOpenExternalLinks(True)
         self.lbl_update.setWordWrap(True)
-        if updates is not None:
+        if self._updates is not None:
             update_layout = QHBoxLayout()
             update_layout.addWidget(self.btn_check_updates)
             update_layout.addWidget(self.lbl_update, stretch=1)
             layout.addLayout(update_layout)
             self.btn_check_updates.clicked.connect(self.check_updates)
-            updates.finished.connect(self._on_update_result)
+            self._updates.finished.connect(self._on_update_result)
+        else:
+            self.btn_check_updates.setVisible(False)
+            self.lbl_update.setVisible(False)
 
-        # Support the project (opens BUY_ME_A_COFFEE_URL)
+        # Support the project (opens BUY_ME_A_COFFEE_URL). Hidden in Microsoft Store MSIX
+        # builds to comply with Store Policy 10.8 on external payment/donation links.
         self.lbl_support_project = QLabel(tr("support_project"))
-        layout.addWidget(self.lbl_support_project, alignment=Qt.AlignmentFlag.AlignHCenter)
         self.btn_buy_coffee = QPushButton(tr("btn_buy_coffee"))
         self.btn_buy_coffee.setObjectName("CoffeeButton")
         self.btn_buy_coffee.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_buy_coffee.setToolTip(tr("coffee_tooltip").format(url=BUY_ME_A_COFFEE_URL))
         self.btn_buy_coffee.clicked.connect(self.open_buy_coffee)
-        layout.addWidget(self.btn_buy_coffee, alignment=Qt.AlignmentFlag.AlignHCenter)
         # Shown only if the browser can't be opened, so the URL can be copied
         self.lbl_coffee_failed = QLabel()
         self.lbl_coffee_failed.setWordWrap(True)
         self.lbl_coffee_failed.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.lbl_coffee_failed.setVisible(False)
-        layout.addWidget(self.lbl_coffee_failed)
+        if not msix:
+            layout.addWidget(self.lbl_support_project, alignment=Qt.AlignmentFlag.AlignHCenter)
+            layout.addWidget(self.btn_buy_coffee, alignment=Qt.AlignmentFlag.AlignHCenter)
+            layout.addWidget(self.lbl_coffee_failed)
+        else:
+            self.lbl_support_project.setVisible(False)
+            self.btn_buy_coffee.setVisible(False)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         self.btn_close = buttons.button(QDialogButtonBox.StandardButton.Close)

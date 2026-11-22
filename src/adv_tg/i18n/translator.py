@@ -181,7 +181,21 @@ class Translator:
             "cal_pps_idle": "Stopped.",
             "cal_pps_waiting": "Listening… waiting for the first pulses.",
             "cal_pps_collecting": "Collecting pulses ({n})…",
-            "cal_pps_converging": "Measuring… keep it running (at least {min_s} s).",
+            "cal_pps_converging": (
+                "Measuring… keep it running (at least {min_s} s and ≤ ±{target:.2f} ppm)."
+            ),
+            "cal_pps_converging_sigma": (
+                "Measuring… {span:.0f} s recorded, uncertainty still ±{sigma:.3f} ppm "
+                "(target ≤ ±{target:.2f} ppm, jitter {jitter:.0f} µs)."
+            ),
+            "cal_pps_short": (
+                "Short recording ({span:.0f} s; recommended at least {min_s} s and "
+                "≤ ±{target:.2f} ppm)."
+            ),
+            "cal_pps_imprecise": (
+                "High uncertainty (±{sigma:.3f} ppm > ±{target:.2f} ppm in {span:.0f} s, "
+                "jitter {jitter:.0f} µs): check the buzzer or use a direct hardware input."
+            ),
             "cal_pps_ready": "Ready: precise enough to save.",
             "cal_pps_jumped": ("Phase jump ×{n}: the estimate restarted (GPS fix or lost audio)."),
             "cal_pps_ppm": "{ppm:+.3f} ± {sigma:.3f} ppm (uncorrected watches read {bias:+.3f} s/d)",
@@ -190,7 +204,12 @@ class Translator:
             ),
             "cal_pps_not_ready": (
                 "The estimate is not ready yet ({span:.0f} s, ±{sigma:.3f} ppm; recommended at "
-                "least {min_s} s). Save it anyway?"
+                "least {min_s} s and ≤ ±{target:.2f} ppm). Save it anyway?"
+            ),
+            "cal_pps_not_ready_sigma": (
+                "The recording is long enough ({span:.0f} s), but the uncertainty "
+                "(±{sigma:.3f} ppm, jitter {jitter:.0f} µs) exceeds the recommended "
+                "±{target:.2f} ppm target. Save it anyway?"
             ),
             "cal_pps_note": "GPS PPS: {n} pulses in {span:.0f} s, jitter {jitter:.1f} µs",
             "cal_pps_reference": (
@@ -550,7 +569,21 @@ class Translator:
             "cal_pps_idle": "Detenida.",
             "cal_pps_waiting": "Escuchando… esperando los primeros pulsos.",
             "cal_pps_collecting": "Reuniendo pulsos ({n})…",
-            "cal_pps_converging": "Midiendo… déjalo correr (al menos {min_s} s).",
+            "cal_pps_converging": (
+                "Midiendo… déjalo correr (al menos {min_s} s y ≤ ±{target:.2f} ppm)."
+            ),
+            "cal_pps_converging_sigma": (
+                "Midiendo… {span:.0f} s medidos, incertidumbre aún ±{sigma:.3f} ppm "
+                "(objetivo ≤ ±{target:.2f} ppm, jitter {jitter:.0f} µs)."
+            ),
+            "cal_pps_short": (
+                "Grabación corta ({span:.0f} s; se recomiendan al menos {min_s} s y "
+                "≤ ±{target:.2f} ppm)."
+            ),
+            "cal_pps_imprecise": (
+                "Incertidumbre alta (±{sigma:.3f} ppm > ±{target:.2f} ppm en {span:.0f} s, "
+                "jitter {jitter:.0f} µs): revisa el zumbador o usa una entrada directa de hardware."
+            ),
             "cal_pps_ready": "Lista: suficientemente precisa para guardarla.",
             "cal_pps_jumped": (
                 "Salto de fase ×{n}: la estimación se reinició (posición del GPS o audio perdido)."
@@ -561,7 +594,12 @@ class Translator:
             ),
             "cal_pps_not_ready": (
                 "La estimación aún no está lista ({span:.0f} s, ±{sigma:.3f} ppm; se recomiendan "
-                "al menos {min_s} s). ¿Guardarla de todos modos?"
+                "al menos {min_s} s y ≤ ±{target:.2f} ppm). ¿Guardarla de todos modos?"
+            ),
+            "cal_pps_not_ready_sigma": (
+                "La grabación tiene duración suficiente ({span:.0f} s), pero la incertidumbre "
+                "(±{sigma:.3f} ppm, jitter {jitter:.0f} µs) supera el objetivo recomendado de "
+                "±{target:.2f} ppm. ¿Guardarla de todos modos?"
             ),
             "cal_pps_note": "GPS PPS: {n} pulsos en {span:.0f} s, jitter {jitter:.1f} µs",
             "cal_pps_reference": (

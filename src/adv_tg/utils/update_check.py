@@ -31,6 +31,7 @@ from typing import Any
 
 from adv_tg import __version__
 from adv_tg.utils.adc_calibration import config_dir
+from adv_tg.utils.msix import is_msix_packaged
 
 __all__ = [
     "CHECK_INTERVAL_S",
@@ -215,7 +216,7 @@ class UpdateState:
 
     def due(self, now: float | None = None) -> bool:
         """True when an automatic check should run now."""
-        if not self.enabled or os.environ.get(DISABLE_ENV) == "1":
+        if not self.enabled or os.environ.get(DISABLE_ENV) == "1" or is_msix_packaged():
             return False
         now = time.time() if now is None else now
         # a clock set back must not silence the check for ever
