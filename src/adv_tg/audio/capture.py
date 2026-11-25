@@ -23,11 +23,14 @@ counters and a preallocated histogram are updated (no logging, no significant al
 from __future__ import annotations
 
 import array
+import ctypes
+import os
 import time
 from bisect import bisect_right
 from types import ModuleType
 from typing import Any, Literal
 
+from adv_tg import native_bridge as _nb
 from adv_tg.audio.capture_process import _device_channels, adc_end_ns
 from adv_tg.audio.channel_select import ChannelSelector
 from adv_tg.audio.gil_stats import GIL_WAIT_EDGES_MS, hist_percentile_ms
@@ -104,11 +107,12 @@ class AudioCapture:
         self.latency = latency
         self.actual_sample_rate: float | None = None
         self._sd_stream: Any = None
+        self._native_cap: ctypes.c_void_p | None = None
         self.channels = 1
         self._selector: ChannelSelector | None = None
-        self.callbacks = 0
-        self.status_flags = 0
-        self.callback_errors = 0
+        self._callbacks = 0
+        self._status_flags = 0
+        self._callback_errors = 0
         self._max_callback_ns = 0
         # Diagnostics (phase 1c): GIL wait estimate, filled by the callback.
         self._pa_clock: Any = None
@@ -116,38 +120,113 @@ class AudioCapture:
         self._gil_sum_us = 0.0
         self._gil_max_us = 0.0
         self._gil_hist = array.array("q", [0] * (len(GIL_WAIT_EDGES_MS) + 1))
-        self.gil_wait_over_block = 0
-        self.gil_wait_invalid = 0
+        self._gil_wait_over_block = 0
+        self._gil_wait_invalid = 0
+
+    def __del__(self) -> None:
+        h = getattr(self, "_native_cap", None)
+        if h is not None:
+            self._native_cap = None
+            try:
+                cdll = _nb.lib()
+                if cdll is not None:
+                    cdll.advtg_cap_destroy(h)
+            except Exception:
+                pass
+
+    def _cap_stats(self) -> _nb.NativeCaptureStatsStruct | None:
+        if self._native_cap is None:
+            return None
+        st = _nb.NativeCaptureStatsStruct()
+        _nb.lib().advtg_cap_stats(self._native_cap, ctypes.byref(st))
+        return st
 
     # ------------------------------------------------------------------ counters
     @property
+    def callbacks(self) -> int:
+        st = self._cap_stats()
+        return int(st.callbacks) if st is not None else self._callbacks
+
+    @callbacks.setter
+    def callbacks(self, val: int) -> None:
+        self._callbacks = int(val)
+
+    @property
+    def status_flags(self) -> int:
+        st = self._cap_stats()
+        return int(st.status_flags) if st is not None else self._status_flags
+
+    @status_flags.setter
+    def status_flags(self, val: int) -> None:
+        self._status_flags = int(val)
+
+    @property
+    def callback_errors(self) -> int:
+        st = self._cap_stats()
+        return int(st.callback_errors) if st is not None else self._callback_errors
+
+    @callback_errors.setter
+    def callback_errors(self, val: int) -> None:
+        self._callback_errors = int(val)
+
+    @property
+    def gil_wait_over_block(self) -> int:
+        st = self._cap_stats()
+        return int(st.gil_wait_over_block) if st is not None else self._gil_wait_over_block
+
+    @gil_wait_over_block.setter
+    def gil_wait_over_block(self, val: int) -> None:
+        self._gil_wait_over_block = int(val)
+
+    @property
+    def gil_wait_invalid(self) -> int:
+        st = self._cap_stats()
+        return int(st.gil_wait_invalid) if st is not None else self._gil_wait_invalid
+
+    @gil_wait_invalid.setter
+    def gil_wait_invalid(self, val: int) -> None:
+        self._gil_wait_invalid = int(val)
+
+    @property
     def max_callback_us(self) -> float:
         """Longest callback duration observed, in microseconds."""
-        return self._max_callback_ns / 1e3
+        st = self._cap_stats()
+        return float(st.max_callback_us) if st is not None else self._max_callback_ns / 1e3
 
     @property
     def gil_wait_max_us(self) -> float:
         """Longest estimated wait before the Python callback ran, in microseconds."""
-        return self._gil_max_us
+        st = self._cap_stats()
+        return float(st.gil_wait_max_us) if st is not None else self._gil_max_us
 
     @property
     def gil_wait_mean_us(self) -> float:
         """Mean estimated wait before the Python callback ran, in microseconds."""
+        st = self._cap_stats()
+        if st is not None:
+            return float(st.gil_wait_sum_us) / st.gil_n if st.gil_n else 0.0
         return self._gil_sum_us / self._gil_n if self._gil_n else 0.0
 
     @property
     def gil_wait_hist(self) -> tuple[int, ...]:
         """Counts per bucket of ``GIL_WAIT_EDGES_MS`` (last bucket: ``>= 500 ms``)."""
-        return tuple(self._gil_hist)
+        st = self._cap_stats()
+        return tuple(int(v) for v in st.gil_hist) if st is not None else tuple(self._gil_hist)
 
     @property
     def gil_wait_p99_ms(self) -> float:
         """99th percentile of the wait (bucket upper edge, capped at the maximum), in ms."""
+        st = self._cap_stats()
+        if st is not None:
+            hist = tuple(int(v) for v in st.gil_hist)
+            return min(hist_percentile_ms(hist, 0.99), float(st.gil_wait_max_us) / 1000.0)
         return min(hist_percentile_ms(self._gil_hist, 0.99), self._gil_max_us / 1000.0)
 
     @property
     def is_active(self) -> bool:
         """True while the PortAudio stream is running."""
+        if self._native_cap is not None:
+            return bool(_nb.lib().advtg_cap_is_active(self._native_cap))
         sd_stream = self._sd_stream
         if sd_stream is None:
             return False
@@ -211,10 +290,18 @@ class AudioCapture:
         """
         if self.is_active:
             return
-        if self._sd_stream is None:
+        if self._native_cap is None and self._sd_stream is None:
             self._open()
         with _dbg.phase("audio_capture_start", device=self.device):
-            self._sd_stream.start()
+            if self._native_cap is not None:
+                rc = int(_nb.lib().advtg_cap_start(self._native_cap))
+                if rc < 0:
+                    err = _nb.lib().advtg_cap_last_error(self._native_cap)
+                    raise RuntimeError(
+                        err.decode("utf-8", errors="replace") if err else "PortAudio error"
+                    )
+            else:
+                self._sd_stream.start()
         _dbg.process_start(
             "AudioCapture",
             device=self.device,
@@ -241,6 +328,53 @@ class AudioCapture:
                 )
             except Exception as exc:
                 _dbg.logger.warning("query_devices(%s) falló: %s", self.device, exc)
+            use_native = (
+                _nb.have(
+                    "advtg_cap_create",
+                    "advtg_cap_open",
+                    "advtg_cap_start",
+                    "advtg_cap_stop",
+                    "advtg_cap_close",
+                    "advtg_cap_destroy",
+                )
+                and getattr(self._stream, "_native", None) is not None
+                and getattr(getattr(sd, "InputStream", None), "__module__", "").startswith(
+                    "sounddevice"
+                )
+                and os.environ.get("ADV_TG_FORCE_SD_CAPTURE") != "1"
+            )
+            if use_native:
+                pa_hint = getattr(getattr(sd, "_lib", None), "_name", "") or ""
+                dev_arg = -1 if self.device is None else int(self.device)
+                req_ch = _device_channels(sd, self.device)
+                cap_h = ctypes.c_void_p(
+                    _nb.lib().advtg_cap_create(
+                        self._stream._native,
+                        dev_arg,
+                        float(self.sample_rate),
+                        int(self.blocksize),
+                        1 if self.latency == "high" else 0,
+                    )
+                )
+                if cap_h:
+                    rc = int(_nb.lib().advtg_cap_open(cap_h, pa_hint.encode("utf-8"), int(req_ch)))
+                    if rc == 0:
+                        st = _nb.NativeCaptureStatsStruct()
+                        _nb.lib().advtg_cap_stats(cap_h, ctypes.byref(st))
+                        self.channels = int(st.channels)
+                        self.actual_sample_rate = float(st.actual_sample_rate)
+                        self._native_cap = cap_h
+                        if not self.sample_rate_matches:
+                            _dbg.logger.error(
+                                "Tasa de muestreo efectiva %.3f Hz distinta de la pedida %d Hz",
+                                self.actual_sample_rate,
+                                self.sample_rate,
+                            )
+                        return
+                    _dbg.logger.warning(
+                        "Captura nativa C++ falló (%d); respaldo a sounddevice.InputStream", rc
+                    )
+                    _nb.lib().advtg_cap_destroy(cap_h)
             sd_stream = None
             last: Exception | None = None
             for channels in dict.fromkeys((_device_channels(sd, self.device), 1)):
@@ -293,6 +427,32 @@ class AudioCapture:
 
     def stop(self) -> None:
         """Stop the stream (keeps it open so it can be restarted). Idempotent."""
+        if self._native_cap is not None:
+            if not self.is_active:
+                return
+            try:
+                _nb.lib().advtg_cap_stop(self._native_cap)
+            except Exception as exc:
+                _dbg.logger.error("Error al parar el stream de audio nativo: %s", exc)
+            st = self._cap_stats()
+            if st is not None:
+                hist = [int(v) for v in st.gil_hist]
+                mean_us = float(st.gil_wait_sum_us) / st.gil_n if st.gil_n else 0.0
+                p99 = min(hist_percentile_ms(hist, 0.99), float(st.gil_wait_max_us) / 1000.0)
+                _dbg.process_end(
+                    "AudioCapture",
+                    callbacks=int(st.callbacks),
+                    status_flags=int(st.status_flags),
+                    callback_errors=int(st.callback_errors),
+                    max_callback_us=round(float(st.max_callback_us), 1),
+                    gil_wait_mean_us=round(mean_us, 1),
+                    gil_wait_p99_ms=p99,
+                    gil_wait_max_us=round(float(st.gil_wait_max_us), 1),
+                    gil_wait_over_block=int(st.gil_wait_over_block),
+                    gil_wait_invalid=int(st.gil_wait_invalid),
+                    gil_wait_hist=hist,
+                )
+            return
         sd_stream = self._sd_stream
         if sd_stream is None or not self.is_active:
             return
@@ -317,6 +477,17 @@ class AudioCapture:
     def close(self) -> None:
         """Stop and close the stream. Idempotent."""
         self.stop()
+        if self._native_cap is not None:
+            cap_h = self._native_cap
+            self._native_cap = None
+            try:
+                _nb.lib().advtg_cap_close(cap_h)
+            except Exception as exc:
+                _dbg.logger.error("Error al cerrar el stream de audio nativo: %s", exc)
+            finally:
+                _nb.lib().advtg_cap_destroy(cap_h)
+            _dbg.state_change("AudioCapture", "ABIERTO", "CERRADO", device=self.device)
+            return
         sd_stream = self._sd_stream
         self._sd_stream = None
         if sd_stream is None:

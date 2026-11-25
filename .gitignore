@@ -83,3 +83,7 @@ GEMINI.md
 scratchpad/
 
 INSTRUCCIONES_CLAUDE.md
+
+# native engine build products (scripts/build_native.py)
+src/adv_tg/_native/*.dylib
+src/adv_tg/_native/*.dll

@@ -10,14 +10,29 @@ Each function is a line-by-line port of SciPy 1.18 (``buttap``, ``lp2bp_zpk``,
 ``sosfilt_zi``/``lfilter_zi``, the ``ntaps`` rule of ``sosfiltfilt``), so the coefficients are
 the same as SciPy's to machine precision; ``tests/test_dsp.py`` checks the frequency response
 and the filtering against plain-Python reference recursions (SciPy is not used anywhere).
+
+With the native engine loaded, ``butter_bandpass_sos`` and ``sosfilt_zi`` return the
+coefficients of its C++ port (``native/src/filters.cpp``, within a few ulp of these): the
+native ``MeasurementSession`` (and a mobile app) designs its filters there, so the Python
+pipeline uses the very same coefficients and both give identical beats.
 """
 
 from __future__ import annotations
 
+import ctypes
+
 import numpy as np
 from numpy.typing import NDArray
 
-__all__ = ["butter_bandpass_sos", "sosfilt_zi", "sosfiltfilt_padlen"]
+from adv_tg import native_bridge as _nb
+
+__all__ = [
+    "butter_bandpass_sos",
+    "py_butter_bandpass_sos",
+    "py_sosfilt_zi",
+    "sosfilt_zi",
+    "sosfiltfilt_padlen",
+]
 
 
 # ---------------------------------------------------------------------- zpk helpers
@@ -175,6 +190,22 @@ def butter_bandpass_sos(order: int, band_hz: tuple[float, float], fs: float) -> 
     wn = np.array([lo, hi]) / (float(fs) / 2)
     if not (0 < wn[0] < wn[1] < 1):
         raise ValueError(f"banda no válida para fs={fs}: {band_hz}")
+    if _nb.have("advtg_butter_bandpass_sos"):
+        sos = np.empty((int(order), 6), dtype=np.float64)
+        n = int(
+            _nb.lib().advtg_butter_bandpass_sos(
+                int(order), lo, hi, float(fs), _nb.ptr(sos), sos.size
+            )
+        )
+        if n == int(order):
+            return sos
+    return py_butter_bandpass_sos(order, (lo, hi), fs)
+
+
+def py_butter_bandpass_sos(order: int, band_hz: tuple[float, float], fs: float) -> NDArray:
+    """Pure numpy ``butter_bandpass_sos`` (reference of the native port)."""
+    lo, hi = (float(band_hz[0]), float(band_hz[1]))
+    wn = np.array([lo, hi]) / (float(fs) / 2)
     fs_pre = 2.0
     warped = 2 * fs_pre * np.tan(np.pi * wn / fs_pre)
     bw = warped[1] - warped[0]
@@ -205,6 +236,17 @@ def sosfilt_zi(sos: NDArray) -> NDArray:
     sos = np.asarray(sos, dtype=np.float64)
     if sos.ndim != 2 or sos.shape[1] != 6:
         raise ValueError("sos debe tener forma (n_secciones, 6)")
+    if _nb.have("advtg_sosfilt_zi") and sos.shape[0] > 0:
+        sc = np.ascontiguousarray(sos)
+        zi = np.empty((sos.shape[0], 2), dtype=np.float64)
+        if _nb.lib().advtg_sosfilt_zi(_nb.ptr(sc), ctypes.c_int(sos.shape[0]), _nb.ptr(zi)) == 0:
+            return zi
+    return py_sosfilt_zi(sos)
+
+
+def py_sosfilt_zi(sos: NDArray) -> NDArray:
+    """Pure numpy ``sosfilt_zi`` (reference of the native port)."""
+    sos = np.asarray(sos, dtype=np.float64)
     zi = np.empty((sos.shape[0], 2))
     scale = 1.0
     for s in range(sos.shape[0]):

@@ -61,6 +61,8 @@ from enum import IntEnum
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from adv_tg import native_bridge as _nb
+
 __all__ = [
     "DRIFT_TAG_PREFIX",
     "REFERENCE_TAG",
@@ -322,6 +324,23 @@ def lower_envelope(
         raise ValueError("sample_rate y bin_s deben ser positivos")
     if n.size == 0:
         return n, t
+    if _nb.have("advtg_lower_envelope"):
+        nc = _nb.i64(n)
+        tc = _nb.i64(t)
+        out_n = np.empty(nc.size, dtype=np.int64)
+        out_t = np.empty(nc.size, dtype=np.int64)
+        m = int(
+            _nb.lib().advtg_lower_envelope(
+                _nb.ptr(nc),
+                _nb.ptr(tc),
+                nc.size,
+                float(sample_rate),
+                float(bin_s),
+                _nb.ptr(out_n),
+                _nb.ptr(out_t),
+            )
+        )
+        return out_n[:m].copy(), out_t[:m].copy()
     r = (t - t[0]).astype(np.float64) * 1e-9 - (n - n[0]).astype(np.float64) / sample_rate
     bins = (n // max(1, int(round(bin_s * sample_rate)))).astype(np.int64)
     # Stable sort by (bin, residual): the first element of each bin is its minimum.
@@ -413,6 +432,49 @@ def fit_envelope(
     t = _as_int64(host_ns, "host_ns")
     if n.size < min_points:
         return AdcDrift.uncalibrated(f"pocos puntos ({n.size} < {min_points})")
+    if n.shape == t.shape and sample_rate > 0 and _nb.have("advtg_fit_envelope"):
+        nc = _nb.i64(n)
+        tc = _nb.i64(t)
+        out = _nb.NativeAdcDriftStruct()
+        rc = int(
+            _nb.lib().advtg_fit_envelope(
+                _nb.ptr(nc),
+                _nb.ptr(tc),
+                nc.size,
+                float(sample_rate),
+                int(host.level),
+                float(host.sigma_ppm),
+                float(jump_ms),
+                float(outlier_sigma),
+                int(min_points),
+                int(min_segment),
+                float(min_span_s),
+                ctypes.byref(out),
+            )
+        )
+        if rc == 0:
+            nk = int(out.note_kind)
+            if nk == 1:
+                return AdcDrift.uncalibrated(f"pocos puntos ({n.size} < {min_points})")
+            if nk == 2:
+                return AdcDrift.uncalibrated("demasiados saltos de reloj")
+            if nk == 3:
+                return AdcDrift.uncalibrated(
+                    f"base de tiempo corta ({out.span_s:.1f} s < {min_span_s:g} s)"
+                )
+            note = f"{out.n_segments} tramos (saltos de reloj)" if nk == 5 else ""
+            return AdcDrift(
+                ppm=float(out.ppm),
+                sigma_ppm=float(out.sigma_ppm),
+                systematic_ppm=float(out.systematic_ppm),
+                level=ClockLevel(int(out.level)),
+                method="host-envelope",
+                span_s=float(out.span_s),
+                n_points=int(out.n_points),
+                n_segments=int(out.n_segments),
+                residual_us=float(out.residual_us),
+                note=note,
+            )
     x = (n - n[0]).astype(np.float64) / sample_rate
     y = (t - t[0]).astype(np.float64) * 1e-9 - x
 
@@ -630,10 +692,43 @@ def drift_from_ticks(
     Returns:
         The estimate, or ``AdcDrift.uncalibrated`` (with a note) if there is not enough data.
     """
-    x = np.asarray(tick_indices, dtype=np.float64).reshape(-1)
-    x = np.sort(x[np.isfinite(x)])
     if not (sample_rate > 0 and nominal_period_s > 0):
         raise ValueError("sample_rate y nominal_period_s deben ser positivos")
+    raw = np.asarray(tick_indices, dtype=np.float64).reshape(-1)
+    if min_ticks >= 1 and raw.size > 0 and _nb.have("advtg_drift_from_ticks"):
+        tc = _nb.f64(raw)
+        out = _nb.NativeAdcDriftStruct()
+        rc = int(
+            _nb.lib().advtg_drift_from_ticks(
+                _nb.ptr(tc),
+                tc.size,
+                float(sample_rate),
+                float(nominal_period_s),
+                float(reference_ppm),
+                float(reference_sigma_ppm),
+                float(outlier_sigma),
+                int(min_ticks),
+                ctypes.byref(out),
+            )
+        )
+        if rc == 0:
+            nk = int(out.note_kind)
+            if nk == 1:
+                return AdcDrift.uncalibrated(f"pocos pulsos ({int(out.n_points)} < {min_ticks})")
+            if nk == 4:
+                return AdcDrift.uncalibrated("demasiados pulsos atípicos")
+            return AdcDrift(
+                ppm=float(out.ppm),
+                sigma_ppm=float(out.sigma_ppm),
+                systematic_ppm=float(out.systematic_ppm),
+                level=ClockLevel.EXTERNAL,
+                method="reference",
+                span_s=float(out.span_s),
+                n_points=int(out.n_points),
+                n_segments=int(out.n_segments),
+                residual_us=float(out.residual_us),
+            )
+    x = np.sort(raw[np.isfinite(raw)])
     if x.size < min_ticks:
         return AdcDrift.uncalibrated(f"pocos pulsos ({x.size} < {min_ticks})")
     p_nom = nominal_period_s * sample_rate
@@ -701,6 +796,23 @@ def detect_pps_edges(
         raise ValueError("polarity debe ser +1 o -1")
     if x.size < 2:
         return np.empty(0)
+    if _nb.have("advtg_detect_pps_edges"):
+        xc = _nb.f64(x)
+        out = np.empty(xc.size, dtype=np.float64)
+        m = int(
+            _nb.lib().advtg_detect_pps_edges(
+                _nb.ptr(xc),
+                xc.size,
+                float(sample_rate),
+                int(start_index),
+                0 if threshold is None else 1,
+                0.0 if threshold is None else float(threshold),
+                int(polarity),
+                float(min_interval_s),
+                _nb.ptr(out),
+            )
+        )
+        return out[:m].copy()
     x = x * polarity
     if threshold is None:
         lo, hi = np.percentile(x, [1.0, 99.0])

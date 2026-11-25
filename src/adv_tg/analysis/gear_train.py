@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+from adv_tg import native_bridge as _nb
 from adv_tg.core.beat_detector import BeatDetector, BeatDetectorConfig
 from adv_tg.core.beat_types import Beat, amplitude_from_lift_time, beat_period_s
 from adv_tg.dsp.engine import sosfiltfilt
@@ -113,6 +114,11 @@ def teager_kaiser(x: NDArray) -> NDArray[np.float64]:
     x = np.asarray(x, dtype=np.float64)
     if x.size < 3:
         return np.zeros(x.size)
+    if _nb.have("advtg_teager_kaiser"):
+        xc = _nb.f64(x.reshape(-1))
+        out = np.empty(xc.size, dtype=np.float64)
+        _nb.lib().advtg_teager_kaiser(_nb.ptr(xc), xc.size, _nb.ptr(out))
+        return out.reshape(x.shape)
     psi = np.empty_like(x)
     psi[1:-1] = x[1:-1] ** 2 - x[:-2] * x[2:]
     psi[0], psi[-1] = psi[1], psi[-2]
@@ -126,9 +132,20 @@ def lomb_scargle(t: NDArray, y: NDArray, freqs: NDArray, chunk: int = 512) -> ND
     ``s^2`` over ``N`` samples peaks near ``N A^2 / (4 s^2)``.
     """
     t = np.asarray(t, dtype=np.float64)
-    y = np.asarray(y, dtype=np.float64) - np.mean(y)
-    var = float(np.var(y))
+    y_in = np.asarray(y, dtype=np.float64)
     freqs = np.asarray(freqs, dtype=np.float64)
+    if _nb.have("advtg_lomb_scargle") and t.ndim <= 1 and y_in.ndim <= 1 and t.size == y_in.size:
+        tc = _nb.f64(t.reshape(-1))
+        yc = _nb.f64(y_in.reshape(-1))
+        fc = _nb.f64(freqs.reshape(-1))
+        out = np.zeros(fc.size, dtype=np.float64)
+        if tc.size >= 3 and fc.size > 0:
+            _nb.lib().advtg_lomb_scargle(
+                _nb.ptr(tc), _nb.ptr(yc), tc.size, _nb.ptr(fc), fc.size, _nb.ptr(out)
+            )
+        return out.reshape(freqs.shape)
+    y = y_in - np.mean(y_in)
+    var = float(np.var(y))
     out = np.zeros(freqs.size)
     if var <= 0.0 or t.size < 3:
         return out

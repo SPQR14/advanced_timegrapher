@@ -79,6 +79,7 @@ from adv_tg.ui.dialogs import (
 from adv_tg.ui.flow_layout import FlowLayout
 from adv_tg.ui.measure_worker import MeasureStreamWorker
 from adv_tg.ui.measure_worker import device_name as measure_device_name
+from adv_tg.ui.native_plots import NativeGraphEngine, smooth_median_array
 from adv_tg.ui.stream_worker_base import BaseStreamWorker
 from adv_tg.ui.update_notifier import UpdateNotifier
 from adv_tg.ui.worker_factory import create_worker
@@ -1641,6 +1642,29 @@ class MainWin(QMainWindow):
         self._optimize_high_freq_curve(self.audio_waveform_curve)
         waveform_layout.addWidget(self.waveform_plot)
 
+        self._native_graphs = NativeGraphEngine(self)
+        if self._native_graphs.active:
+            self._native_graphs.attach(0, self.paper_tape_plot)
+            self._native_graphs.attach(1, self.oscilloscope_plot)
+            self._native_graphs.attach(2, self.waveform_plot)
+            for curve in (
+                self.tape_curve_even,
+                self.tape_curve_odd,
+                self.osc_wave_curve,
+                self.osc_envelope_curve,
+                self.audio_waveform_curve,
+            ):
+                curve.setVisible(False)
+            self.paper_tape_plot.getViewBox().sigRangeChanged.connect(
+                lambda *_a: self._submit_tape_native()
+            )
+            self.oscilloscope_plot.getViewBox().sigRangeChanged.connect(
+                lambda *_a: self._submit_osc_native()
+            )
+            self.waveform_plot.getViewBox().sigRangeChanged.connect(
+                lambda *_a: self._submit_wave_native()
+            )
+
         self.bottom_graphs_splitter.addWidget(self.right_container)
         self.bottom_graphs_splitter.addWidget(self.waveform_container)
         self.bottom_graphs_splitter.setStretchFactor(0, 1)
@@ -2140,8 +2164,41 @@ class MainWin(QMainWindow):
             (self._tape_ms_even, self._tape_disp_even),
             (self._tape_ms_odd, self._tape_disp_odd),
         ):
-            for i in range(len(disp), len(raw)):
-                disp.append(float(np.median(raw[max(0, i - TAPE_SMOOTH_BEATS + 1) : i + 1])))
+            start = len(disp)
+            n_raw = len(raw)
+            if start >= n_raw:
+                continue
+            prefix = max(0, start - (TAPE_SMOOTH_BEATS - 1))
+            smoothed = smooth_median_array(raw[prefix:], TAPE_SMOOTH_BEATS)
+            disp.extend(smoothed[start - prefix :])
+
+    def _submit_tape_native(self) -> None:
+        if not hasattr(self, "_native_graphs") or not self._native_graphs.active:
+            return
+        xe, ye, xo, yo = self._tape_rows()
+        if xe.size == 0 and xo.size == 0:
+            self._native_graphs.clear_slot(0)
+            return
+        self._native_graphs.submit_tape(self.paper_tape_plot, xe, ye, xo, yo)
+
+    def _submit_osc_native(self) -> None:
+        if not hasattr(self, "_native_graphs") or not self._native_graphs.active:
+            return
+        tx, wave = self.osc_wave_curve.getData()
+        _, env = self.osc_envelope_curve.getData()
+        if tx is None or wave is None or len(tx) == 0:
+            self._native_graphs.clear_slot(1)
+            return
+        self._native_graphs.submit_osc(self.oscilloscope_plot, tx, wave, env)
+
+    def _submit_wave_native(self) -> None:
+        if not hasattr(self, "_native_graphs") or not self._native_graphs.active:
+            return
+        tx, wave = self.audio_waveform_curve.getData()
+        if tx is None or wave is None or len(tx) == 0:
+            self._native_graphs.clear_slot(2)
+            return
+        self._native_graphs.submit_wave(self.waveform_plot, tx, wave)
 
     def _tape_x_window(self) -> tuple[float, float]:
         """Visible time span: [0, width] at first, then scrolling with the newest beat."""
@@ -2806,6 +2863,8 @@ class MainWin(QMainWindow):
 
     def _render_traces_image(self) -> QImage:
         """Render the three acoustic/telemetry trace graphs and metadata banner into a QImage."""
+        if hasattr(self, "_native_graphs") and self._native_graphs.active:
+            self._native_graphs.flush()
         self.graphs_splitter.repaint()
         graphs_pixmap = self.graphs_splitter.grab()
         gw = max(800, graphs_pixmap.width())
@@ -3379,6 +3438,10 @@ class MainWin(QMainWindow):
         self.osc_envelope_curve.setData([], [])
         self.osc_impulse_markers.setData([], [])
         self.audio_waveform_curve.setData([], [])
+        if hasattr(self, "_native_graphs") and self._native_graphs.active:
+            self._native_graphs.clear_slot(0)
+            self._native_graphs.clear_slot(1)
+            self._native_graphs.clear_slot(2)
         # The quality bar follows the input level until the engine reports detection quality
         self._telemetry_seen = False
         self._tape_autoscale = True
@@ -3597,7 +3660,10 @@ class MainWin(QMainWindow):
             self.oscilloscope_plot.setXRange(0.0, span_ms, padding=0.0)
         self.osc_wave_curve.setData(t_ms, norm_wave)
         env_win = max(int(round(0.00015 * fs)), 3)
-        self.osc_envelope_curve.setData(t_ms, _moving_average_same(np.abs(norm_wave), env_win))
+        norm_env = _moving_average_same(np.abs(norm_wave), env_win)
+        self.osc_envelope_curve.setData(t_ms, norm_env)
+        if hasattr(self, "_native_graphs") and self._native_graphs.active:
+            self._native_graphs.submit_osc(self.oscilloscope_plot, t_ms, norm_wave, norm_env)
         spots = []
         colors = ("#00e676", "#ffab00", "#ff1744")
         stamps = (beat.timestamp_p1, beat.timestamp_p2, beat.timestamp_p3)
@@ -3757,6 +3823,7 @@ class MainWin(QMainWindow):
             self.tape_curve_even.setData(xe, ye)
             self.tape_curve_odd.setData(xo, yo)
             self._autoscale_paper_tape()
+            self._submit_tape_native()
 
         if isinstance(telemetry, BeatTelemetry):
             fs = float(
@@ -3813,6 +3880,8 @@ class MainWin(QMainWindow):
             env_kernel = np.ones(env_win, dtype=np.float64) / float(env_win)
             norm_env = np.convolve(np.abs(norm_wave), env_kernel, mode="same")
             self.osc_envelope_curve.setData(t_ms, norm_env)
+            if hasattr(self, "_native_graphs") and self._native_graphs.active:
+                self._native_graphs.submit_osc(self.oscilloscope_plot, t_ms, norm_wave, norm_env)
             self.line_p1.setPos(t_p1_ms)
             self.line_p2.setPos(t_p2_ms)
             self.line_p3.setPos(t_p3_ms)
@@ -3853,6 +3922,8 @@ class MainWin(QMainWindow):
                 self._wave_span = span
                 self.waveform_plot.setXRange(*span)
             self.audio_waveform_curve.setData(time_axis, waveform)
+            if hasattr(self, "_native_graphs") and self._native_graphs.active:
+                self._native_graphs.submit_wave(self.waveform_plot, time_axis, waveform)
         self._perf_waveform.record(t0)
 
     _LEVEL_BAR_COLORS: dict[str, str] = {"ok": "#00e676", "low": "#ffab00", "bad": "#ff1744"}
@@ -3987,6 +4058,8 @@ class MainWin(QMainWindow):
         """Ensure background worker thread is cleanly stopped before window closes."""
         with _dbg.phase("cierre_ventana", capture_state=self._capture_state):
             self.stop_capture()
+            if hasattr(self, "_native_graphs"):
+                self._native_graphs.close()
             if hasattr(self, "dsp_worker") and self.dsp_worker is not None:
                 self.dsp_worker.shutdown()
                 _dbg.process_end(f"engine {type(self.dsp_worker).__name__}")

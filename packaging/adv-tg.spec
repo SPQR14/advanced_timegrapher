@@ -36,6 +36,12 @@ if samples_dir.exists():
 # sounddevice bundles PortAudio on macOS and Windows, but Linux uses system PortAudio.
 # If libportaudio is present on the Linux build host, bundle it directly into the package.
 binaries = []
+native_dir = ROOT / "src" / "adv_tg" / "_native"
+if native_dir.exists():
+    for pattern in ("*.so", "*.dylib", "*.dll"):
+        for native_lib in sorted(native_dir.glob(pattern)):
+            binaries.append((str(native_lib), "adv_tg/_native"))
+
 if sys.platform.startswith("linux"):
     try:
         out = subprocess.check_output(["ldconfig", "-p"], text=True, stderr=subprocess.DEVNULL)
@@ -47,9 +53,10 @@ if sys.platform.startswith("linux"):
                     break
     except Exception:
         pass
-    if not binaries:
+    if not any("portaudio" in Path(b[0]).name for b in binaries):
         for cand in (
             Path("/usr/lib/x86_64-linux-gnu/libportaudio.so.2"),
+            Path("/usr/lib/aarch64-linux-gnu/libportaudio.so.2"),
             Path("/usr/lib64/libportaudio.so.2"),
             Path("/usr/lib/libportaudio.so.2"),
         ):
@@ -60,9 +67,12 @@ if sys.platform.startswith("linux"):
 # 3. Child processes and lazy imports:
 # The capture and analysis processes are spawned independently and import these modules.
 hiddenimports = [
+    "adv_tg._native",
+    "adv_tg.native_bridge",
     "adv_tg.dsp",
     "adv_tg.dsp.engine",
     "adv_tg.dsp.filters",
+    "adv_tg.ui.native_plots",
     "adv_tg.audio.capture_process",
     "adv_tg.audio.analysis_process",
     "sounddevice",

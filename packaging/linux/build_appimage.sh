@@ -12,12 +12,25 @@ cd "$ROOT_DIR"
 
 VERSION="${1:-$(grep -E '^__version__\s*=' src/adv_tg/__init__.py | cut -d'"' -f2)}"
 ARCH="$(uname -m)"
-[ "$ARCH" = x86_64 ] || { echo "ERROR: only x86_64 is pinned here (got $ARCH)" >&2; exit 1; }
-
-TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
-TOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
-RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64"
-RUNTIME_SHA256="2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
+case "$ARCH" in
+    x86_64)
+        TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+        TOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+        RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64"
+        RUNTIME_SHA256="2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
+        ;;
+    aarch64)
+        # TODO: pin the SHA-256 of both files (until then fetch() refuses to download them)
+        TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-aarch64.AppImage"
+        TOOL_SHA256=""
+        RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-aarch64"
+        RUNTIME_SHA256=""
+        ;;
+    *)
+        echo "ERROR: unsupported architecture $ARCH" >&2
+        exit 1
+        ;;
+esac
 
 if [ ! -x dist/adv-tg/adv-tg ]; then
     echo "ERROR: dist/adv-tg/adv-tg not found; run PyInstaller first." >&2
@@ -29,6 +42,12 @@ rm -rf "$WORK"
 mkdir -p "$WORK/tools"
 
 fetch() { # url sha256 destination
+    if [ -z "$2" ]; then
+        # never run an unverified download: pin the hash here, or pass local, already
+        # verified tools with APPIMAGETOOL=... / APPIMAGE_RUNTIME=...
+        echo "ERROR: no SHA-256 pinned for $1 ($ARCH); set APPIMAGETOOL / APPIMAGE_RUNTIME" >&2
+        exit 1
+    fi
     curl --fail --silent --show-error --location --retry 3 -o "$3" "$1"
     echo "$2  $3" | sha256sum --check --quiet -
 }
@@ -40,7 +59,7 @@ if [ -z "$TOOL" ]; then
 fi
 RUNTIME="${APPIMAGE_RUNTIME:-}"
 if [ -z "$RUNTIME" ]; then
-    RUNTIME="$WORK/tools/runtime-x86_64"
+    RUNTIME="$WORK/tools/runtime-${ARCH}"
     fetch "$RUNTIME_URL" "$RUNTIME_SHA256" "$RUNTIME"
 fi
 
@@ -61,10 +80,10 @@ exec "$HERE/opt/adv-tg/adv-tg" "$@"
 APPRUN
 chmod 755 "$APPDIR/AppRun"
 
-OUT="dist/adv-tg-${VERSION}-linux-x86_64.AppImage"
+OUT="dist/adv-tg-${VERSION}-linux-${ARCH}.AppImage"
 rm -f "$OUT"
 # --appimage-extract-and-run: appimagetool is itself an AppImage and CI containers have no FUSE
-ARCH=x86_64 VERSION="$VERSION" "$TOOL" --appimage-extract-and-run \
+ARCH="$ARCH" VERSION="$VERSION" "$TOOL" --appimage-extract-and-run \
     --no-appstream --runtime-file "$RUNTIME" "$APPDIR" "$OUT"
 chmod +x "$OUT"
 echo "AppImage: $OUT ($(du -m "$OUT" | cut -f1) MB)"

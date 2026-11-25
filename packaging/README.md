@@ -23,17 +23,33 @@ Este directorio contiene las especificaciones y utilidades para construir **un i
 
 ---
 
-## Flujo de Construcción (Python puro)
+## Flujo de Construcción (arquitectura híbrida, v2.0)
 
-El proyecto es **Python puro** (numpy, sin SciPy y sin extensiones C/C++), así que no hay
-compilación nativa propia: el mismo código se instala con `pip` y se congela con PyInstaller.
+La aplicación es Python/Qt y la medición corre en el **motor nativo C++20**
+(`libadvtg_native.so` / `.dylib` / `advtg_native.dll`, código en `native/`), que cada job
+compila en su plataforma con `scripts/build_native.py` antes de PyInstaller; `adv-tg.spec` lo
+copia a `adv_tg/_native/` dentro del bundle y `adv_tg.native_bridge` lo carga con `ctypes`.
+Sin la librería (o con `ADV_TG_DISABLE_NATIVE=1`) todo funciona igual en numpy puro: es la
+referencia de los tests de paridad y lo que instala el wheel `py3-none-any`.
+
+Cómo se garantiza que los binarios siguen siendo autocontenidos:
+
+- `scripts/check_native_deps.py` rechaza la librería si necesita algo que un sistema limpio
+  no tiene: en Linux solo glibc ≤ 2.34, libstdc++ y libgcc_s (declaradas por el deb/rpm); en
+  macOS solo `/usr/lib` y `/System` con mínimo macOS 11.0 (`MACOSX_DEPLOYMENT_TARGET`); en
+  Windows nada de `MSVCP140`/`VCRUNTIME140` ni runtimes de MinGW (MSVC con runtime estático,
+  `/MT`). Se ejecuta sobre la librería recién compilada y sobre la del bundle.
+- `--smoke-test` de un binario congelado falla si el motor nativo o su API de sesión no
+  cargan (un binario que cayese en silencio al modo numpy pasaría desapercibido si no).
+- Un solo binario por plataforma para todas las CPU: x86_64 compila el núcleo para
+  x86-64-v2 y elige SSE4.2 / AVX2 / AVX-512 en ejecución (CPUID + XGETBV); macOS usa NEON.
 
 ```
 GitHub Actions (.github/workflows/build.yml):
  1. [meta]          ──> versión (src/adv_tg/__init__.py == pyproject.toml == etiqueta v<versión>)
  2. [python-dist]   ──> python -m build: solo comprueba que el wheel sigue siendo py3-none-any
  3. [linux]         ──> contenedor AlmaLinux 9 (glibc 2.34): PyInstaller, smoke test,
-                        rpm + deb + AppImage
+                        motor C++ con GCC 11 + check_native_deps, rpm + deb + AppImage
  4. [linux-verify]  ──> instala el deb en Debian 12 y Ubuntu 22.04/24.04 y el rpm en Rocky 9 y
                         Fedora (dependencias resueltas por apt/dnf) y ejecuta el smoke test de
                         la aplicación instalada y del AppImage, en offscreen y sobre X11 (Xvfb)
@@ -57,7 +73,7 @@ GitHub Actions (.github/workflows/build.yml):
 Ya no se publican el `.tar.gz`, los `.zip` ni el wheel/sdist:
 eran el mismo programa repetido en otro envoltorio.
 
-Todos son autocontenidos: llevan Python, Qt, numpy, PortAudio y libsndfile. En Linux requieren
+Todos son autocontenidos: llevan Python, Qt, numpy, PortAudio, libsndfile y el motor C++20. En Linux requieren
 glibc ≥ 2.34 (la del sistema de compilación, Enterprise Linux 9).
 
 ---
