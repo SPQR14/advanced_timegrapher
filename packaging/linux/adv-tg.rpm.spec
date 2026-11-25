@@ -93,6 +93,10 @@ which update-desktop-database &>/dev/null && update-desktop-database %{_datadir}
 which gtk-update-icon-cache &>/dev/null && gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 
 %changelog
+* Tue Nov 24 2026 Alberto Pico <albertopicolara@gmail.com> - 2.0.0-1
+- Release version 2.0.0: C++20 SIMD runtime-dispatched DSP and metrics engine,
+  lock-free SPSC sample ring buffer, GIL-free native PortAudio capture, and
+  multi-threaded CPU graph rasterization.
 * Sat Nov 21 2026 Alberto Pico <albertopicolara@gmail.com> - 1.1.1-1
 - Release version 1.1.1: constant-headroom normalization preserving P1 and template
   accuracy, beat-error stability across drop-lobe jumps, clearer PPS calibration

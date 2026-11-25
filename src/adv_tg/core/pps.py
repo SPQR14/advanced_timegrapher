@@ -72,6 +72,7 @@ Calibrator:
 
 from __future__ import annotations
 
+import ctypes
 import math
 from collections import deque
 from dataclasses import dataclass, field, replace
@@ -79,6 +80,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from adv_tg import native_bridge as _nb
 from adv_tg.core.adc_clock import AdcDrift, ClockLevel, drift_from_ticks
 from adv_tg.dsp.onset import MAD_TO_SIGMA, lowpass_fir, onset_after_quiet, robust_level
 
@@ -181,10 +183,34 @@ class PpsDetector:
         self._fir = lowpass_fir(self.fs, LOWPASS_HZ)
         self._fir_rev = np.ascontiguousarray(self._fir[::-1])
         self._delay = (self._fir.size - 1) // 2
+        self._handle: int | None = None
+        if _nb.have(
+            "advtg_pps_create",
+            "advtg_pps_destroy",
+            "advtg_pps_reset",
+            "advtg_pps_process",
+            "advtg_pps_take_overflow",
+            "advtg_pps_rejected",
+        ):
+            h = _nb.lib().advtg_pps_create(self.fs, self.threshold_sigma)
+            if h:
+                self._handle = int(h)
         self.reset(0)
+
+    def __del__(self) -> None:
+        h = getattr(self, "_handle", None)
+        if h and _nb is not None:
+            cdll = _nb.lib()
+            if cdll is not None and hasattr(cdll, "advtg_pps_destroy"):
+                cdll.advtg_pps_destroy(ctypes.c_void_p(h))
+            self._handle = None
 
     def reset(self, start_index: int) -> None:
         """Forget everything; the next chunk starts at ``start_index`` (after a gap)."""
+        if self._handle:
+            _nb.lib().advtg_pps_reset(ctypes.c_void_p(self._handle), int(start_index))
+            self.rejected = 0
+            return
         self._in_next = int(start_index)
         self._tail: NDArray[np.float64] | None = None  # last fir.size - 1 input samples
         # the detector works on the filtered stream, already moved back by the FIR delay
@@ -224,6 +250,29 @@ class PpsDetector:
         A chunk that does not follow the previous one resets the detector first.
         """
         x = np.asarray(chunk, dtype=np.float64).reshape(-1)
+        if self._handle:
+            xc = _nb.f64(x)
+            cap = max(16, int(xc.size // max(1, self._holdoff)) + 8)
+            buf = (_nb.NativePpsPulseStruct * cap)()
+            n_out = int(
+                _nb.lib().advtg_pps_process(
+                    ctypes.c_void_p(self._handle),
+                    _nb.ptr(xc),
+                    xc.size,
+                    int(start_index),
+                    ctypes.byref(buf),
+                    cap,
+                )
+            )
+            if n_out < -1:
+                need = -n_out - 2
+                buf = (_nb.NativePpsPulseStruct * need)()
+                n_out = int(_nb.lib().advtg_pps_take_overflow(ctypes.byref(buf), need))
+            self.rejected = int(_nb.lib().advtg_pps_rejected(ctypes.c_void_p(self._handle)))
+            return [
+                PpsPulse(float(buf[i].index), float(buf[i].snr_db), float(buf[i].peak))
+                for i in range(max(0, n_out))
+            ]
         if int(start_index) != self._in_next:
             self.reset(int(start_index))
         if x.size == 0:

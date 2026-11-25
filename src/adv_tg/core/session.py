@@ -83,7 +83,7 @@ from adv_tg.core.sample_stream import SamplesOverwritten, SampleStream
 from adv_tg.dsp.engine import sosfiltfilt
 from adv_tg.dsp.filters import butter_bandpass_sos, sosfilt_zi
 
-__all__ = ["MeasurementSession", "SessionConfig", "SessionSnapshot"]
+__all__ = ["MeasurementSession", "PyMeasurementSession", "SessionConfig", "SessionSnapshot"]
 
 #: Seconds between two fits of the live clock estimate (a fit is cheap but not free).
 DRIFT_REFIT_S = 1.0
@@ -209,9 +209,11 @@ class SessionSnapshot:
     normalized: bool = False
 
 
-class MeasurementSession:
+class PyMeasurementSession:
     """Detector + metrics + clock over one ``SampleStream`` (see module docstring).
 
+    The Python composition of the layers: reference of the native session
+    (``adv_tg.core.native_session``) and fallback without the native engine.
     Not thread-safe: call ``update`` from a single consumer thread.
     """
 
@@ -510,3 +512,20 @@ class MeasurementSession:
     @property
     def nominal_period_s(self) -> float:
         return beat_period_s(self.config.bph)
+
+
+class MeasurementSession:
+    """Live session: the native one (``NativeMeasurementSession``) when the engine exports it,
+    else ``PyMeasurementSession``. Both take a ``SessionConfig``, have the same API and give
+    bit-identical ``SessionSnapshot`` (tests/test_native_session.py).
+    """
+
+    def __new__(cls, config: SessionConfig) -> PyMeasurementSession:  # type: ignore[misc]
+        from adv_tg.core.native_session import (
+            NativeMeasurementSession,
+            native_session_available,
+        )
+
+        if native_session_available():
+            return NativeMeasurementSession(config)  # type: ignore[return-value]
+        return PyMeasurementSession(config)

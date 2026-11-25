@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
+from adv_tg import native_bridge as _nb
 from adv_tg.utils.audio_files import write_audio
 
 SECONDS_PER_DAY: float = 86400.0
@@ -99,6 +100,11 @@ def minmax_decimate(
     if n <= 2 * bins:
         return np.arange(n, dtype=np.float64) / fs * 1000.0, signal.astype(np.float64)
     size = n // bins
+    if _nb.have("advtg_minmax_decimate_f64") and signal.ndim == 1:
+        sc = _nb.f64(signal)
+        values = np.empty(2 * bins, dtype=np.float64)
+        _nb.lib().advtg_minmax_decimate_f64(_nb.ptr(sc), sc.size, bins, _nb.ptr(values))
+        return _decimate_time_axis(size * bins, float(fs), bins), values
     trimmed = signal[: size * bins].reshape(bins, size)
     values = np.empty(2 * bins, dtype=np.float64)
     values[0::2] = trimmed.min(axis=1)

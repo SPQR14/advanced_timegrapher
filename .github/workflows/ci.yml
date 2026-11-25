@@ -39,13 +39,30 @@ jobs:
         run: |
           sudo apt-get update
           # libportaudio2 y libasound2t64 (Ubuntu 24.04+) para audio; xvfb, xcb y gl/egl para PyQt6/PyOpenGL headless
-          sudo apt-get install -y libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libasound2t64 libegl1 libgl1
+          sudo apt-get install -y libportaudio2 xvfb libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libasound2t64 libegl1 libgl1 cmake ninja-build g++
 
-      - name: Install Python Dependencies (pure Python, no SciPy)
+      - name: Install Python Dependencies (no SciPy)
         run: |
           python -m pip install --upgrade pip
           pip install ruff
           pip install -e .[dev]
+
+      # Tuned for the runner CPU (x86_64 on Linux/Windows, NEON on Apple Silicon macOS); the
+      # suite then runs on the native engine, including the zero-tolerance parity tests
+      # against the Python reference (tests/test_native_*.py).
+      - name: Build Native C++20 Engine
+        shell: bash
+        run: |
+          python scripts/build_native.py --target native
+          PYTHONPATH=src python -c "from adv_tg import native_bridge as nb; from adv_tg.core.native_session import native_session_available as ok; assert nb.is_native_available() and ok(), 'native engine not loaded'; print(nb.native_arch_info())"
+
+      - name: Build mobile configuration on the host (static, no PortAudio, C99 example)
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S native -B build/mobile_host -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DADVTG_WITH_AUDIO_CAPTURE=OFF -DADVTG_STATIC=ON -DADVTG_BUILD_EXAMPLES=ON
+          cmake --build build/mobile_host
+          gcc -std=c99 -Wall -Wextra -pedantic -Werror -fsyntax-only -x c native/include/advtg.h
 
       - name: Lint and Format with Ruff
         run: |

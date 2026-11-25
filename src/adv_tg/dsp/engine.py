@@ -21,11 +21,13 @@ Divisions are noise gated: a slope or denominator below ``GATE`` (1e-12) counts 
 
 from __future__ import annotations
 
+import ctypes
 from functools import lru_cache
 
 import numpy as np
 from numpy.typing import NDArray
 
+from adv_tg import native_bridge as _nb
 from adv_tg.dsp.filters import sosfilt_zi, sosfiltfilt_padlen
 
 __all__ = [
@@ -158,6 +160,16 @@ def sosfilt(sos: NDArray, x: NDArray, zi: NDArray | None = None) -> NDArray[np.f
         zi = _f64(zi)
         if zi.shape != (sos.shape[0], 2):
             raise ValueError("zi debe tener forma (n_secciones, 2)")
+    if _nb.have("advtg_sosfilt"):
+        y = np.empty(x.size, dtype=np.float64)
+        zi_ptr = _nb.ptr(zi) if zi is not None else ctypes.c_void_p(0)
+        if (
+            _nb.lib().advtg_sosfilt(
+                _nb.ptr(sos), sos.shape[0], _nb.ptr(x), x.size, zi_ptr, _nb.ptr(y)
+            )
+            == 0
+        ):
+            return y
     return _sosfilt_core(sos, x, zi)
 
 
@@ -194,6 +206,15 @@ def sosfiltfilt(
     if x.size <= edge:
         raise ValueError("la señal debe ser más larga que padlen")
     zi = sosfilt_zi(sos) if zi is None else _f64(zi)
+    if _nb.have("advtg_sosfiltfilt"):
+        y = np.empty(x.size, dtype=np.float64)
+        if (
+            _nb.lib().advtg_sosfiltfilt(
+                _nb.ptr(sos), sos.shape[0], _nb.ptr(zi), edge, _nb.ptr(x), x.size, _nb.ptr(y)
+            )
+            == 0
+        ):
+            return y
     return np.array(_filtfilt(sos, x, zi, edge))
 
 
@@ -218,6 +239,11 @@ def _moving_average_same(x: NDArray[np.float64], m: int) -> NDArray[np.float64]:
     n = x.size
     if m <= 1:
         return x.copy()
+    if _nb.have("advtg_moving_average_same"):
+        xc = _f64(x)
+        out = np.empty(n, dtype=np.float64)
+        _nb.lib().advtg_moving_average_same(_nb.ptr(xc), n, int(m), _nb.ptr(out))
+        return out
     if n < m:
         return np.convolve(x, np.full(m, 1.0 / m), mode="full")[(m - 1) // 2 : (m - 1) // 2 + n]
     c = np.concatenate(([0.0], np.cumsum(x)))
@@ -249,6 +275,29 @@ def compute_cell_envelope(
         raise ValueError("smooth_len debe ser >= 1")
     if x.size <= padlen + 1:
         return np.zeros(crop_end - crop_start)
+    if _nb.have("advtg_compute_cell_envelope"):
+        sos_c = _check_sos(sos)
+        zi_c = _f64(zi)
+        hk_c = _f64(hk)
+        out = np.empty(crop_end - crop_start, dtype=np.float64)
+        if (
+            _nb.lib().advtg_compute_cell_envelope(
+                _nb.ptr(x),
+                x.size,
+                _nb.ptr(sos_c),
+                sos_c.shape[0],
+                _nb.ptr(zi_c),
+                _nb.ptr(hk_c),
+                hk_c.size,
+                int(smooth.size),
+                int(crop_start),
+                int(crop_end),
+                int(padlen),
+                _nb.ptr(out),
+            )
+            == 0
+        ):
+            return out
     y = _filtfilt(_check_sos(sos), x, _f64(zi), int(padlen))
     h = _convolve_same(y, _f64(hk))
     e = np.sqrt(y * y + h * h)
@@ -282,6 +331,13 @@ def find_local_maxima(x: NDArray[np.float64]) -> NDArray[np.intp]:
 
     A plateau touching either end of ``x`` is not a peak (as in SciPy).
     """
+    if _nb.have("advtg_find_local_maxima"):
+        xc = _f64(x)
+        if xc.size < 3:
+            return np.zeros(0, dtype=np.intp)
+        out = np.empty(xc.size // 2 + 1, dtype=np.int64)
+        k = int(_nb.lib().advtg_find_local_maxima(_nb.ptr(xc), xc.size, _nb.ptr(out)))
+        return out[:k].astype(np.intp, copy=False)
     return _find_local_maxima_runs(x)[0]
 
 
@@ -307,6 +363,74 @@ def detect_cell_candidates(
     n = env.size
     if n < 3:
         return [], [], [], []
+    if _nb.have("advtg_detect_cell_candidates"):
+        ec = _f64(env)
+        fc = _f64(f)
+        dc = _f64(d)
+        cap = max(64, min(n, n // 4 + 16))
+        on_a = np.empty(cap, dtype=np.float64)
+        pk_a = np.empty(cap, dtype=np.float64)
+        fl_a = np.empty(cap, dtype=np.float64)
+        sp_a = np.empty(cap, dtype=np.float64)
+        k = int(
+            _nb.lib().advtg_detect_cell_candidates(
+                _nb.ptr(ec),
+                _nb.ptr(fc),
+                _nb.ptr(dc),
+                n,
+                float(threshold_hi),
+                float(threshold_lo),
+                int(merge_samples),
+                float(split_ratio),
+                float(min_spacing_samples),
+                float(onset_fraction),
+                int(cell_start_abs),
+                int(cell_end_abs),
+                int(lo_abs),
+                int(run_start_abs),
+                _nb.ptr(on_a),
+                _nb.ptr(pk_a),
+                _nb.ptr(fl_a),
+                _nb.ptr(sp_a),
+                cap,
+            )
+        )
+        if k < -1:
+            cap = -k
+            on_a = np.empty(cap, dtype=np.float64)
+            pk_a = np.empty(cap, dtype=np.float64)
+            fl_a = np.empty(cap, dtype=np.float64)
+            sp_a = np.empty(cap, dtype=np.float64)
+            k = int(
+                _nb.lib().advtg_detect_cell_candidates(
+                    _nb.ptr(ec),
+                    _nb.ptr(fc),
+                    _nb.ptr(dc),
+                    n,
+                    float(threshold_hi),
+                    float(threshold_lo),
+                    int(merge_samples),
+                    float(split_ratio),
+                    float(min_spacing_samples),
+                    float(onset_fraction),
+                    int(cell_start_abs),
+                    int(cell_end_abs),
+                    int(lo_abs),
+                    int(run_start_abs),
+                    _nb.ptr(on_a),
+                    _nb.ptr(pk_a),
+                    _nb.ptr(fl_a),
+                    _nb.ptr(sp_a),
+                    cap,
+                )
+            )
+        if k >= 0:
+            return (
+                on_a[:k].tolist(),
+                pk_a[:k].tolist(),
+                fl_a[:k].tolist(),
+                sp_a[:k].tolist(),
+            )
     thr_hi = f + threshold_hi * d
     thr_lo = f + threshold_lo * d
     mask = env > thr_lo

@@ -9,8 +9,13 @@ linear sub-sample interpolation; ``lowpass_fir`` removes the noise above the sou
 
 from __future__ import annotations
 
+import ctypes
+import math
+
 import numpy as np
 from numpy.typing import NDArray
+
+from adv_tg import native_bridge as _nb
 
 __all__ = ["MAD_TO_SIGMA", "lowpass_fir", "onset_after_quiet", "robust_level"]
 
@@ -34,6 +39,12 @@ def lowpass_fir(fs: float, fc: float, periods: float = 4.0) -> NDArray[np.float6
 
 def robust_level(x: NDArray[np.float64]) -> tuple[float, float]:
     """``(median, sigma)`` of ``x``, sigma from the MAD (never below a tiny floor)."""
+    if _nb.have("advtg_robust_level"):
+        xc = _nb.f64(x)
+        mu = ctypes.c_double()
+        sigma = ctypes.c_double()
+        _nb.lib().advtg_robust_level(_nb.ptr(xc), xc.size, ctypes.byref(mu), ctypes.byref(sigma))
+        return float(mu.value), float(sigma.value)
     mu = float(np.median(x))
     return mu, max(MAD_TO_SIGMA * float(np.median(np.abs(x - mu))), _TINY)
 
@@ -45,6 +56,12 @@ def onset_after_quiet(r: NDArray[np.float64], threshold: float, quiet: int) -> f
     ``threshold``; the onset is the first crossing after it, linearly interpolated (index into
     ``r``). None when nothing crosses or when ``r`` is not quiet before the crossing.
     """
+    if _nb.have("advtg_onset_after_quiet"):
+        rc = _nb.f64(r)
+        v = float(
+            _nb.lib().advtg_onset_after_quiet(_nb.ptr(rc), rc.size, float(threshold), int(quiet))
+        )
+        return None if math.isnan(v) else v
     act = np.flatnonzero(r >= threshold)
     if act.size == 0:
         return None

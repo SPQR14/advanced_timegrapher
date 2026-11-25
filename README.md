@@ -106,8 +106,10 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 .venv\Scripts\adv-tg.exe
 ```
-No compiler is needed: the whole analysis (filters, envelope, beat detection) is pure Python
-on top of numpy; SciPy is not used.
+No compiler is needed to run from source: without the native engine the whole analysis runs
+on its numpy implementation (SciPy is not used). For the C++20 engine that the released
+binaries ship (2-3x faster, same figures), run `python scripts/build_native.py` (CMake
+and a C++20 compiler); see `docs/COMPILACION_Y_EMPAQUETADO_V2.md`.
 
 On Linux you may also need `sudo apt install libportaudio2`. On macOS, the first time, the
 Terminal app (or your IDE) will ask for microphone access.
@@ -484,8 +486,11 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 .venv\Scripts\adv-tg.exe
 ```
-No hace falta compilador: todo el análisis (filtros, envolvente, detección de batimientos) es
-Python puro sobre numpy; no se usa SciPy.
+No hace falta compilador para ejecutar desde el código: sin el motor nativo todo el análisis
+corre en su implementación numpy (no se usa SciPy). Para el motor C++20 que llevan los
+binarios publicados (2-3× más rápido, mismas cifras), ejecuta
+`python scripts/build_native.py` (CMake y un compilador C++20); ver
+`docs/COMPILACION_Y_EMPAQUETADO_V2.md`.
 
 En Linux puede hacer falta `sudo apt install libportaudio2`. En macOS, la primera vez, la
 aplicación Terminal (o tu editor) pedirá acceso al micrófono.

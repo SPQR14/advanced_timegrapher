@@ -31,6 +31,8 @@ from typing import Any
 
 import numpy as np
 
+from adv_tg import native_bridge as _nb
+
 __all__ = ["MAX_CHANNELS", "ChannelSelector", "channels_to_open"]
 
 #: Devices with more inputs than this are virtual mixers (PipeWire/JACK report 32 or 64).
@@ -96,8 +98,26 @@ class ChannelSelector:
         """
         if self.channels == 1:
             return 0
-        d = block[2:] - 2.0 * block[1:-1] + block[:-2]
-        self._energy += np.einsum("ij,ij->j", d, d)
+        frames = block.shape[0]
+        if (
+            frames >= 3
+            and block.ndim == 2
+            and block.shape[1] == self.channels
+            and _nb.have("advtg_channel_diff2_energy_f32", "advtg_channel_diff2_energy_f64")
+        ):
+            arr = np.ascontiguousarray(block)
+            if arr.dtype == np.float32:
+                _nb.lib().advtg_channel_diff2_energy_f32(
+                    _nb.ptr(arr), frames, self.channels, _nb.ptr(self._energy)
+                )
+            else:
+                arr64 = _nb.f64(arr)
+                _nb.lib().advtg_channel_diff2_energy_f64(
+                    _nb.ptr(arr64), frames, self.channels, _nb.ptr(self._energy)
+                )
+        else:
+            d = block[2:] - 2.0 * block[1:-1] + block[:-2]
+            self._energy += np.einsum("ij,ij->j", d, d)
         self._count += block.shape[0]
         if self._count >= self._window:
             self._decide()

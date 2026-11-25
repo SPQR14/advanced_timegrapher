@@ -115,6 +115,7 @@ hysteresis of the timing point between consecutive results).
 
 from __future__ import annotations
 
+import ctypes
 import math
 import threading
 from collections import deque
@@ -124,6 +125,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 from numpy.typing import NDArray
 
+from adv_tg import native_bridge as _nb
 from adv_tg.core.beat_types import (
     Beat,
     BeatFlags,
@@ -697,6 +699,41 @@ def _fit_parity_weighted(
 ) -> ParityFit | None:
     if k.size == 0:
         return None
+    if _nb.have("advtg_fit_parity_weighted") and k.ndim == 1 and k.shape == t.shape:
+        kc = _nb.f64(k)
+        tc = _nb.f64(t)
+        out = _nb.NativeParityFitStruct()
+        rc = int(
+            _nb.lib().advtg_fit_parity_weighted(
+                _nb.ptr(kc),
+                _nb.ptr(tc),
+                kc.size,
+                float(outlier_sigma),
+                int(max_iterations),
+                int(min_per_parity),
+                1 if weighted else 0,
+                1 if quadratic else 0,
+                ctypes.byref(out),
+            )
+        )
+        if rc == 1:
+            return None
+        if rc == 0:
+            return ParityFit(
+                a=float(out.a),
+                period=float(out.period),
+                c=float(out.c),
+                period_sigma=float(out.period_sigma),
+                c_sigma=float(out.c_sigma),
+                k_ref=float(out.k_ref),
+                sigma_even=float(out.sigma_even),
+                sigma_odd=float(out.sigma_odd),
+                n_even=int(out.n_even),
+                n_odd=int(out.n_odd),
+                n_trimmed=int(out.n_trimmed),
+                q=float(out.q),
+                q_sigma=float(out.q_sigma),
+            )
     even = (k.astype(np.int64) & 1) == 0
     odd = ~even
     if min(np.count_nonzero(even), np.count_nonzero(odd)) < min_per_parity:
@@ -1053,6 +1090,200 @@ def _confidence(m: Metrics, config: MetricsConfig) -> float:
     return float(min(1.0, max(0.0, q_time * q_amp)))
 
 
+_NATIVE_BEAT_DTYPE = np.dtype(
+    [
+        ("k", np.int64),
+        ("p1", np.float64),
+        ("p2", np.float64),
+        ("p3", np.float64),
+        ("peak_dbfs", np.float64),
+        ("snr_db", np.float64),
+        ("residual_samples", np.float64),
+        ("confidence", np.float64),
+        ("t_fine", np.float64),
+        ("t_p1", np.float64),
+        ("t_p1_tpl", np.float64),
+        ("n_subevents", np.int32),
+        ("flags", np.uint32),
+    ],
+    align=False,
+)
+_BE_POINTS = ("—", "p1", "p1_beat", "p1_fine", "t_fine")
+_AMP_PARITIES = ("both", "tic", "tac")
+
+
+def _pack_template(
+    tpl: ParityTemplate | None,
+) -> tuple[_nb.NativeTemplateInputStruct, NDArray[np.float64] | None]:
+    if tpl is None:
+        return _nb.NativeTemplateInputStruct(valid=0), None
+    env = _nb.f64(tpl.envelope)
+    return (
+        _nb.NativeTemplateInputStruct(
+            valid=1,
+            onset_p1=float(tpl.onset_p1),
+            onset_p3=float(tpl.onset_p3),
+            onset_ref=float(tpl.onset_ref),
+            env=_nb.ptr(env) if env.size else 0,
+            env_len=int(env.size),
+        ),
+        env,
+    )
+
+
+def metrics_from_native(
+    out: _nb.NativeMetricsResultStruct,
+    windows_raw: Sequence[_nb.NativeWindowRateStruct],
+    warnings_raw: bytes,
+) -> Metrics:
+    """``Metrics`` from the native result struct, its windows and its '\\n'-joined warnings."""
+    windows = [
+        WindowRate(
+            start_s=float(w.start_s),
+            end_s=float(w.end_s),
+            center_s=float(w.center_s),
+            rate_s_per_day=float(w.rate_s_per_day),
+            rate_sigma_s_per_day=float(w.rate_sigma_s_per_day),
+            n_beats=int(w.n_beats),
+            rate_uncertainty_s_per_day=float(w.rate_uncertainty_s_per_day),
+        )
+        for w in windows_raw
+    ]
+    warn_raw = warnings_raw.decode("utf-8", errors="replace")
+    warnings = warn_raw.split("\n") if warn_raw else []
+    be_idx = int(out.beat_error_point)
+    ap_idx = int(out.amplitude_parity)
+    return Metrics(
+        n_beats=int(out.n_beats),
+        n_used_even=int(out.n_used_even),
+        n_used_odd=int(out.n_used_odd),
+        n_excluded=int(out.n_excluded),
+        excluded_fraction=float(out.excluded_fraction),
+        rate_s_per_day=float(out.rate_s_per_day),
+        rate_sigma_s_per_day=float(out.rate_sigma_s_per_day),
+        rate_sigma_block_s_per_day=float(out.rate_sigma_block_s_per_day),
+        rate_uncertainty_s_per_day=float(out.rate_uncertainty_s_per_day),
+        rate_clock_sigma_s_per_day=float(out.rate_clock_sigma_s_per_day),
+        rate_calibrated=bool(out.rate_calibrated),
+        beat_error_ms=float(out.beat_error_ms),
+        beat_error_sigma_ms=float(out.beat_error_sigma_ms),
+        beat_error_sigma_block_ms=float(out.beat_error_sigma_block_ms),
+        beat_error_uncertainty_ms=float(out.beat_error_uncertainty_ms),
+        beat_error_point=_BE_POINTS[be_idx] if 0 <= be_idx < len(_BE_POINTS) else "—",
+        beat_error_p3_ms=float(out.beat_error_p3_ms),
+        amplitude_deg=float(out.amplitude_deg),
+        amplitude_tic_deg=float(out.amplitude_tic_deg),
+        amplitude_tac_deg=float(out.amplitude_tac_deg),
+        amplitude_parity=_AMP_PARITIES[ap_idx] if 0 <= ap_idx < len(_AMP_PARITIES) else "both",
+        amplitude_la_uncertainty_deg=float(out.amplitude_la_uncertainty_deg),
+        amplitude_indicative=bool(out.amplitude_indicative),
+        lift_angle_deg=float(out.lift_angle_deg),
+        sigma_even_us=float(out.sigma_even_us),
+        sigma_odd_us=float(out.sigma_odd_us),
+        pair_sigma_even_us=float(out.pair_sigma_even_us),
+        pair_sigma_odd_us=float(out.pair_sigma_odd_us),
+        rate_point=(
+            "p1" if out.rate_point_0_p1 else "t_fine",
+            "p1" if out.rate_point_1_p1 else "t_fine",
+        ),
+        windows=windows,
+        rate_trend_s_per_day_per_min=float(out.rate_trend_s_per_day_per_min),
+        rate_trend_sigma_s_per_day_per_min=float(out.rate_trend_sigma_s_per_day_per_min),
+        rate_trend_flag=bool(out.rate_trend_flag),
+        window_sigma_factor=float(out.window_sigma_factor),
+        span_s=float(out.span_s),
+        confidence=float(out.confidence),
+        warnings=warnings,
+    )
+
+
+def _compute_metrics_native(
+    beats: Sequence[Beat],
+    templates: tuple[ParityTemplate | None, ParityTemplate | None],
+    config: MetricsConfig,
+    previous_points: tuple[str, str] | None,
+    compute_windows: bool,
+) -> Metrics | None:
+    bl = list(beats)
+    n = len(bl)
+    arr = np.fromiter(
+        (
+            (
+                b.k,
+                b.p1,
+                b.p2,
+                b.p3,
+                b.peak_dbfs,
+                b.snr_db,
+                b.residual_samples,
+                b.confidence,
+                b.t_fine,
+                b.t_p1,
+                b.t_p1_tpl,
+                b.n_subevents,
+                int(b.flags),
+            )
+            for b in bl
+        ),
+        dtype=_NATIVE_BEAT_DTYPE,
+        count=n,
+    )
+    tpl0, _env0 = _pack_template(templates[0])
+    tpl1, _env1 = _pack_template(templates[1])
+    cfg = _nb.NativeMetricsConfigStruct(
+        sample_rate=float(config.sample_rate),
+        bph=float(config.bph),
+        lift_angle_deg=float(config.effective_lift_angle_deg),
+        outlier_sigma=float(config.outlier_sigma),
+        window_s=float(config.window_s),
+        window_step_s=0.0 if config.window_step_s is None else float(config.window_step_s),
+        trend_sigma=float(config.trend_sigma),
+        trend_min_s_per_day_per_min=float(config.trend_min_s_per_day_per_min),
+        trend_min_change_s_per_day=float(config.trend_min_change_s_per_day),
+        amp_lo_deg=float(config.amplitude_range_deg[0]),
+        amp_hi_deg=float(config.amplitude_range_deg[1]),
+        amplitude_mismatch_deg=float(config.amplitude_mismatch_deg),
+        drop_sharpness_ratio=float(config.drop_sharpness_ratio),
+        adc_drift_ppm=float(config.adc_drift_ppm),
+        adc_drift_sigma_ppm=float(config.adc_drift_sigma_ppm),
+        be_switch_ratio=float(_BE_SWITCH_RATIO),
+        p1_keep_ratio=float(_P1_KEEP_RATIO),
+        p1_min_share=float(_P1_MIN_SHARE),
+        has_lift_angle=1 if config.lift_angle_deg is not None else 0,
+        quartz=1 if config.quartz else 0,
+        min_beats_per_parity=int(config.min_beats_per_parity),
+        max_iterations=int(config.max_iterations),
+        trend_blocks=int(config.trend_blocks),
+        p1_timing=1 if config.p1_timing else 0,
+        prev_p0_p1=1 if (previous_points is not None and previous_points[0] == "p1") else 0,
+        prev_p1_p1=1 if (previous_points is not None and previous_points[1] == "p1") else 0,
+        compute_windows=1 if compute_windows else 0,
+    )
+    out = _nb.NativeMetricsResultStruct()
+    nwins = ctypes.c_int64(0)
+    warn_bytes = ctypes.c_int32(0)
+    rc = int(
+        _nb.lib().advtg_compute_metrics(
+            _nb.ptr(arr) if n else 0,
+            n,
+            ctypes.byref(tpl0),
+            ctypes.byref(tpl1),
+            ctypes.byref(cfg),
+            ctypes.byref(out),
+            ctypes.byref(nwins),
+            ctypes.byref(warn_bytes),
+        )
+    )
+    if rc != 0:
+        return None
+    n_w_req = max(0, int(nwins.value))
+    wins_buf = (_nb.NativeWindowRateStruct * max(1, n_w_req))()
+    cap_warn = max(1, int(warn_bytes.value) + 1)
+    warn_buf = ctypes.create_string_buffer(cap_warn)
+    nw = int(_nb.lib().advtg_take_metrics_extra(wins_buf, n_w_req, warn_buf, cap_warn))
+    return metrics_from_native(out, [wins_buf[i] for i in range(nw)], warn_buf.value)
+
+
 # ====================================================================== batch
 def compute_metrics(
     beats: Sequence[Beat],
@@ -1068,6 +1299,10 @@ def compute_metrics(
     ``select_timing``); None in batch mode. ``compute_windows=False`` skips per-window rates
     when the caller does not display them and the span holds fewer than 6 windows.
     """
+    if _nb.have("advtg_compute_metrics", "advtg_take_metrics_extra"):
+        res = _compute_metrics_native(beats, templates, config, previous_points, compute_windows)
+        if res is not None:
+            return res
     if _memo.fits is not None:  # nested call: the outer one owns the memo
         return _compute_metrics(beats, templates, config, previous_points, compute_windows)
     _memo.fits = {}

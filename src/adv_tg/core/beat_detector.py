@@ -138,6 +138,7 @@ It is a heuristic ranking, not a calibrated probability.
 
 from __future__ import annotations
 
+import ctypes
 import math
 from collections import deque
 from dataclasses import dataclass, field
@@ -145,6 +146,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from adv_tg import native_bridge as _nb
 from adv_tg.core.beat_types import (
     Beat,
     BeatFlags,
@@ -595,6 +597,31 @@ class DetectorStats:
         return self.period_samples / self.nominal_period_samples - 1.0
 
 
+def detector_stats_from_native(
+    st: _nb.NativeDetectorStatsStruct, warnings: tuple[str, ...]
+) -> DetectorStats:
+    """``DetectorStats`` from the native counters struct (detector or session)."""
+    return DetectorStats(
+        samples_processed=int(st.samples_processed),
+        beats_emitted=int(st.beats_emitted),
+        missed_beats=int(st.missed_beats),
+        gap_beats=int(st.gap_beats),
+        gaps=int(st.gaps),
+        rejected_events=int(st.rejected_events),
+        relocks=int(st.relocks),
+        lock_sample=(float(st.lock_sample) if st.has_lock_sample else None),
+        lock_time_s=(float(st.lock_time_s) if st.has_lock_sample else None),
+        p1_fraction=float(st.p1_fraction),
+        p2_fraction=float(st.p2_fraction),
+        p3_fraction=float(st.p3_fraction),
+        period_samples=float(st.period_samples),
+        nominal_period_samples=float(st.nominal_period_samples),
+        warnings=warnings,
+        interference_db=float(st.interference_db),
+        interference_hz=float(st.interference_hz),
+    )
+
+
 # ====================================================================== internals
 class _Buf:
     """Growable float64 buffer addressed by absolute index (amortised append/trim)."""
@@ -859,11 +886,170 @@ class BeatDetector:
             if c.normalize
             else None
         )
+        self._handle: int | None = None
+        self._native_finished = False
+        self._tpl_len = int(self.tpl_pre + self.tpl_post)
+        if _nb.have(
+            "advtg_bd_create",
+            "advtg_bd_destroy",
+            "advtg_bd_reset",
+            "advtg_bd_process_buffered",
+            "advtg_bd_flush_buffered",
+            "advtg_bd_take_overflow",
+            "advtg_bd_stats",
+            "advtg_bd_warnings",
+            "advtg_bd_templates",
+            "advtg_bd_quartz_timing",
+            "advtg_bd_stream_start_hint",
+        ):
+            sos_c = _nb.f64(self.sos)
+            zi_c = _nb.f64(self._zi)
+            band_lo, band_hi = c.band_hz  # resolved in BeatDetectorConfig.__post_init__
+            ncfg = _nb.NativeDetectorConfigStruct(
+                sos=_nb.ptr(sos_c).value,
+                zi=_nb.ptr(zi_c).value,
+                padlen=int(self._padlen),
+                sample_rate=float(fs),
+                bph=float(c.bph),
+                lift_angle_deg=float(c.lift_angle_deg),
+                amp_lo_deg=float(c.amplitude_range_deg[0]),
+                amp_hi_deg=float(c.amplitude_range_deg[1]),
+                band_lo_hz=float(band_lo),
+                band_hi_hz=float(band_hi),
+                envelope_smooth_ms=float(c.envelope_smooth_ms),
+                grid_step_s=float(c.grid_step_s),
+                noise_window_s=float(c.noise_window_s),
+                threshold_hi=float(c.threshold_hi),
+                threshold_lo=float(c.threshold_lo),
+                ripple_merge_ms=float(c.ripple_merge_ms),
+                min_subevent_spacing_ms=float(c.min_subevent_spacing_ms),
+                split_ratio=float(c.split_ratio),
+                onset_fraction=float(c.onset_fraction),
+                subevent_rel_threshold=float(c.subevent_rel_threshold),
+                min_anchor_snr_db=float(c.min_anchor_snr_db),
+                min_subevent_snr_db=float(c.min_subevent_snr_db),
+                weak_snr_db=float(c.weak_snr_db),
+                phase_tolerance=float(c.phase_tolerance),
+                period_search=float(c.period_search),
+                acquisition_s=float(c.acquisition_s),
+                acquisition_min_fraction=float(c.acquisition_min_fraction),
+                outlier_sigma=float(c.outlier_sigma),
+                outlier_min_ms=float(c.outlier_min_ms),
+                lift_margin=float(c.lift_margin),
+                lift_track_tolerance=float(c.lift_track_tolerance),
+                typical_amp_lo_deg=float(c.typical_amplitude_deg[0]),
+                typical_amp_hi_deg=float(c.typical_amplitude_deg[1]),
+                saturation_level=float(c.saturation_level),
+                dropout_min_ms=float(c.dropout_min_ms),
+                period_warn=float(c.period_warn),
+                post_group_ms=float(c.post_group_ms),
+                template_search_ms=float(c.template_search_ms),
+                template_post_ms=float(c.template_post_ms),
+                template_p3_fraction=float(c.template_p3_fraction),
+                template_lobe_fraction=float(c.template_lobe_fraction),
+                template_burst_ms=float(c.template_burst_ms),
+                template_p1_fraction=float(c.template_p1_fraction),
+                template_p1_min_ms=float(c.template_p1_min_ms),
+                template_min_corr=float(c.template_min_corr),
+                template_align_smooth_ms=float(c.template_align_smooth_ms),
+                template_front_fraction=float(c.template_front_fraction),
+                template_front_lift_fraction=float(c.template_front_lift_fraction),
+                template_amp_mismatch_deg=float(c.template_amp_mismatch_deg),
+                template_refresh_min_s=float(c.template_refresh_min_s),
+                template_reanchor_corr=float(c.template_reanchor_corr),
+                quartz_template_ms=float(c.quartz_template_ms),
+                quartz_outlier_min_ms=float(c.quartz_outlier_min_ms),
+                quartz_onset_snr_db=float(c.quartz_onset_snr_db),
+                quartz_onset_beat_snr_db=float(c.quartz_onset_beat_snr_db),
+                quartz_onset_sigma=float(c.quartz_onset_sigma),
+                quartz_onset_lowpass_hz=float(c.quartz_onset_lowpass_hz),
+                interference_ms=float(c.interference_ms),
+                interference_excess_db=float(c.interference_excess_db),
+                interference_max_db=float(c.interference_max_db),
+                interference_history_s=float(c.interference_history_s),
+                interference_percentile=float(c.interference_percentile),
+                p1_onset_sigma=float(c.p1_onset_sigma),
+                p1_onset_fraction=float(c.p1_onset_fraction),
+                p1_onset_back_ms=float(c.p1_onset_back_ms),
+                p1_onset_fwd_ms=float(c.p1_onset_fwd_ms),
+                p1_onset_base_ms=float(c.p1_onset_base_ms),
+                p1_onset_min_ms=float(c.p1_onset_min_ms),
+                p1_onset_peak_ms=float(c.p1_onset_peak_ms),
+                n_sec=int(sos_c.shape[0]),
+                filter_order=int(c.filter_order),
+                model_beats=int(c.model_beats),
+                max_missed=int(c.max_missed),
+                template_beats=int(c.template_beats),
+                template_min_beats=int(c.template_min_beats),
+                template_refresh_beats=int(c.template_refresh_beats),
+                template_anchor_mode=(
+                    -1 if c.template_anchor is None else int(bool(c.template_anchor))
+                ),
+                quartz=int(bool(c.quartz)),
+                quartz_reseed_beats=int(c.quartz_reseed_beats),
+                quartz_onset=int(bool(c.quartz_onset)),
+                interference_filter=int(bool(c.interference_filter)),
+                p1_onset=int(bool(c.p1_onset)),
+                normalize=int(bool(c.normalize)),
+            )
+            h = _nb.lib().advtg_bd_create(ctypes.byref(ncfg))
+            if h:
+                self._handle = int(h)
         self.reset()
+
+    def __del__(self) -> None:
+        h = getattr(self, "_handle", None)
+        if h and _nb is not None:
+            cdll = _nb.lib()
+            if cdll is not None and hasattr(cdll, "advtg_bd_destroy"):
+                cdll.advtg_bd_destroy(ctypes.c_void_p(h))
+            self._handle = None
+
+    def _native_stats_raw(self) -> _nb.NativeDetectorStatsStruct:
+        st = _nb.NativeDetectorStatsStruct()
+        _nb.lib().advtg_bd_stats(ctypes.c_void_p(self._handle), ctypes.byref(st))
+        return st
+
+    def _native_sync_tpl_anchors(self) -> None:
+        h0 = _nb.NativeTemplateHeaderStruct()
+        h1 = _nb.NativeTemplateHeaderStruct()
+        _nb.lib().advtg_bd_templates(
+            ctypes.c_void_p(self._handle), ctypes.byref(h0), None, 0, ctypes.byref(h1), None, 0
+        )
+        self._tpl[0].anchor = True if h0.has_anchor else None
+        self._tpl[1].anchor = True if h1.has_anchor else None
+
+    @staticmethod
+    def _native_unpack_beats(buf: ctypes.Array, count: int) -> list[Beat]:
+        bf = BeatFlags
+        return [
+            Beat(
+                k=int(buf[i].k),
+                p1=float(buf[i].p1),
+                p2=float(buf[i].p2),
+                p3=float(buf[i].p3),
+                n_subevents=int(buf[i].n_subevents),
+                peak_dbfs=float(buf[i].peak_dbfs),
+                snr_db=float(buf[i].snr_db),
+                residual_samples=float(buf[i].residual_samples),
+                confidence=float(buf[i].confidence),
+                flags=bf(int(buf[i].flags)),
+                t_fine=float(buf[i].t_fine),
+                t_p1=float(buf[i].t_p1),
+                t_p1_tpl=float(buf[i].t_p1_tpl),
+            )
+            for i in range(count)
+        ]
 
     # ------------------------------------------------------------------ public API
     def reset(self) -> None:
         """Forget everything (audio, lock, counters)."""
+        if self._handle:
+            _nb.lib().advtg_bd_reset(ctypes.c_void_p(self._handle))
+            self._native_finished = False
+            tpl_len = self._tpl_len
+            self._tpl = [_Tpl(0, tpl_len), _Tpl(0, tpl_len)]
+            return
         if self._normalizer is not None:
             self._normalizer.reset()
         self._started = False
@@ -914,6 +1100,37 @@ class BeatDetector:
             ValueError: If the chunk is not 1-D or overlaps samples already processed.
             RuntimeError: If called after ``flush()`` without ``reset()``.
         """
+        if self._handle:
+            if self._native_finished:
+                raise RuntimeError(
+                    "el detector ya terminó (flush); llama a reset() para reutilizarlo"
+                )
+            x = np.asarray(chunk, dtype=np.float64)
+            if x.ndim != 1:
+                raise ValueError(f"se esperaba audio mono 1-D, forma recibida {x.shape}")
+            xc = _nb.f64(x)
+            cap = max(64, int(xc.size / max(1.0, self.period_nom) * 1.2) + 16)
+            buf = (_nb.NativeBeatStruct * cap)()
+            n_out = int(
+                _nb.lib().advtg_bd_process_buffered(
+                    ctypes.c_void_p(self._handle),
+                    _nb.ptr(xc),
+                    xc.size,
+                    int(start_index),
+                    ctypes.byref(buf),
+                    cap,
+                )
+            )
+            if n_out < -1:
+                need = -n_out - 2
+                buf = (_nb.NativeBeatStruct * need)()
+                n_out = int(_nb.lib().advtg_bd_take_overflow(ctypes.byref(buf), need))
+            elif n_out == -1:
+                raise ValueError(
+                    f"el bloque empieza en {start_index} y se solapa con lo ya procesado"
+                )
+            self._native_sync_tpl_anchors()
+            return self._native_unpack_beats(buf, n_out)
         if self._finished:
             raise RuntimeError("el detector ya terminó (flush); llama a reset() para reutilizarlo")
         if self._normalizer is None:
@@ -957,9 +1174,17 @@ class BeatDetector:
         it is recorded, the next beat gets ``AFTER_GAP`` and ``k`` keeps counting.
         """
         total = stream.total_samples
-        start = self._expected if self._started else stream.oldest_available
-        if self._normalizer is not None and self._normalizer.next_index is not None:
-            start = self._normalizer.next_index  # samples held by the normalizer are taken
+        if self._handle:
+            st = self._native_stats_raw()
+            start = (
+                st.norm_next_index
+                if st.has_norm_next
+                else (st.expected_index if st.started else stream.oldest_available)
+            )
+        else:
+            start = self._expected if self._started else stream.oldest_available
+            if self._normalizer is not None and self._normalizer.next_index is not None:
+                start = self._normalizer.next_index  # samples held by the normalizer are taken
         if total <= start:
             return []
         for _ in range(8):
@@ -978,6 +1203,36 @@ class BeatDetector:
 
         After ``flush()`` the detector must be ``reset()`` before reuse.
         """
+        if self._handle:
+            if self._native_finished:
+                return []
+            cap = 128
+            buf = (_nb.NativeBeatStruct * cap)()
+            n_out = int(
+                _nb.lib().advtg_bd_flush_buffered(
+                    ctypes.c_void_p(self._handle), ctypes.byref(buf), cap
+                )
+            )
+            if n_out < -1:
+                need = -n_out - 2
+                buf = (_nb.NativeBeatStruct * need)()
+                n_out = int(_nb.lib().advtg_bd_take_overflow(ctypes.byref(buf), need))
+            self._native_finished = True
+            self._native_sync_tpl_anchors()
+            out = self._native_unpack_beats(buf, max(0, n_out))
+            st = self._native_stats_raw()
+            _dbg.process_end(
+                "BeatDetector",
+                samples=int(st.samples_processed),
+                beats=int(st.beats_emitted),
+                missed=int(st.missed_beats),
+                gaps=int(st.gaps),
+                rejected=int(st.rejected_events),
+                normalizer_clipped_samples=(
+                    int(st.normalizer_clipped_samples) if st.has_normalizer else None
+                ),
+            )
+            return out
         if self._finished:
             return []
         out: list[Beat] = []
@@ -1001,21 +1256,39 @@ class BeatDetector:
     @property
     def normalizer_clipped_samples(self) -> int | None:
         """Input samples at full scale seen by the normalizer (None when it is off)."""
+        if self._handle:
+            st = self._native_stats_raw()
+            return int(st.normalizer_clipped_samples) if st.has_normalizer else None
         return None if self._normalizer is None else self._normalizer.clipped_samples
 
     @property
     def normalizer_gain_db(self) -> float | None:
         """Current normalizer gain in dB (None when it is off)."""
+        if self._handle:
+            st = self._native_stats_raw()
+            return float(st.normalizer_gain_db) if st.has_normalizer else None
         return None if self._normalizer is None else self._normalizer.gain_db
 
     @property
     def locked(self) -> bool:
         """True while the phase model is locked (beats are being tracked)."""
+        if self._handle:
+            return bool(self._native_stats_raw().locked)
         return self._locked
 
     @property
     def stats(self) -> DetectorStats:
         """Counters snapshot (see ``DetectorStats``)."""
+        if self._handle:
+            st = self._native_stats_raw()
+            need = int(_nb.lib().advtg_bd_warnings(ctypes.c_void_p(self._handle), None, 0))
+            if need > 0:
+                wbuf = ctypes.create_string_buffer(need + 1)
+                _nb.lib().advtg_bd_warnings(ctypes.c_void_p(self._handle), wbuf, need + 1)
+                warn_tuple = tuple(wbuf.value.decode("utf-8").split("\n"))
+            else:
+                warn_tuple = ()
+            return detector_stats_from_native(st, warn_tuple)
         n = max(1, self._emitted)
         lock_t = None
         if self._lock_sample is not None:
@@ -1049,6 +1322,38 @@ class BeatDetector:
         amplitudes agree best (ties prefer the level onset). ``onset_ref`` is the point
         ``t_fine`` marks: the level onset of the current template.
         """
+        if self._handle:
+            tpl_len = max(1, self._tpl_len)
+            h0 = _nb.NativeTemplateHeaderStruct()
+            h1 = _nb.NativeTemplateHeaderStruct()
+            e0 = np.empty(tpl_len, dtype=np.float64)
+            e1 = np.empty(tpl_len, dtype=np.float64)
+            _nb.lib().advtg_bd_templates(
+                ctypes.c_void_p(self._handle),
+                ctypes.byref(h0),
+                _nb.ptr(e0),
+                tpl_len,
+                ctypes.byref(h1),
+                _nb.ptr(e1),
+                tpl_len,
+            )
+            out: list[ParityTemplate | None] = []
+            for h, ev in ((h0, e0), (h1, e1)):
+                if not h.valid:
+                    out.append(None)
+                else:
+                    out.append(
+                        ParityTemplate(
+                            parity=int(h.parity),
+                            n_beats=int(h.n_beats),
+                            envelope=ev[: int(h.length)].copy(),
+                            onset_p1=float(h.onset_p1),
+                            onset_p3=float(h.onset_p3),
+                            onset_ref=float(h.onset_ref),
+                            p3_method=("frente" if h.p3_is_frente else "nivel"),
+                        )
+                    )
+            return out[0], out[1]
         methods = self._p3_methods()
         out: list[ParityTemplate | None] = []
         for parity, t in enumerate(self._tpl):
@@ -1995,6 +2300,14 @@ class BeatDetector:
     def quartz_timing(self) -> tuple[str, str]:
         """Timing point of each parity in quartz mode: "onset", "template" or "—" (not
         decided yet, or not quartz)."""
+        if self._handle:
+            q0 = ctypes.c_int32()
+            q1 = ctypes.c_int32()
+            _nb.lib().advtg_bd_quartz_timing(
+                ctypes.c_void_p(self._handle), ctypes.byref(q0), ctypes.byref(q1)
+            )
+            names = {-2: "—", 0: "template", 1: "onset"}
+            return names[int(q0.value)], names[int(q1.value)]
         if not self._q_on:
             return ("template", "template") if self.config.quartz else ("—", "—")
         names = {None: "—", True: "onset", False: "template"}
