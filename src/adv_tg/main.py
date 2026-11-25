@@ -7,6 +7,7 @@ import multiprocessing
 import os
 import platform
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from types import TracebackType
@@ -111,6 +112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Start the Qt application and return its exit code."""
     # Needed by the isolated capture child ("spawn") in frozen builds (PyInstaller).
     multiprocessing.freeze_support()
+    t_main = time.perf_counter()
     args = list(sys.argv if argv is None else argv)
 
     if "--version" in args or "-v" in args:
@@ -161,6 +163,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
         window.show()
+
+        if not smoke_test:
+            # baseline of the C++ migration (scripts/baseline.py); inert unless ADV_TG_BENCH
+            from adv_tg.tools import bench
+
+            bench.install(app, window, t_main)
 
         if smoke_test:
             # 1. The pure-numpy DSP engine must import (it is all the analysis needs)
