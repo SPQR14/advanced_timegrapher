@@ -93,6 +93,10 @@ which update-desktop-database &>/dev/null && update-desktop-database %{_datadir}
 which gtk-update-icon-cache &>/dev/null && gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 
 %changelog
+* Wed Nov 25 2026 Alberto Pico <albertopicolara@gmail.com> - 2.0.1-1
+- Release version 2.0.1: the tape, oscilloscope and waveform plots are drawn by
+  PyQtGraph again (the experimental native rasterizer broke the oscilloscope trace
+  under display scaling); measurement unchanged.
 * Tue Nov 24 2026 Alberto Pico <albertopicolara@gmail.com> - 2.0.0-1
 - Release version 2.0.0: C++20 SIMD runtime-dispatched DSP and metrics engine,
   lock-free SPSC sample ring buffer, GIL-free native PortAudio capture, and

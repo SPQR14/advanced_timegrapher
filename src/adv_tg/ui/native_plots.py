@@ -1,8 +1,18 @@
-"""Multi-threaded CPU 2D plot rasterizer bridge (``NativeGraphRenderer``) for PyQtGraph."""
+"""Multi-threaded CPU 2D plot rasterizer bridge (``NativeGraphRenderer``) for PyQtGraph.
+
+Experimental and OFF by default: set ``ADV_TG_NATIVE_PLOTS=1`` to use it. The frames are
+rasterized at the logical size of the plot and drawn by Qt with nearest-neighbour scaling, so
+with display scaling (HiDPI, fractional factors) the traces come out stair-stepped, and a frame
+slightly smaller than the target loses pixel columns of the 1-px lines: the oscilloscope trace
+of v2.0.0 was broken into dangling segments. PyQtGraph draws these plots (a few thousand points)
+well within the frame budget, so it stays the default. ``smooth_median_array`` (numeric, not
+drawing) keeps using the native engine.
+"""
 
 from __future__ import annotations
 
 import ctypes
+import os
 import weakref
 from typing import Any
 
@@ -14,7 +24,15 @@ from PyQt6.QtGui import QImage, QPainter
 
 from adv_tg import native_bridge as _nb
 
-__all__ = ["NativeGraphEngine", "NativePlotOverlay", "smooth_median_array"]
+__all__ = [
+    "ENV_NATIVE_PLOTS",
+    "NativeGraphEngine",
+    "NativePlotOverlay",
+    "native_plots_enabled",
+    "smooth_median_array",
+]
+
+ENV_NATIVE_PLOTS = "ADV_TG_NATIVE_PLOTS"
 
 
 def smooth_median_array(raw: list[float] | NDArray[np.float64], window: int) -> list[float]:
@@ -28,6 +46,11 @@ def smooth_median_array(raw: list[float] | NDArray[np.float64], window: int) -> 
         _nb.lib().advtg_smooth_median_f64(_nb.ptr(rc), n, int(window), _nb.ptr(out))
         return out.tolist()
     return [float(np.median(raw[max(0, i - window + 1) : i + 1])) for i in range(n)]
+
+
+def native_plots_enabled() -> bool:
+    """The experimental native rasterizer was requested (``ADV_TG_NATIVE_PLOTS=1``)."""
+    return os.environ.get(ENV_NATIVE_PLOTS, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 class NativePlotOverlay(pg.GraphicsObject):
@@ -105,7 +128,7 @@ class NativeGraphEngine:
 
     def __init__(self, parent: pg.PlotWidget | None = None) -> None:
         self._handle: ctypes.c_void_p | None = None
-        if _nb.have(
+        if native_plots_enabled() and _nb.have(
             "advtg_gr_create",
             "advtg_gr_destroy",
             "advtg_gr_submit_tape",
