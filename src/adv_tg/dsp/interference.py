@@ -37,10 +37,13 @@ real time.
 
 from __future__ import annotations
 
+import ctypes
 import math
 
 import numpy as np
 from numpy.typing import NDArray
+
+from adv_tg import native_bridge as _nb
 
 __all__ = ["InterferenceFilter"]
 
@@ -128,9 +131,58 @@ class InterferenceFilter:
         self.peak_hz = math.nan  # frequency of the strongest line of the last gains
         self.peak_excess_db = 0.0  # its level over the band reference
         self._freqs = f
+        self._band_hz = (float(band_hz[0]), float(band_hz[1]))
+        self._skirt = float(skirt)
+        self._skirt_order = int(skirt_order)
+        self._excess_db = float(excess_db)
+        self._max_att_db = float(max_attenuation_db)
+        self._history_s = float(history_s)
+        self._handle: int | None = None
+        if _nb.have(
+            "advtg_interf_create",
+            "advtg_interf_destroy",
+            "advtg_interf_reset",
+            "advtg_interf_next_frame",
+            "advtg_interf_skip_frame",
+            "advtg_interf_add_frame",
+            "advtg_interf_add_frames",
+            "advtg_interf_gains",
+            "advtg_interf_apply",
+        ):
+            h = _nb.lib().advtg_interf_create(
+                self.fs,
+                float(band_hz[0]),
+                float(band_hz[1]),
+                self.nfft,
+                self._history_s,
+                self.percentile,
+                self._excess_db,
+                self._max_att_db,
+                self.min_frames,
+                self._skirt,
+                self._skirt_order,
+                self._widen,
+            )
+            if h:
+                self._handle = int(h)
+
+    def __del__(self) -> None:
+        h = getattr(self, "_handle", None)
+        if h and _nb is not None:
+            cdll = _nb.lib()
+            if cdll is not None and hasattr(cdll, "advtg_interf_destroy"):
+                cdll.advtg_interf_destroy(ctypes.c_void_p(h))
+            self._handle = None
 
     def reset(self, start: int) -> None:
         """Forget the noise frames; the next frame starts at or after ``start``."""
+        if self._handle:
+            _nb.lib().advtg_interf_reset(ctypes.c_void_p(self._handle), int(start))
+            self.active_bins = 0
+            self.max_attenuation_db = 0.0
+            self.peak_hz = math.nan
+            self.peak_excess_db = 0.0
+            return
         self._head = 0
         self._count = 0
         self._next = -(-int(start) // self.hop)  # ceil
@@ -139,11 +191,21 @@ class InterferenceFilter:
 
     def next_frame(self) -> tuple[int, int]:
         """``[start, end)`` of the next frame of the grid (absolute indices)."""
+        if self._handle:
+            a = ctypes.c_int64()
+            b = ctypes.c_int64()
+            _nb.lib().advtg_interf_next_frame(
+                ctypes.c_void_p(self._handle), ctypes.byref(a), ctypes.byref(b)
+            )
+            return int(a.value), int(b.value)
         a = self._next * self.hop
         return a, a + self.nfft
 
     def skip_frame(self) -> None:
         """Leave out the next frame of the grid (its samples are not available)."""
+        if self._handle:
+            _nb.lib().advtg_interf_skip_frame(ctypes.c_void_p(self._handle))
+            return
         self._next += 1
 
     def _grow_ring(self, min_cap: int) -> None:
@@ -180,6 +242,14 @@ class InterferenceFilter:
         """
         if samples.size != self.nfft:
             raise ValueError(f"se esperaban {self.nfft} muestras, llegaron {samples.size}")
+        if self._handle:
+            sc = _nb.f64(samples)
+            rc = _nb.lib().advtg_interf_add_frame(
+                ctypes.c_void_p(self._handle), _nb.ptr(sc), sc.size
+            )
+            if rc != 0:
+                raise ValueError(f"se esperaban {self.nfft} muestras, llegaron {samples.size}")
+            return
         end = self._next * self.hop + self.nfft
         self._next += 1
         spec_w = np.fft.rfft(samples * self._win)[self._watch]
@@ -190,6 +260,12 @@ class InterferenceFilter:
 
     def add_frames(self, buf: NDArray[np.float64], buf_start: int, up_to: int) -> None:
         """Add all pending grid frames ending at or before ``up_to`` in one batched 2-D rfft."""
+        if self._handle:
+            bc = _nb.f64(buf)
+            _nb.lib().advtg_interf_add_frames(
+                ctypes.c_void_p(self._handle), _nb.ptr(bc), bc.size, int(buf_start), int(up_to)
+            )
+            return
         hop, nfft = self.hop, self.nfft
         buf_end = buf_start + buf.size
         # Skip grid frames whose start fell before the available buffer
@@ -221,6 +297,26 @@ class InterferenceFilter:
 
         Only frames that ended at or before ``at`` and started within ``history_s`` count.
         """
+        if self._handle:
+            g = np.empty(self.half + 1, dtype=np.float64)
+            active_bins = ctypes.c_int()
+            max_att = ctypes.c_double()
+            peak_hz = ctypes.c_double()
+            peak_excess = ctypes.c_double()
+            rc = _nb.lib().advtg_interf_gains(
+                ctypes.c_void_p(self._handle),
+                int(at),
+                _nb.ptr(g),
+                ctypes.byref(active_bins),
+                ctypes.byref(max_att),
+                ctypes.byref(peak_hz),
+                ctypes.byref(peak_excess),
+            )
+            self.active_bins = int(active_bins.value)
+            self.max_attenuation_db = float(max_att.value)
+            self.peak_hz = float(peak_hz.value)
+            self.peak_excess_db = float(peak_excess.value)
+            return g if rc == 1 else None
         cutoff = at - self.history + self.nfft
         cap = self._cap
         while self._count and int(self._ends[self._head]) < cutoff:
@@ -284,6 +380,14 @@ class InterferenceFilter:
         n = x.size
         if n == 0:
             return x.copy()
+        if self._handle:
+            xc = _nb.f64(x)
+            gc = _nb.f64(gains)
+            y = np.empty(n, dtype=np.float64)
+            _nb.lib().advtg_interf_apply(
+                ctypes.c_void_p(self._handle), _nb.ptr(xc), n, _nb.ptr(gc), _nb.ptr(y)
+            )
+            return y
         h = np.fft.fftshift(np.fft.irfft(gains, self.nfft)) * self._taper
         size = 1 << (n + self.nfft - 2).bit_length()
         y = np.fft.irfft(np.fft.rfft(x, size) * np.fft.rfft(h, size), size)

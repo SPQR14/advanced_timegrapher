@@ -31,11 +31,14 @@ stream clock) and ``wall_ns`` (``time.time_ns()``, NTP-disciplined but it can st
 
 from __future__ import annotations
 
+import ctypes
 import time
 from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import ArrayLike, DTypeLike, NDArray
+
+from adv_tg import native_bridge as _nb
 
 __all__ = [
     "ClockLog",
@@ -120,12 +123,41 @@ class SampleStream:
         self._capacity = int(capacity)
         self._sample_rate = float(sample_rate)
         self._log_size = int(block_log_size)
+        self._native: ctypes.c_void_p | None = None
+        if _nb.have(
+            "advtg_stream_create",
+            "advtg_stream_destroy",
+            "advtg_stream_write_f32",
+            "advtg_stream_write_f64",
+            "advtg_stream_read_f64",
+            "advtg_stream_read_f32",
+            "advtg_stream_clock_log",
+            "advtg_stream_stats",
+        ):
+            offset_ns = time.perf_counter_ns() - int(_nb.lib().advtg_steady_now_ns())
+            h = _nb.lib().advtg_stream_create(
+                self._capacity, self._sample_rate, self._log_size, int(offset_ns)
+            )
+            if h:
+                self._native = ctypes.c_void_p(h)
+                return
         self._buf = np.zeros(self._capacity, dtype=np.float32)
         self._log_end = np.zeros(self._log_size, dtype=np.int64)
         self._log_ns = np.zeros(self._log_size, dtype=np.int64)
         self._log_adc = np.zeros(self._log_size, dtype=np.int64)
         self._log_wall = np.zeros(self._log_size, dtype=np.int64)
         self._init_counters()
+
+    def __del__(self) -> None:
+        h = getattr(self, "_native", None)
+        if h is not None:
+            self._native = None
+            try:
+                cdll = _nb.lib()
+                if cdll is not None:
+                    cdll.advtg_stream_destroy(h)
+            except Exception:
+                pass
 
     def _init_counters(self) -> None:
         self._total = 0
@@ -151,16 +183,23 @@ class SampleStream:
     @property
     def total_samples(self) -> int:
         """Absolute index one past the newest published sample."""
+        if self._native is not None:
+            return int(_nb.lib().advtg_stream_total(self._native))
         return self._total
 
     @property
     def oldest_available(self) -> int:
         """Absolute index of the oldest sample still in the buffer."""
+        if self._native is not None:
+            return int(_nb.lib().advtg_stream_oldest(self._native))
         return max(0, self._total - self._capacity)
 
     # ------------------------------------------------------------------ producer
     def reset(self) -> None:
         """Forget all samples and counters. Only call it while the producer is stopped."""
+        if self._native is not None:
+            _nb.lib().advtg_stream_reset(self._native)
+            return
         self._buf.fill(0.0)
         self._log_end.fill(0)
         self._log_ns.fill(0)
@@ -187,6 +226,25 @@ class SampleStream:
             adc_ns: Driver capture time of the block end in ns (0 = not available).
             wall_ns: ``time.time_ns()`` stamp of the block (0 = not available).
         """
+        if self._native is not None:
+            x = np.asarray(block)
+            if x.ndim != 1:
+                x = x.reshape(-1)
+            n = x.shape[0]
+            if n == 0:
+                return
+            has_h = 0 if host_ns is None else 1
+            hns = 0 if host_ns is None else int(host_ns)
+            if x.dtype == np.float64 and x.flags.c_contiguous:
+                _nb.lib().advtg_stream_write_f64(
+                    self._native, _nb.ptr(x), n, hns, has_h, int(adc_ns), int(wall_ns)
+                )
+            else:
+                xc = np.ascontiguousarray(x, dtype=np.float32)
+                _nb.lib().advtg_stream_write_f32(
+                    self._native, _nb.ptr(xc), n, hns, has_h, int(adc_ns), int(wall_ns)
+                )
+            return
         t0 = time.perf_counter_ns()
         if host_ns is None:
             host_ns = t0
@@ -256,6 +314,24 @@ class SampleStream:
             raise ValueError(f"invalid range [{start}, {stop})")
         if stop == start:
             return np.empty(0, dtype=dtype)
+        if self._native is not None:
+            n = stop - start
+            dt = np.dtype(dtype)
+            if dt == np.float64:
+                out = np.empty(n, dtype=np.float64)
+                rc = int(_nb.lib().advtg_stream_read_f64(self._native, start, stop, _nb.ptr(out)))
+            elif dt == np.float32:
+                out = np.empty(n, dtype=np.float32)
+                rc = int(_nb.lib().advtg_stream_read_f32(self._native, start, stop, _nb.ptr(out)))
+            else:
+                tmp = np.empty(n, dtype=np.float32)
+                rc = int(_nb.lib().advtg_stream_read_f32(self._native, start, stop, _nb.ptr(tmp)))
+                out = tmp.astype(dt)
+            if rc == 1:
+                raise SamplesNotYetAvailable(f"range ends at {stop} beyond published samples")
+            if rc == 2:
+                raise SamplesOverwritten(f"samples from {start} are no longer available")
+            return out
         cap = self._capacity
         total = self._total
         if stop > total:
@@ -295,7 +371,7 @@ class SampleStream:
             raise ValueError(f"n must be >= 0, got {n}")
         n = min(n, self._capacity // 2)
         for _ in range(_READ_LATEST_RETRIES):
-            total = self._total
+            total = self.total_samples
             start = max(0, total - n)
             try:
                 return start, self.read(start, total, dtype)
@@ -313,11 +389,50 @@ class SampleStream:
             ``(end_indices, host_ns)`` as int64 arrays. Each end index is the absolute index
             one past the last sample of its block.
         """
+        if self._native is not None:
+            cap = self._log_size if last is None else max(0, min(self._log_size, int(last)))
+            if cap == 0:
+                return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+            end = np.empty(cap, dtype=np.int64)
+            ns = np.empty(cap, dtype=np.int64)
+            m = int(
+                _nb.lib().advtg_stream_clock_log(
+                    self._native,
+                    -1 if last is None else cap,
+                    _nb.ptr(end),
+                    _nb.ptr(ns),
+                    0,
+                    0,
+                    cap,
+                )
+            )
+            return end[:m].copy(), ns[:m].copy()
         ends, ns = self._log_columns(last, (self._log_end, self._log_ns))
         return ends, ns
 
     def clock_log(self, last: int | None = None) -> ClockLog:
         """Like ``block_log`` but with every clock stamp (see ``ClockLog``)."""
+        if self._native is not None:
+            cap = self._log_size if last is None else max(0, min(self._log_size, int(last)))
+            if cap == 0:
+                e = np.empty(0, dtype=np.int64)
+                return ClockLog(e, e.copy(), e.copy(), e.copy())
+            end = np.empty(cap, dtype=np.int64)
+            ns = np.empty(cap, dtype=np.int64)
+            adc = np.empty(cap, dtype=np.int64)
+            wall = np.empty(cap, dtype=np.int64)
+            m = int(
+                _nb.lib().advtg_stream_clock_log(
+                    self._native,
+                    -1 if last is None else cap,
+                    _nb.ptr(end),
+                    _nb.ptr(ns),
+                    _nb.ptr(adc),
+                    _nb.ptr(wall),
+                    cap,
+                )
+            )
+            return ClockLog(end[:m].copy(), ns[:m].copy(), adc[:m].copy(), wall[:m].copy())
         ends, ns, adc, wall = self._log_columns(
             last, (self._log_end, self._log_ns, self._log_adc, self._log_wall)
         )
@@ -341,6 +456,17 @@ class SampleStream:
 
     def stats(self) -> StreamStats:
         """Return a snapshot of the ingestion counters (see ``StreamStats``)."""
+        if self._native is not None:
+            st = _nb.NativeStreamStatsStruct()
+            _nb.lib().advtg_stream_stats(self._native, ctypes.byref(st))
+            return StreamStats(
+                total_samples=int(st.total_samples),
+                blocks=int(st.blocks),
+                audio_s=float(st.audio_s),
+                ingest_ratio=float(st.ingest_ratio),
+                max_gap_ms=float(st.max_gap_ms),
+                max_write_us=float(st.max_write_us),
+            )
         total = self._total
         blocks = self._blocks
         first_ns = self._first_ns
