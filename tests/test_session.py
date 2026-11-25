@@ -9,7 +9,7 @@ import pytest
 
 from adv_tg.core.adc_clock import AdcDrift, ClockLevel
 from adv_tg.core.sample_stream import SampleStream
-from adv_tg.core.session import MeasurementSession, SessionConfig
+from adv_tg.core.session import MeasurementSession, PyMeasurementSession, SessionConfig
 from tests.synth import REALISM, synth_watch
 
 FS = 48_000
@@ -131,7 +131,9 @@ def test_silence_gives_no_figures() -> None:
 def test_display_rejects_short_glitches() -> None:
     from adv_tg.core.metrics import Metrics
 
-    s = MeasurementSession(SessionConfig(sample_rate=FS, bph=28800, lift_angle_deg=52))
+    # unit test of the Python reference; the native session is bit-identical to it
+    # (tests/test_native_session.py)
+    s = PyMeasurementSession(SessionConfig(sample_rate=FS, bph=28800, lift_angle_deg=52))
 
     def m(tac: float, conf: float) -> Metrics:
         return Metrics(n_beats=200, n_used_even=100, n_used_odd=100, n_excluded=0,

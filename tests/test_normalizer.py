@@ -15,7 +15,8 @@ import pytest
 from adv_tg.core.beat_detector import BeatDetector, BeatDetectorConfig
 from adv_tg.core.beat_types import BeatFlags
 from adv_tg.core.metrics import MetricsConfig, compute_metrics
-from adv_tg.core.session import MeasurementSession, SessionConfig
+from adv_tg.core.sample_stream import SampleStream
+from adv_tg.core.session import MeasurementSession, PyMeasurementSession, SessionConfig
 from adv_tg.dsp.normalizer import AudioNormalizer, NormalizerConfig
 from tests.synth import synth_watch
 
@@ -175,8 +176,12 @@ def test_normalization_does_not_change_the_timing() -> None:
 
 
 def test_session_passes_the_option_to_the_detector() -> None:
-    s = MeasurementSession(SessionConfig(sample_rate=44_100, bph=3600, quartz=True, normalize=True))
+    cfg = SessionConfig(sample_rate=44_100, bph=3600, quartz=True, normalize=True)
+    s = PyMeasurementSession(cfg)
     assert s._detector.config.normalize and s._detector.normalizer_gain_db == 0.0
+    # the default session (native when available) reports it in every snapshot
+    snap = MeasurementSession(cfg).update(SampleStream(44_100, 44_100))
+    assert snap.normalized
 
 
 def test_normalize_preserves_p1_and_amplitude_with_startup_silence_and_variation() -> None:

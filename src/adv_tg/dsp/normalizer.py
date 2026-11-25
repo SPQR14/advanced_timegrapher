@@ -24,12 +24,15 @@ Design
 
 from __future__ import annotations
 
+import ctypes
 import math
 from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
+
+from adv_tg import native_bridge as _nb
 
 __all__ = ["AudioNormalizer", "NormalizerConfig"]
 
@@ -100,7 +103,55 @@ class AudioNormalizer:
         )
         self._max_gain = 10.0 ** (config.max_gain_db / 20.0)
         self._floor = max(config.target / self._max_gain, config.min_follower)
+        self._handle: int | None = None
+        if _nb.have(
+            "advtg_norm_create",
+            "advtg_norm_destroy",
+            "advtg_norm_reset",
+            "advtg_norm_process",
+            "advtg_norm_flush",
+            "advtg_norm_state",
+        ):
+            h = _nb.lib().advtg_norm_create(
+                fs,
+                float(config.target),
+                float(config.block_s),
+                float(config.hold_s),
+                float(config.release_s),
+                float(config.max_gain_db),
+                float(config.clip_level),
+                float(config.min_follower),
+            )
+            if h:
+                self._handle = int(h)
         self.reset()
+
+    def __del__(self) -> None:
+        h = getattr(self, "_handle", None)
+        if h and _nb is not None:
+            cdll = _nb.lib()
+            if cdll is not None and hasattr(cdll, "advtg_norm_destroy"):
+                cdll.advtg_norm_destroy(ctypes.c_void_p(h))
+            self._handle = None
+
+    def _sync_state(self) -> None:
+        gain = ctypes.c_double()
+        clipped = ctypes.c_int64()
+        samples_in = ctypes.c_int64()
+        has_next = ctypes.c_int()
+        next_idx = ctypes.c_int64()
+        _nb.lib().advtg_norm_state(
+            ctypes.c_void_p(self._handle),
+            ctypes.byref(gain),
+            ctypes.byref(clipped),
+            ctypes.byref(samples_in),
+            ctypes.byref(has_next),
+            ctypes.byref(next_idx),
+        )
+        self._native_gain = float(gain.value)
+        self.clipped_samples = int(clipped.value)
+        self.samples_in = int(samples_in.value)
+        self._native_next = int(next_idx.value) if has_next.value else None
 
     def reset(self) -> None:
         """Forget the level history and any pending samples."""
@@ -112,11 +163,17 @@ class AudioNormalizer:
         self._gain: float | None = None
         self.clipped_samples = 0
         self.samples_in = 0
+        self._native_gain = 1.0
+        self._native_next: int | None = None
+        if self._handle:
+            _nb.lib().advtg_norm_reset(ctypes.c_void_p(self._handle))
 
     # ------------------------------------------------------------------ properties
     @property
     def gain(self) -> float:
         """Gain of the last emitted sample (1.0 before any block)."""
+        if self._handle:
+            return self._native_gain
         return 1.0 if self._gain is None else self._gain
 
     @property
@@ -126,6 +183,8 @@ class AudioNormalizer:
     @property
     def next_index(self) -> int | None:
         """Absolute index the next chunk must start at (None before the first chunk)."""
+        if self._handle:
+            return self._native_next
         if self._pending_start is None:
             return None
         return self._pending_start + self._pending_n
@@ -181,6 +240,42 @@ class AudioNormalizer:
         expected = self.next_index
         if expected is not None and start < expected:
             raise ValueError(f"el bloque empieza en {start} pero ya se recibió hasta {expected}")
+        if self._handle:
+            xc = _nb.f64(x)
+            cap_segs = max(8, x.size // self.block + 4)
+            cap_samples = max(self.block, x.size + self.block)
+            while True:
+                out_samples = np.empty(cap_samples, dtype=np.float64)
+                out_starts = np.empty(cap_segs, dtype=np.int64)
+                out_lens = np.empty(cap_segs, dtype=np.int64)
+                n_segs = int(
+                    _nb.lib().advtg_norm_process(
+                        ctypes.c_void_p(self._handle),
+                        _nb.ptr(xc),
+                        xc.size,
+                        start,
+                        _nb.ptr(out_samples),
+                        cap_samples,
+                        _nb.ptr(out_starts),
+                        _nb.ptr(out_lens),
+                        cap_segs,
+                    )
+                )
+                if n_segs == -2:
+                    cap_segs *= 2
+                    cap_samples *= 2
+                    continue
+                if n_segs < 0:
+                    raise ValueError(f"error al procesar normalización (start={start})")
+                break
+            self._sync_state()
+            pos = 0
+            for i in range(n_segs):
+                seg_len = int(out_lens[i])
+                seg = out_samples[pos : pos + seg_len].copy()
+                pos += seg_len
+                yield int(out_starts[i]), seg
+            return
         if expected is not None and start > expected:  # data gap: close the partial block
             seg = self._take_pending()
             if seg is not None:
@@ -205,6 +300,25 @@ class AudioNormalizer:
 
     def flush(self) -> Iterator[tuple[int, NDArray]]:
         """Yield the pending incomplete block (end of the audio)."""
+        if self._handle:
+            out_samples = np.empty(self.block, dtype=np.float64)
+            out_starts = np.empty(2, dtype=np.int64)
+            out_lens = np.empty(2, dtype=np.int64)
+            n_segs = int(
+                _nb.lib().advtg_norm_flush(
+                    ctypes.c_void_p(self._handle),
+                    _nb.ptr(out_samples),
+                    self.block,
+                    _nb.ptr(out_starts),
+                    _nb.ptr(out_lens),
+                    2,
+                )
+            )
+            self._sync_state()
+            if n_segs > 0:
+                seg_len = int(out_lens[0])
+                yield int(out_starts[0]), out_samples[:seg_len].copy()
+            return
         seg = self._take_pending()
         if seg is not None:
             yield seg

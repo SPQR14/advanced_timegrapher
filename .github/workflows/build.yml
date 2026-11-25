@@ -7,6 +7,12 @@ name: Build & Package Release
 #   macOS    adv-tg-<version>-macos-arm64.dmg         Apple Silicon
 #   Windows  adv-tg-<version>-windows-x64-setup.exe   Windows 10 / 11 x64
 # A tag v<version> (or v<version>-rc1, -beta...) publishes exactly those five files plus SHA256SUMS.txt.
+#
+# Hybrid architecture (v2.0): Python/Qt application + the native C++20 engine
+# (libadvtg_native.so / .dylib / advtg_native.dll) compiled on each platform by
+# scripts/build_native.py and bundled by PyInstaller. Every bundle must be self-contained:
+# scripts/check_native_deps.py rejects a library that needs anything a clean system lacks, and
+# --smoke-test of the frozen program fails when the engine (or its session API) does not load.
 
 on:
   push:
@@ -74,8 +80,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip build
           python -m build
-          # The project is pure Python: the wheel must be py3-none-any (no compiled code)
+          # The wheel stays py3-none-any: the native engine ships only inside the bundles
+          # (without it adv_tg runs on its numpy implementation)
           ls dist/*-py3-none-any.whl
+          if python -m zipfile -l dist/*-py3-none-any.whl | grep -E '\.(so|dylib|dll)\b'; then
+            echo "::error::a native library leaked into the pure wheel"; exit 1
+          fi
 
   # ------------------------------------------------------------------ Linux
   linux:
@@ -95,6 +105,7 @@ jobs:
           dnf -y install epel-release
           dnf -y install git tar findutils which file binutils curl-minimal \
             python3.12 python3.12-pip rpm-build rpm-sign gnupg2 dpkg desktop-file-utils \
+            gcc-c++ cmake \
             portaudio alsa-lib libxkbcommon libxkbcommon-x11 xcb-util-cursor xcb-util-wm \
             xcb-util-keysyms xcb-util-image xcb-util-renderutil mesa-libGL mesa-libEGL \
             fontconfig freetype dbus-libs libwayland-client libwayland-cursor libwayland-egl \
@@ -109,6 +120,15 @@ jobs:
           /opt/venv/bin/pip install --upgrade pip
           /opt/venv/bin/pip install pyinstaller .
 
+      # GCC 11 of Enterprise Linux 9: the library needs at most GLIBC 2.34, like the rest of
+      # the bundle. One binary for every x86_64 CPU: SSE4.2 / AVX2 / AVX-512 chosen at run time.
+      - name: Build Native C++20 Engine
+        run: |
+          /opt/venv/bin/python scripts/build_native.py --clean --target x86_64_universal
+          /opt/venv/bin/python scripts/check_native_deps.py src/adv_tg/_native/libadvtg_native.so
+          # the copy PyInstaller bundles is src/ (pathex in adv-tg.spec), not the pip-installed one
+          PYTHONPATH=src /opt/venv/bin/python -c "from adv_tg import native_bridge as nb; from adv_tg.core.native_session import native_session_available as ok; assert nb.is_native_available() and ok(), 'native engine not loaded'; print(nb.native_arch_info())"
+
       - name: Build with PyInstaller
         run: /opt/venv/bin/pyinstaller packaging/adv-tg.spec --noconfirm
 
@@ -118,6 +138,8 @@ jobs:
             echo "::error::SciPy was bundled"; exit 1
           fi
           test -f dist/adv-tg/_internal/libportaudio.so.2
+          test -f dist/adv-tg/_internal/adv_tg/_native/libadvtg_native.so
+          /opt/venv/bin/python scripts/check_native_deps.py dist/adv-tg
           # base-system libraries must not be bundled (section 5 of adv-tg.spec)
           if ls dist/adv-tg/_internal | grep -E '^(libstdc\+\+|libgcc_s|libasound|libglib-2\.0)\.so'; then
             echo "::error::a base-system library was bundled"; exit 1
@@ -308,6 +330,7 @@ jobs:
     env:
       VERSION: ${{ needs.meta.outputs.version }}
       QT_QPA_PLATFORM: offscreen
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -323,14 +346,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller .
 
+      # NEON + Apple clang for every Apple Silicon Mac (M1..M4); minimum macOS 11.0 like
+      # Info.plist (MACOSX_DEPLOYMENT_TARGET, set for the job)
+      - name: Build Native C++20 Engine
+        run: |
+          python scripts/build_native.py --clean --target apple_silicon
+          python scripts/check_native_deps.py src/adv_tg/_native/libadvtg_native.dylib
+          PYTHONPATH=src python -c "from adv_tg import native_bridge as nb; from adv_tg.core.native_session import native_session_available as ok; assert nb.is_native_available() and ok(), 'native engine not loaded'; print(nb.native_arch_info())"
+
       - name: Build with PyInstaller
         run: pyinstaller packaging/adv-tg.spec --noconfirm
 
-      - name: Verify SciPy is excluded from the bundle
+      - name: Verify SciPy and Native Engine in the bundle
         run: |
           if find dist -iname 'scipy*' | grep -q .; then
             echo "::error::SciPy was bundled"; exit 1
           fi
+          python scripts/check_native_deps.py "dist/Advanced Timegrapher.app"
 
       - name: Smoke Test Binary
         run: |
@@ -388,13 +420,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller .
 
+      # MSVC (Visual Studio generator, /fp:precise) with the C/C++ runtime linked statically
+      # (/MT): the DLL needs no Visual C++ Redistributable on the user's machine
+      - name: Build Native C++20 Engine
+        run: |
+          python scripts/build_native.py --clean --target x86_64_universal
+          if ($LASTEXITCODE -ne 0) { throw "native build failed" }
+          python scripts/check_native_deps.py src\adv_tg\_native\advtg_native.dll
+          if ($LASTEXITCODE -ne 0) { throw "native DLL is not self-contained" }
+          $env:PYTHONPATH = "src"
+          python -c "from adv_tg import native_bridge as nb; from adv_tg.core.native_session import native_session_available as ok; assert nb.is_native_available() and ok(), 'native engine not loaded'; print(nb.native_arch_info())"
+          if ($LASTEXITCODE -ne 0) { throw "native engine does not load" }
+
       - name: Build with PyInstaller
         run: pyinstaller packaging/adv-tg.spec --noconfirm
 
-      - name: Verify SciPy is excluded from the bundle
+      - name: Verify SciPy and Native Engine in the bundle
         run: |
           $found = Get-ChildItem dist -Recurse -Filter "scipy*"
           if ($found) { throw "SciPy was bundled: $found" }
+          python scripts/check_native_deps.py dist\adv-tg
+          if ($LASTEXITCODE -ne 0) { throw "native DLL missing from the bundle or not self-contained" }
 
       # adv-tg.exe is a windowed program: PowerShell only waits for it, and only sees its
       # exit code, through Start-Process -Wait

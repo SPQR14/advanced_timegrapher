@@ -60,16 +60,19 @@ def _log_environment() -> None:
     import numpy
     from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR
 
+    from adv_tg import native_bridge
+
     msix_family = package_family_name()
     msix_suffix = f" | MSIX {msix_family}" if msix_family else ""
     logger.info(
-        "Advanced Timegrapher %s | %s | Python %s | PyQt6 %s (Qt %s) | numpy %s%s",
+        "Advanced Timegrapher %s | %s | Python %s | PyQt6 %s (Qt %s) | numpy %s | Native %s%s",
         __version__,
         platform.platform(),
         platform.python_version(),
         PYQT_VERSION_STR,
         QT_VERSION_STR,
         numpy.__version__,
+        native_bridge.native_arch_info(),
         msix_suffix,
     )
 
@@ -179,6 +182,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 window.close()
                 return 1
 
+            # 2b. Verify native C++20 engine when not explicitly disabled
+            if os.environ.get("ADV_TG_DISABLE_NATIVE", "").strip().lower() not in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            ):
+                from adv_tg import native_bridge
+                from adv_tg.core.native_session import native_session_available
+
+                if getattr(sys, "frozen", False) and not native_bridge.is_native_available():
+                    logger.critical("Smoke test failed: native C++20 engine missing in bundle")
+                    window.close()
+                    return 1
+                if getattr(sys, "frozen", False) and not native_session_available():
+                    # an outdated library (built before the session API) was bundled
+                    logger.critical("Smoke test failed: native engine without the session API")
+                    window.close()
+                    return 1
+                logger.info("Smoke test Native Engine: %s", native_bridge.native_arch_info())
+
             # 3. A packaged build must carry a PortAudio that loads: without it the
             #    application starts but has no audio input (only the synthetic source)
             if getattr(sys, "frozen", False):
@@ -253,9 +277,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     return 1
 
                 logger.info(
-                    "Smoke test DSP verified: beats=%d, rate=%.2f s/d (no hardware, no scipy)",
+                    "Smoke test DSP verified: beats=%d, rate=%.2f s/d (no hardware, no scipy, %s)",
                     snap.beats_total,
                     rate,
+                    type(session).__name__,
                 )
             except Exception as exc:
                 logger.critical("Smoke test failed during DSP verification: %s", exc, exc_info=True)
