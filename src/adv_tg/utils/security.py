@@ -16,6 +16,14 @@ def sanitize_csv_cell(value: Any) -> Any:
     unless the string represents a valid finite number (e.g. "+1.25", "-0.40").
     """
     if isinstance(value, str):
+        from adv_tg import native_bridge
+
+        if native_bridge.have("advtg_sanitize_csv_cell"):
+            return native_bridge.call_str_buf(
+                native_bridge.lib().advtg_sanitize_csv_cell,  # type: ignore[union-attr]
+                value.encode("utf-8"),
+                initial=max(256, len(value) * 2 + 8),
+            )
         s = value.lstrip(" ")
         if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
             try:
@@ -32,6 +40,16 @@ def safe_filename_base(name: str, fallback: str = "watch_test") -> str:
 
     Restricts characters to alphanumeric, spaces, dashes, and underscores.
     """
+    from adv_tg import native_bridge
+
+    if native_bridge.have("advtg_safe_filename_base"):
+        raw = str(name)
+        return native_bridge.call_str_buf(
+            native_bridge.lib().advtg_safe_filename_base,  # type: ignore[union-attr]
+            raw.encode("utf-8"),
+            str(fallback).encode("utf-8"),
+            initial=max(256, len(raw) * 2 + len(fallback) + 16),
+        )
     safe = "".join(c for c in str(name) if c.isalnum() or c in ("-", "_", " ")).strip()
     return safe or fallback
 
@@ -59,14 +77,25 @@ def anonymize_text(text: str) -> str:
     """
     if not text:
         return text
-    for home in _home_variants():
-        text = text.replace(home, "~")
+    homes = _home_variants()
     try:
         import getpass
 
         username = getpass.getuser()
     except Exception:
-        return text
+        username = ""
+    from adv_tg import native_bridge
+
+    if native_bridge.have("advtg_anonymize_text"):
+        return native_bridge.call_str_buf(
+            native_bridge.lib().advtg_anonymize_text,  # type: ignore[union-attr]
+            text.encode("utf-8"),
+            username.encode("utf-8"),
+            "\n".join(homes).encode("utf-8"),
+            initial=max(256, len(text.encode("utf-8")) * 2 + 64),
+        )
+    for home in homes:
+        text = text.replace(home, "~")
     if not username or len(username) < 2 or username.lower() in ("root", "nobody"):
         return text
     u = re.escape(username)

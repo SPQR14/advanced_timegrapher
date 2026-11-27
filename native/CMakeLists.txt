@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(advtg_native VERSION 2.0.0 LANGUAGES CXX)
+project(advtg_native VERSION 2.1.0 LANGUAGES C CXX)
 
 # Native engine of Advanced Timegrapher 2.0: DSP, beat detector, metrics, audio capture,
 # session worker and graph renderer, as ONE shared library with a C ABI (loaded by ctypes).
@@ -14,6 +14,8 @@ project(advtg_native VERSION 2.0.0 LANGUAGES CXX)
 # order of operations. FMA contraction IS allowed (-ffp-contract=fast): one rounding instead
 # of two, never less accurate.
 
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -40,9 +42,11 @@ else()
   set(_advtg_capture_default ON)
 endif()
 option(ADVTG_WITH_AUDIO_CAPTURE "PortAudio capture (desktop)" ${_advtg_capture_default})
+option(ADVTG_WITH_AUDIO_IO "Dynamic libsndfile audio file I/O (desktop)" ${_advtg_capture_default})
 option(ADVTG_WITH_RENDERER "CPU graph rasterizer (desktop Qt plots)" ON)
 option(ADVTG_STATIC "Static library (iOS / embedding) instead of a shared one" OFF)
 option(ADVTG_BUILD_EXAMPLES "Build the plain-C example (examples/advtg_replay.c)" OFF)
+option(ADVTG_STATIC_MSVC_RUNTIME "Static MSVC CRT (/MT) for self-contained Python ctypes DLL" ON)
 
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _proc)
 if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
@@ -72,6 +76,7 @@ foreach(f ${ALL_SRC})
     list(APPEND CORE_SRC "${f}")
   endif()
 endforeach()
+set(_miniz_c "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz/miniz.c")
 if(NOT ADVTG_SOURCES STREQUAL "")
   set(CORE_SRC "")
   foreach(f ${ALL_SRC})
@@ -90,6 +95,12 @@ if(NOT ADVTG_SOURCES STREQUAL "")
     endif()
   endforeach()
 endif()
+list(APPEND CORE_SRC "${_miniz_c}")
+if(MSVC)
+  set_source_files_properties("${_miniz_c}" PROPERTIES COMPILE_OPTIONS "/w")
+else()
+  set_source_files_properties("${_miniz_c}" PROPERTIES COMPILE_OPTIONS "-w")
+endif()
 
 set(_libname "advtg_native${ADVTG_LIB_SUFFIX}")
 if(ADVTG_STATIC)
@@ -101,9 +112,13 @@ endif()
 # advtg.h is the public C header (JNI / Swift / ctypes); the rest stays private.
 target_include_directories(${_libname}
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
-  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+          "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+          "${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz")
 target_compile_definitions(${_libname} PRIVATE ADVTG_BUILDING ADVTG_VERSION_STRING="${PROJECT_VERSION}"
+  MINIZ_NO_STDIO
   ADVTG_WITH_AUDIO_CAPTURE=$<BOOL:${ADVTG_WITH_AUDIO_CAPTURE}>
+  ADVTG_WITH_AUDIO_IO=$<BOOL:${ADVTG_WITH_AUDIO_IO}>
   ADVTG_WITH_RENDERER=$<BOOL:${ADVTG_WITH_RENDERER}>)
 set_target_properties(${_libname} PROPERTIES PUBLIC_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/advtg.h")
 set_target_properties(${_libname} PROPERTIES
@@ -113,11 +128,11 @@ set_target_properties(${_libname} PROPERTIES
 if(WIN32)
   set_target_properties(${_libname} PROPERTIES PREFIX "")
 endif()
-if(MSVC)
+if(MSVC AND ADVTG_STATIC_MSVC_RUNTIME)
   # Static C/C++ runtime (/MT): the DLL must not need MSVCP140.dll / VCRUNTIME140.dll, which a
   # clean Windows does not have and which ctypes would not find next to it in the bundle.
   set_property(TARGET ${_libname} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-elseif(WIN32)
+elseif(WIN32 AND NOT MSVC)
   message(WARNING "advtg_native on Windows should be built with MSVC: MinGW would make the DLL "
                   "depend on libstdc++-6.dll / libgcc_s / libwinpthread (not self-contained)")
 endif()
@@ -133,7 +148,8 @@ endif()
 
 # ---------------------------------------------------------------- compiler flags
 if(MSVC)
-  target_compile_options(${_libname} PRIVATE /O2 /Ob3 /Oi /Ot /Gw /Gy /fp:precise /EHsc /utf-8 /permissive-)
+  target_compile_options(${_libname} PRIVATE /O2 /Ob3 /Oi /Ot /Gw /Gy /fp:precise /utf-8
+    $<$<COMPILE_LANGUAGE:CXX>:/EHsc;/permissive->)
   target_compile_definitions(${_libname} PRIVATE NDEBUG _CRT_SECURE_NO_WARNINGS NOMINMAX)
   if(ADVTG_LTO)
     target_compile_options(${_libname} PRIVATE /GL)

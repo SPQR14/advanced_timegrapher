@@ -78,3 +78,155 @@ jobs:
         if: runner.os != 'Linux'
         run: |
           pytest -v --cov=adv_tg
+
+  # C++ application (docs/PLAN_MIGRACION_CPP.md, phase 0): Qt 6 skeleton + Catch2 tests that
+  # replay the v2.0.1 golden files through the public C API of the engine (advtg.h).
+  cpp-app:
+    name: C++ app on ${{ matrix.os }}
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, qt_host: linux, qt_arch: linux_gcc_64, qt_dir: gcc_64 }
+          - { os: macos-latest, qt_host: mac, qt_arch: clang_64, qt_dir: macos }
+          - { os: windows-latest, qt_host: windows, qt_arch: win64_msvc2022_64, qt_dir: msvc2022_64 }
+    env:
+      QT_VERSION: "6.11.3"
+      QT_QPA_PLATFORM: offscreen
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python (for aqtinstall)
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Qt ${{ env.QT_VERSION }} (official binaries)
+        shell: bash
+        run: |
+          # Pinned commit includes PR #1048 (Windows Qt >= 6.11 folder layout) until aqtinstall > 3.3.0 on PyPI.
+          python -m pip install "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4"
+          aqt install-qt ${{ matrix.qt_host }} desktop "$QT_VERSION" ${{ matrix.qt_arch }} \
+            --outputdir "$RUNNER_TEMP/Qt"
+          echo "QT_ROOT=$RUNNER_TEMP/Qt/$QT_VERSION/${{ matrix.qt_dir }}" >> "$GITHUB_ENV"
+
+      - name: Install C++ dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config libsndfile1-dev catch2 \
+            libgl1-mesa-dev libxkbcommon-dev libfontconfig1 libegl1 libportaudio2
+
+      - name: Install C++ dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja pkg-config libsndfile catch2 portaudio
+
+      - name: Configure (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cmake -S . -B build/app -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT"
+
+      # vcpkg manifest (vcpkg.json): libsndfile + Catch2 built with MSVC
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake -S . -B build/app -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT"
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+
+      - name: Build
+        run: cmake --build build/app --config Release --parallel
+
+      - name: C++ tests (golden files through advtg.h)
+        run: ctest --test-dir build/app --build-config Release --output-on-failure
+
+      - name: Run the application (version and smoke test)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            export PATH="$QT_ROOT/bin:$PATH"; exe=build/app/bin/Release/adv-tg-qt.exe
+          else
+            exe=build/app/bin/adv-tg-qt
+          fi
+          "$exe" --version
+          "$exe" --smoke-test
+          ADV_TG_BENCH=startup "$exe"
+
+  # AlmaLinux 9 (EL9 / glibc 2.34) check: verifies that the official Qt 6.11.3 binaries from
+  # aqtinstall link and run on the oldest supported Linux baseline used by build.yml.
+  cpp-app-el9:
+    name: C++ app on AlmaLinux 9 (EL9 / glibc 2.34)
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    container: almalinux:9
+    env:
+      QT_VERSION: "6.11.3"
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Install EL9 dependencies and tools
+        run: |
+          dnf -y install epel-release 'dnf-command(config-manager)'
+          dnf config-manager --set-enabled crb
+          dnf -y install git tar xz findutils which \
+            python3.12 python3.12-pip gcc-c++ cmake ninja-build pkgconf-pkg-config \
+            libsndfile-devel portaudio \
+            mesa-libGL-devel mesa-libEGL libxkbcommon-devel libxkbcommon-x11 \
+            fontconfig freetype dbus-libs cups-libs \
+            xcb-util-cursor xcb-util-wm xcb-util-keysyms xcb-util-image xcb-util-renderutil \
+            libX11-xcb libxcb
+
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Qt ${{ env.QT_VERSION }} (official binaries)
+        run: |
+          # Pinned commit includes PR #1048 (Windows Qt >= 6.11 folder layout) until aqtinstall > 3.3.0 on PyPI.
+          /usr/bin/python3.12 -m pip install "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4"
+          /usr/bin/python3.12 -m aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 \
+            --outputdir /tmp/Qt
+          echo "QT_ROOT=/tmp/Qt/$QT_VERSION/gcc_64" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/app -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT"
+
+      - name: Build
+        run: cmake --build build/app --parallel
+
+      - name: C++ tests (golden files through advtg.h)
+        run: ctest --test-dir build/app --output-on-failure
+
+      - name: Run the application and verify EL9 shared libraries
+        run: |
+          ./build/app/bin/adv-tg-qt --version
+          ./build/app/bin/adv-tg-qt --smoke-test
+          ADV_TG_BENCH=startup ./build/app/bin/adv-tg-qt
+          echo "=== ldd build/app/bin/adv-tg-qt ==="
+          if ldd build/app/bin/adv-tg-qt | tee /tmp/ldd.out | grep -q "not found"; then
+            cat /tmp/ldd.out
+            echo "::error::missing shared library in EL9 for adv-tg-qt"
+            exit 1
+          fi
+          for lib in \
+            "$QT_ROOT/lib/libQt6Core.so.6" \
+            "$QT_ROOT/lib/libQt6Gui.so.6" \
+            "$QT_ROOT/lib/libQt6Widgets.so.6" \
+            "$QT_ROOT/lib/libQt6PrintSupport.so.6" \
+            "$QT_ROOT/lib/libQt6Network.so.6" \
+            "$QT_ROOT/plugins/platforms/libqoffscreen.so" \
+            "$QT_ROOT/plugins/platforms/libqxcb.so"; do
+            echo "=== ldd $lib ==="
+            if LD_LIBRARY_PATH="$QT_ROOT/lib" ldd "$lib" | tee /tmp/ldd.out | grep -q "not found"; then
+              cat /tmp/ldd.out
+              echo "::error::missing shared library in EL9 for $lib"
+              exit 1
+            fi
+          done

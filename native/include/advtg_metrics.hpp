@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "advtg.h"
 #include "advtg_bits.hpp"
 #include "advtg_detector.hpp"
 
@@ -129,7 +130,8 @@ void compute_metrics_cpp(const NativeBeat* beats, std::size_t n_beats,
                          const NativeTemplateInput& tpl0, const NativeTemplateInput& tpl1,
                          const NativeMetricsConfig& cfg, NativeMetricsResult& out,
                          std::vector<NativeWindowRate>& windows_out,
-                         std::vector<std::string>& warnings_out);
+                         std::vector<std::string>& warnings_out,
+                         std::vector<advtg_warning>* warning_codes_out = nullptr);
 
 // ------------------------------------------------------------------ ADC clock (core/adc_clock.py)
 struct NativeAdcDrift {

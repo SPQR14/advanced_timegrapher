@@ -1,14 +1,20 @@
 // GIL-free PortAudio C++20 live audio capture into NativeSampleStream.
 // Dynamically resolves PortAudio at runtime (dlopen/LoadLibraryW) so the engine has zero
 // compile-time PortAudio header or link dependency on any OS.
+#include "advtg.h"
 #include "advtg_runtime.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <new>
+#include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #  ifndef NOMINMAX
@@ -119,7 +125,6 @@ void* open_pa_handle(const char* hint) {
     if (hint && *hint) {
         if (void* h = dlopen(hint, RTLD_LAZY | RTLD_LOCAL)) return h;
     }
-    if (dlsym(RTLD_DEFAULT, "Pa_Initialize")) return RTLD_DEFAULT;
     const char* cands[] = {
         "libportaudio.so.2",
         "libportaudio.so",
@@ -131,7 +136,9 @@ void* open_pa_handle(const char* hint) {
     }
     return nullptr;
 }
-void* pa_sym(void* h, const char* name) { return dlsym(h, name); }
+void* pa_sym(void* h, const char* name) {
+    return dlsym(h ? h : RTLD_DEFAULT, name);
+}
 #endif
 
 }  // namespace
@@ -141,6 +148,7 @@ struct NativeAudioCapture::PaApi {
     int (*Initialize)() = nullptr;
     int (*Terminate)() = nullptr;
     const char* (*GetErrorText)(int) = nullptr;
+    int (*GetDeviceCount)() = nullptr;
     int (*GetDefaultInputDevice)() = nullptr;
     const PaDeviceInfo* (*GetDeviceInfo)(int) = nullptr;
     int (*IsFormatSupported)(const PaStreamParameters*, const PaStreamParameters*, double) = nullptr;
@@ -155,10 +163,15 @@ struct NativeAudioCapture::PaApi {
 
     bool load(const char* hint) {
         lib = open_pa_handle(hint);
+#if defined(_WIN32)
         if (!lib) return false;
+#else
+        if (!lib && !dlsym(RTLD_DEFAULT, "Pa_Initialize")) return false;
+#endif
         Initialize = reinterpret_cast<decltype(Initialize)>(pa_sym(lib, "Pa_Initialize"));
         Terminate = reinterpret_cast<decltype(Terminate)>(pa_sym(lib, "Pa_Terminate"));
         GetErrorText = reinterpret_cast<decltype(GetErrorText)>(pa_sym(lib, "Pa_GetErrorText"));
+        GetDeviceCount = reinterpret_cast<decltype(GetDeviceCount)>(pa_sym(lib, "Pa_GetDeviceCount"));
         GetDefaultInputDevice = reinterpret_cast<decltype(GetDefaultInputDevice)>(
             pa_sym(lib, "Pa_GetDefaultInputDevice"));
         GetDeviceInfo = reinterpret_cast<decltype(GetDeviceInfo)>(pa_sym(lib, "Pa_GetDeviceInfo"));
@@ -416,3 +429,211 @@ int NativeAudioCapture::on_pa_callback(const float* input, unsigned long frames,
 }
 
 }  // namespace advtg::runtime
+
+namespace {
+
+std::mutex g_pa_hint_mu;
+std::string g_pa_hint;
+
+std::string pa_hint_copy() {
+    std::lock_guard<std::mutex> lk(g_pa_hint_mu);
+    return g_pa_hint;
+}
+
+std::string lower_trim(const char* s) {
+    if (!s) return "";
+    std::string raw(s);
+    std::size_t a = 0;
+    while (a < raw.size() && std::isspace(static_cast<unsigned char>(raw[a]))) ++a;
+    std::size_t b = raw.size();
+    while (b > a && std::isspace(static_cast<unsigned char>(raw[b - 1]))) --b;
+    std::string out = raw.substr(a, b - a);
+    for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+}
+
+std::string trim_raw(const char* s) {
+    if (!s) return "";
+    std::string raw(s);
+    std::size_t a = 0;
+    while (a < raw.size() && std::isspace(static_cast<unsigned char>(raw[a]))) ++a;
+    std::size_t b = raw.size();
+    while (b > a && std::isspace(static_cast<unsigned char>(raw[b - 1]))) --b;
+    return raw.substr(a, b - a);
+}
+
+struct PaEnumApi {
+    void* lib = nullptr;
+    int (*Initialize)() = nullptr;
+    int (*Terminate)() = nullptr;
+    const char* (*GetErrorText)(int) = nullptr;
+    int (*GetDeviceCount)() = nullptr;
+    int (*GetDefaultInputDevice)() = nullptr;
+    const void* (*GetDeviceInfo)(int) = nullptr;
+
+    struct DeviceInfo {
+        int structVersion;
+        const char* name;
+        int hostApi;
+        int maxInputChannels;
+        int maxOutputChannels;
+        double defaultLowInputLatency;
+        double defaultLowOutputLatency;
+        double defaultHighInputLatency;
+        double defaultHighOutputLatency;
+        double defaultSampleRate;
+    };
+
+    bool load(const char* hint) {
+#if defined(_WIN32)
+        if (hint && *hint) {
+            int wlen = MultiByteToWideChar(CP_UTF8, 0, hint, -1, nullptr, 0);
+            if (wlen > 0) {
+                std::wstring ws(static_cast<std::size_t>(wlen), L'\0');
+                MultiByteToWideChar(CP_UTF8, 0, hint, -1, ws.data(), wlen);
+                lib = reinterpret_cast<void*>(LoadLibraryW(ws.c_str()));
+            }
+        }
+        if (!lib) {
+            const wchar_t* names[] = {L"portaudio.dll", L"libportaudio.dll", L"portaudio_x64.dll"};
+            for (const wchar_t* n : names) {
+                HMODULE m = GetModuleHandleW(n);
+                if (!m) m = LoadLibraryW(n);
+                if (m) {
+                    lib = reinterpret_cast<void*>(m);
+                    break;
+                }
+            }
+        }
+        if (!lib) return false;
+        auto sym = [&](const char* name) -> void* {
+            return reinterpret_cast<void*>(GetProcAddress(reinterpret_cast<HMODULE>(lib), name));
+        };
+#else
+        if (hint && *hint) lib = dlopen(hint, RTLD_LAZY | RTLD_LOCAL);
+        if (!lib) {
+            const char* cands[] = {
+                "libportaudio.so.2",
+                "libportaudio.so",
+                "libportaudio.2.dylib",
+                "libportaudio.dylib",
+            };
+            for (const char* c : cands) {
+                if (void* h = dlopen(c, RTLD_LAZY | RTLD_LOCAL)) {
+                    lib = h;
+                    break;
+                }
+            }
+        }
+        const bool use_default = (!lib && dlsym(RTLD_DEFAULT, "Pa_Initialize") != nullptr);
+        if (!lib && !use_default) return false;
+        auto sym = [&](const char* name) -> void* {
+            return dlsym(use_default ? RTLD_DEFAULT : lib, name);
+        };
+#endif
+        Initialize = reinterpret_cast<decltype(Initialize)>(sym("Pa_Initialize"));
+        Terminate = reinterpret_cast<decltype(Terminate)>(sym("Pa_Terminate"));
+        GetErrorText = reinterpret_cast<decltype(GetErrorText)>(sym("Pa_GetErrorText"));
+        GetDeviceCount = reinterpret_cast<decltype(GetDeviceCount)>(sym("Pa_GetDeviceCount"));
+        GetDefaultInputDevice =
+            reinterpret_cast<decltype(GetDefaultInputDevice)>(sym("Pa_GetDefaultInputDevice"));
+        GetDeviceInfo = reinterpret_cast<decltype(GetDeviceInfo)>(sym("Pa_GetDeviceInfo"));
+        return Initialize && Terminate && GetDeviceCount && GetDeviceInfo;
+    }
+};
+
+}  // namespace
+
+extern "C" {
+
+ADVTG_C_API int advtg_set_portaudio_library(const char* path) {
+    std::lock_guard<std::mutex> lk(g_pa_hint_mu);
+    g_pa_hint = path ? path : "";
+    return ADVTG_OK;
+}
+
+ADVTG_C_API int32_t advtg_list_input_devices(advtg_audio_device_info* out, int32_t cap) {
+    std::vector<advtg_audio_device_info> devs;
+    advtg_audio_device_info synth{};
+    synth.device_id = -1;
+    synth.max_input_channels = 1;
+    synth.default_samplerate = 48000.0;
+    synth.is_synthetic = 1;
+    std::snprintf(synth.name, sizeof synth.name, "Synthetic Ground-Truth Generator");
+    devs.push_back(synth);
+
+    PaEnumApi pa;
+    const std::string hint = pa_hint_copy();
+    if (pa.load(hint.empty() ? nullptr : hint.c_str()) && pa.Initialize() == 0) {
+        const int count = pa.GetDeviceCount();
+        std::vector<std::string> seen = {"synthetic ground-truth generator"};
+        for (int idx = 0; idx < count; ++idx) {
+            const auto* d = static_cast<const PaEnumApi::DeviceInfo*>(pa.GetDeviceInfo(idx));
+            if (!d || d->maxInputChannels < 1) continue;
+            std::string raw_name = trim_raw(d->name);
+            if (raw_name.empty()) raw_name = "Input Device " + std::to_string(idx);
+            const std::string norm = lower_trim(raw_name.c_str());
+            if (norm.find("output") != std::string::npos &&
+                norm.find("input") == std::string::npos &&
+                norm.find("mic") == std::string::npos) {
+                continue;
+            }
+            if (std::find(seen.begin(), seen.end(), norm) != seen.end()) continue;
+            seen.push_back(norm);
+            advtg_audio_device_info item{};
+            item.device_id = idx;
+            item.max_input_channels = d->maxInputChannels;
+            item.default_samplerate = d->defaultSampleRate > 0.0 ? d->defaultSampleRate : 48000.0;
+            item.is_synthetic = 0;
+            std::snprintf(item.name, sizeof item.name, "%s", raw_name.c_str());
+            devs.push_back(item);
+        }
+        pa.Terminate();
+    }
+    if (out && cap > 0) {
+        const auto m = std::min<std::size_t>(devs.size(), static_cast<std::size_t>(cap));
+        if (m) std::memcpy(out, devs.data(), m * sizeof(advtg_audio_device_info));
+    }
+    return static_cast<int32_t>(devs.size());
+}
+
+ADVTG_C_API int32_t advtg_audio_devices_text(char* buf, int32_t cap) {
+    std::string text;
+    PaEnumApi pa;
+    const std::string hint = pa_hint_copy();
+    if (!pa.load(hint.empty() ? nullptr : hint.c_str())) {
+        text = "(PortAudio not available: library not found)";
+    } else {
+        const int rc = pa.Initialize();
+        if (rc < 0) {
+            const char* err = pa.GetErrorText ? pa.GetErrorText(rc) : "init failed";
+            text = std::string("(PortAudio not available: ") + (err ? err : "error") + ")";
+        } else {
+            const int count = pa.GetDeviceCount();
+            const int def_in = pa.GetDefaultInputDevice ? pa.GetDefaultInputDevice() : -1;
+            for (int i = 0; i < count; ++i) {
+                const auto* d = static_cast<const PaEnumApi::DeviceInfo*>(pa.GetDeviceInfo(i));
+                if (!d) continue;
+                char line[512];
+                std::snprintf(line, sizeof line,
+                              "[%d] %s | in %d / out %d | %.0f Hz | host API %d%s", i,
+                              d->name ? d->name : "?", d->maxInputChannels, d->maxOutputChannels,
+                              d->defaultSampleRate, d->hostApi,
+                              (i == def_in) ? " (default input)" : "");
+                if (!text.empty()) text.push_back('\n');
+                text += line;
+            }
+            if (text.empty()) text = "(no devices)";
+            pa.Terminate();
+        }
+    }
+    if (buf && cap > 0) {
+        const std::size_t n =
+            std::min<std::size_t>(text.size(), static_cast<std::size_t>(cap - 1));
+        if (n) std::memcpy(buf, text.data(), n);
+        buf[n] = '\0';
+    }
+    return static_cast<int32_t>(text.size());
+}
+
+}  // extern "C"

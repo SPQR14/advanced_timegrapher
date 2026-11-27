@@ -93,6 +93,11 @@ which update-desktop-database &>/dev/null && update-desktop-database %{_datadir}
 which gtk-update-icon-cache &>/dev/null && gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 
 %changelog
+* Fri Nov 27 2026 Alberto Pico <albertopicolara@gmail.com> - 2.1.0-1
+- Release version 2.1.0: Phase 1 C++20 application library below the GUI (native
+  WAV/FLAC audio I/O with Vorbis/WAV metadata, GPS PPS calibrator, batch metrics,
+  JSON calibration store, gear-train and diagnostics, zip reports, CSV export,
+  caliber DB, platform paths/logging, and bilingual EN/ES warning codes).
 * Wed Nov 25 2026 Alberto Pico <albertopicolara@gmail.com> - 2.0.1-1
 - Release version 2.0.1: the tape, oscilloscope and waveform plots are drawn by
   PyQtGraph again (the experimental native rasterizer broke the oscilloscope trace

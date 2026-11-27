@@ -46,6 +46,29 @@ def load_watch_db(csv_path: Path | str | None = None) -> dict[str, tuple[int, fl
         Ordered dictionary mapping ``caliber_name`` to ``(bph, lift_angle)``.
     """
     path = Path(csv_path) if csv_path is not None else WATCH_DB_PATH
+    from adv_tg import native_bridge
+
+    if native_bridge.have("advtg_load_watch_db"):
+        cdll = native_bridge.lib()
+        assert cdll is not None
+        path_b = str(path).encode("utf-8") if path else None
+        cap = 64
+        buf = (native_bridge.NativeWatchCaliberStruct * cap)()
+        n = int(cdll.advtg_load_watch_db(path_b, buf, cap))
+        if n > cap:
+            buf = (native_bridge.NativeWatchCaliberStruct * n)()
+            n = int(cdll.advtg_load_watch_db(path_b, buf, n))
+        if n > 0:
+            presets = {
+                buf[i].name.decode("utf-8", errors="replace"): (
+                    int(buf[i].bph),
+                    float(buf[i].lift_angle_deg),
+                )
+                for i in range(n)
+            }
+            _dbg.file_read(path, calibers=len(presets))
+            return presets
+
     presets: dict[str, tuple[int, float]] = {}
 
     if not path.exists():

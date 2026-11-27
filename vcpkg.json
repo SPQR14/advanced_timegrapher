@@ -1,0 +1,17 @@
+{
+  "$comment": "C++ dependencies of the app (docs/PLAN_MIGRACION_CPP.md). Used on Windows through the vcpkg toolchain; Linux and macOS use system packages. Qt comes from the official binaries (aqtinstall), not from vcpkg.",
+  "name": "advanced-timegrapher",
+  "version-string": "3.0.0",
+  "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
+  "dependencies": [
+    {
+      "name": "libsndfile",
+      "default-features": false,
+      "features": [ "external-libs" ]
+    },
+    "catch2",
+    "portaudio",
+    "nlohmann-json",
+    "miniz"
+  ]
+}

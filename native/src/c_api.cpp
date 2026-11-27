@@ -10,7 +10,7 @@
 #include "advtg_simd.hpp"
 
 #ifndef ADVTG_VERSION_STRING
-#  define ADVTG_VERSION_STRING "2.0.0"
+#  define ADVTG_VERSION_STRING "2.1.0"
 #endif
 
 ADVTG_API int advtg_abi_version() { return ADVTG_ABI_VERSION; }

@@ -106,6 +106,8 @@ def escape_wheel_period_s(bph: float, teeth: int = DEFAULT_ESCAPE_TEETH) -> floa
     """One turn of the escape wheel: one tooth per oscillation (2 beats) -> ``2 Z 3600 / BPH``."""
     if not bph > 0 or teeth < 1:
         raise ValueError(f"bph y dientes deben ser positivos (bph={bph}, dientes={teeth})")
+    if _nb.have("advtg_escape_wheel_period_s"):
+        return float(_nb.lib().advtg_escape_wheel_period_s(float(bph), int(teeth)))  # type: ignore[union-attr]
     return 2.0 * teeth * 3600.0 / float(bph)
 
 
@@ -188,6 +190,33 @@ def sine_fit(t: NDArray, y: NDArray, f: float) -> tuple[float, float]:
     return float(math.hypot(a, b)), float(math.atan2(-b, a))
 
 
+class _NativeGearHandle:
+    __slots__ = ("ptr",)
+
+    def __init__(self, ptr: int) -> None:
+        self.ptr = int(ptr)
+
+    def __del__(self) -> None:
+        p = getattr(self, "ptr", 0)
+        if p and _nb is not None:
+            cdll = _nb.lib()
+            if cdll is not None and hasattr(cdll, "advtg_gear_destroy"):
+                import ctypes
+
+                cdll.advtg_gear_destroy(ctypes.c_void_p(p))
+            self.ptr = 0
+
+
+def _native_gear_handle(series: BeatSeries) -> _NativeGearHandle | None:
+    meta = getattr(series, "_native", None)
+    if meta is None:
+        return None
+    handle, fp = meta
+    if fp != (series.duration_s, int(series.k.size), float(series.rate_s_per_day)):
+        return None
+    return handle if getattr(handle, "ptr", 0) else None
+
+
 # ---------------------------------------------------------------------- data
 @dataclass(frozen=True)
 class BeatSeries:
@@ -236,6 +265,9 @@ class BeatSeries:
     e3: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
     pre_p1_db: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
     amplitude_deg: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
+    _native: tuple[_NativeGearHandle, tuple[float, int, float]] | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 @dataclass(frozen=True)
@@ -318,6 +350,100 @@ def extract_series(
     """
     fs = float(sample_rate)
     x = np.asarray(x, dtype=np.float64)
+    if _nb.have(
+        "advtg_gear_extract",
+        "advtg_gear_destroy",
+        "advtg_gear_get_summary",
+        "advtg_gear_series_copy",
+        "advtg_gear_outliers_copy",
+    ):
+        import ctypes
+
+        cdll = _nb.lib()
+        assert cdll is not None
+        xc = _nb.f64(x.reshape(-1))
+        err_c = ctypes.c_int32(0)
+        beats_c = ctypes.c_int64(0)
+        h = cdll.advtg_gear_extract(
+            _nb.ptr(xc),
+            xc.size,
+            fs,
+            float(bph),
+            float(lift_angle_deg),
+            DEFAULT_ESCAPE_TEETH,
+            ctypes.byref(err_c),
+            ctypes.byref(beats_c),
+        )
+        if not h:
+            msg = cdll.advtg_gear_last_error().decode("utf-8", errors="replace")
+            if err_c.value == -5:
+                raise NotEnoughBeats(
+                    msg
+                    or f"solo {int(beats_c.value)} batimientos con tiempo fino (mínimo {MIN_BEATS})",
+                    int(beats_c.value),
+                )
+            raise ValueError(msg or f"error nativo gear_extract ({err_c.value})")
+        handle = _NativeGearHandle(int(h))
+        summary = _nb.NativeGearSummaryStruct()
+        cdll.advtg_gear_get_summary(ctypes.c_void_p(handle.ptr), ctypes.byref(summary))
+        n_s = int(summary.n_series)
+        k = np.empty(n_s, dtype=np.int64)
+        t_s = np.empty(n_s, dtype=np.float64)
+        timing_res = np.empty(n_s, dtype=np.float64)
+        energy_rel = np.empty(n_s, dtype=np.float64)
+        p1_s = np.empty(n_s, dtype=np.float64)
+        p2_s = np.empty(n_s, dtype=np.float64)
+        p3_s = np.empty(n_s, dtype=np.float64)
+        e1 = np.empty(n_s, dtype=np.float64)
+        e2 = np.empty(n_s, dtype=np.float64)
+        e3 = np.empty(n_s, dtype=np.float64)
+        pre_p1_db = np.empty(n_s, dtype=np.float64)
+        amp_deg = np.empty(n_s, dtype=np.float64)
+        cdll.advtg_gear_series_copy(
+            ctypes.c_void_p(handle.ptr),
+            _nb.ptr(k),
+            _nb.ptr(t_s),
+            _nb.ptr(timing_res),
+            _nb.ptr(energy_rel),
+            _nb.ptr(p1_s),
+            _nb.ptr(p2_s),
+            _nb.ptr(p3_s),
+            _nb.ptr(e1),
+            _nb.ptr(e2),
+            _nb.ptr(e3),
+            _nb.ptr(pre_p1_db),
+            _nb.ptr(amp_deg),
+            n_s,
+        )
+        n_out = max(0, int(summary.outliers))
+        outlier_t = np.empty(n_out, dtype=np.float64)
+        if n_out > 0:
+            cdll.advtg_gear_outliers_copy(ctypes.c_void_p(handle.ptr), _nb.ptr(outlier_t), n_out)
+        fp = (float(summary.duration_s), int(k.size), float(summary.rate_s_per_day))
+        return BeatSeries(
+            sample_rate=float(summary.sample_rate),
+            bph=float(summary.bph),
+            duration_s=float(summary.duration_s),
+            beats_detected=int(summary.beats_detected),
+            missing_beats=int(summary.missing_beats),
+            rate_s_per_day=float(summary.rate_s_per_day),
+            k=k,
+            t_s=t_s,
+            timing_residual_s=timing_res,
+            energy_rel=energy_rel,
+            outliers=n_out,
+            outlier_t_s=outlier_t,
+            lift_angle_deg=float(summary.lift_angle_deg),
+            p1_s=p1_s,
+            p2_s=p2_s,
+            p3_s=p3_s,
+            e1=e1,
+            e2=e2,
+            e3=e3,
+            pre_p1_db=pre_p1_db,
+            amplitude_deg=amp_deg,
+            _native=(handle, fp),
+        )
     beats, missed = _detect(x, fs, bph, lift_angle_deg)
     good = [b for b in beats if math.isfinite(b.t_fine)]
     if len(good) < MIN_BEATS:
@@ -476,6 +602,79 @@ def spectral_report(
     series: BeatSeries, escape_teeth: int = DEFAULT_ESCAPE_TEETH
 ) -> GearTrainReport:
     """Spectra of both series and the escape / fourth wheel components (cheap: no detection)."""
+    handle = _native_gear_handle(series)
+    if handle is not None and _nb.have(
+        "advtg_gear_recompute",
+        "advtg_gear_get_summary",
+        "advtg_gear_get_components",
+        "advtg_gear_spectra_len",
+        "advtg_gear_spectra_copy",
+    ):
+        import ctypes
+
+        cdll = _nb.lib()
+        assert cdll is not None
+        hp = ctypes.c_void_p(handle.ptr)
+        if int(cdll.advtg_gear_recompute(hp, int(escape_teeth))) == 0:
+            summary = _nb.NativeGearSummaryStruct()
+            cdll.advtg_gear_get_summary(hp, ctypes.byref(summary))
+            comps_c = (_nb.NativeGearComponentStruct * 4)()
+            cdll.advtg_gear_get_components(hp, comps_c)
+            ls_len = ctypes.c_int64(0)
+            fft_len = ctypes.c_int64(0)
+            cdll.advtg_gear_spectra_len(hp, ctypes.byref(ls_len), ctypes.byref(fft_len))
+            n_ls = max(0, int(ls_len.value))
+            n_fft = max(0, int(fft_len.value))
+
+            def _copy_spec(kind: int) -> Spectrum:
+                freqs = np.empty(n_ls, dtype=np.float64)
+                lsp = np.empty(n_ls, dtype=np.float64)
+                ff = np.empty(n_fft, dtype=np.float64)
+                fa = np.empty(n_fft, dtype=np.float64)
+                cdll.advtg_gear_spectra_copy(
+                    hp,
+                    kind,
+                    _nb.ptr(freqs),
+                    _nb.ptr(lsp),
+                    n_ls,
+                    _nb.ptr(ff),
+                    _nb.ptr(fa),
+                    n_fft,
+                )
+                return Spectrum(freqs_hz=freqs, ls_power=lsp, fft_freqs_hz=ff, fft_amplitude=fa)
+
+            timing = _copy_spec(0)
+            energy = _copy_spec(1)
+            comps = tuple(
+                Component(
+                    name=COMPONENT_ESCAPE if comps_c[i].name == 0 else COMPONENT_FOURTH,
+                    series=SERIES_TIMING if comps_c[i].series == 0 else SERIES_ENERGY,
+                    expected_period_s=float(comps_c[i].expected_period_s),
+                    period_s=float(comps_c[i].period_s),
+                    amplitude=float(comps_c[i].amplitude),
+                    rate_ripple_s_per_day=float(comps_c[i].rate_ripple_s_per_day),
+                    fap=float(comps_c[i].fap),
+                    resolvable=bool(comps_c[i].resolvable),
+                )
+                for i in range(4)
+            )
+            wmask = int(summary.warning_mask)
+            warns = []
+            if wmask & 1:
+                warns.append("short_for_escape")
+            if wmask & 2:
+                warns.append("short_for_fourth")
+            if wmask & 4:
+                warns.append("many_missing")
+            return GearTrainReport(
+                series=series,
+                escape_teeth=int(escape_teeth),
+                escape_period_s=float(summary.escape_period_s),
+                timing=timing,
+                energy=energy,
+                components=comps,
+                warnings=tuple(warns),
+            )
     span = float(series.t_s[-1] - series.t_s[0])
     f_hi = 1.0 / (MIN_PERIOD_BEATS * beat_period_s(series.bph))
     df = 1.0 / (OVERSAMPLE * span)

@@ -1,0 +1,95 @@
+{
+ "app_version": "2.0.1",
+ "git": "7046687",
+ "engine": "C++20 v2.0.0 [avx512] x86_64 SSE4.2 AVX2 FMA BMI2 AVX512F+DQ+BW+VL",
+ "watches": {
+  "miyota_9015.flac": [
+   28800,
+   51.0,
+   false
+  ],
+  "4r36.flac": [
+   21600,
+   53.0,
+   false
+  ],
+  "SeagullST1901.flac": [
+   21600,
+   47.0,
+   false
+  ],
+  "hamilton_h50.flac": [
+   21600,
+   50.0,
+   false
+  ],
+  "hamilton_h50new.flac": [
+   21600,
+   50.0,
+   false
+  ],
+  "nh34.flac": [
+   21600,
+   53.0,
+   false
+  ],
+  "tmi_vh31.flac": [
+   14400,
+   null,
+   true
+  ],
+  "citizen_H874.flac": [
+   3600,
+   null,
+   true
+  ],
+  "bulova_nm10.flac": [
+   57600,
+   null,
+   true
+  ],
+  "boluva_nm10_new.flac": [
+   57600,
+   null,
+   true
+  ]
+ },
+ "pps": [
+  "pps_48000Hz.flac",
+  "pps_44100Hz.flac"
+ ],
+ "files": [
+  "4r36/beats.csv",
+  "4r36/live.jsonl",
+  "4r36/metrics.json",
+  "SeagullST1901/beats.csv",
+  "SeagullST1901/live.jsonl",
+  "SeagullST1901/metrics.json",
+  "boluva_nm10_new/beats.csv",
+  "boluva_nm10_new/live.jsonl",
+  "boluva_nm10_new/metrics.json",
+  "bulova_nm10/beats.csv",
+  "bulova_nm10/live.jsonl",
+  "bulova_nm10/metrics.json",
+  "citizen_H874/beats.csv",
+  "citizen_H874/live.jsonl",
+  "citizen_H874/metrics.json",
+  "hamilton_h50/beats.csv",
+  "hamilton_h50/live.jsonl",
+  "hamilton_h50/metrics.json",
+  "hamilton_h50new/beats.csv",
+  "hamilton_h50new/live.jsonl",
+  "hamilton_h50new/metrics.json",
+  "miyota_9015/beats.csv",
+  "miyota_9015/live.jsonl",
+  "miyota_9015/metrics.json",
+  "nh34/beats.csv",
+  "nh34/live.jsonl",
+  "nh34/metrics.json",
+  "pps_44100Hz/pulses.csv",
+  "pps_48000Hz/pulses.csv",
+  "tmi_vh31/beats.csv",
+  "tmi_vh31/live.jsonl",
+  "tmi_vh31/metrics.json"
+ ]
+}

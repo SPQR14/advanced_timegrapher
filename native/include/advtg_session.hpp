@@ -61,6 +61,10 @@ public:
     const std::vector<core::NativeWindowRate>& metric_windows() const { return windows_; }
     const std::vector<std::string>& metric_warnings() const { return metric_warnings_; }
     const std::vector<std::string>& detector_warnings() const { return detector_->warnings(); }
+    const std::vector<advtg_warning>& metric_warning_codes() const { return metric_warning_codes_; }
+    const std::vector<advtg_warning>& detector_warning_codes() const {
+        return detector_->warning_codes();
+    }
     core::NativeDetectorStats detector_stats() const { return detector_->stats(); }
     std::int64_t display_pre() const { return display_pre_; }
     std::int64_t display_len() const { return display_len_; }
@@ -104,6 +108,7 @@ private:
     std::vector<double> tpl_env_[2];
     std::vector<core::NativeWindowRate> windows_;
     std::vector<std::string> metric_warnings_;
+    std::vector<advtg_warning> metric_warning_codes_;
     double adc_ppm_ = 0.0, adc_sigma_ppm_ = 0.0;
 
     // clock

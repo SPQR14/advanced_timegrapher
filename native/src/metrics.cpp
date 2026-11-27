@@ -13,6 +13,7 @@
 #include "advtg_bits.hpp"
 #include "advtg_metrics.hpp"
 #include "advtg_simd.hpp"
+#include "advtg_warnings.hpp"
 
 namespace advtg::core {
 namespace {
@@ -688,10 +689,14 @@ void compute_metrics_cpp(const NativeBeat* beats, std::size_t n_beats,
                          const NativeTemplateInput& tpl0, const NativeTemplateInput& tpl1,
                          const NativeMetricsConfig& cfg, NativeMetricsResult& out,
                          std::vector<NativeWindowRate>& windows_out,
-                         std::vector<std::string>& warnings_out) {
+                         std::vector<std::string>& warnings_out,
+                         std::vector<advtg_warning>* warning_codes_out) {
     out = NativeMetricsResult{};
     windows_out.clear();
     warnings_out.clear();
+    std::vector<advtg_warning> local_codes;
+    std::vector<advtg_warning>& codes = warning_codes_out ? *warning_codes_out : local_codes;
+    codes.clear();
     const double fs = cfg.sample_rate;
     const double la = cfg.has_lift_angle ? cfg.lift_angle_deg : kDefaultLiftAngleDeg;
     out.n_beats = static_cast<std::int64_t>(n_beats);
@@ -784,8 +789,8 @@ void compute_metrics_cpp(const NativeBeat* beats, std::size_t n_beats,
         out.span_s = (tmax - tmin) / fs;
     }
     if (cfg.adc_drift_ppm == 0.0 && cfg.adc_drift_sigma_ppm == 0.0) {
-        warnings_out.emplace_back(
-            "marcha sin calibrar: no se ha corregido la deriva del reloj de la tarjeta (fase 4)");
+        advtg::warn::append(codes, warnings_out,
+                            advtg::warn::make(ADVTG_WARN_RATE_UNCALIBRATED));
     } else {
         out.rate_calibrated = 1;
     }
@@ -794,11 +799,9 @@ void compute_metrics_cpp(const NativeBeat* beats, std::size_t n_beats,
     const auto fit = memo.get(k_use.data(), t_use.data(), k_use.size(), cfg.outlier_sigma,
                               cfg.max_iterations, cfg.min_beats_per_parity, true, false);
     if (!fit.valid) {
-        char buf[128];
-        std::snprintf(buf, sizeof(buf),
-                      "menos de %d batimientos válidos por paridad: sin cifras",
-                      cfg.min_beats_per_parity);
-        warnings_out.emplace_back(buf);
+        advtg::warn::append(
+            codes, warnings_out,
+            advtg::warn::make(ADVTG_WARN_FEW_BEATS, cfg.min_beats_per_parity));
         return;
     }
 
@@ -964,13 +967,10 @@ void compute_metrics_cpp(const NativeBeat* beats, std::size_t n_beats,
             cfg.trend_min_change_s_per_day) {
         out.rate_trend_flag = 1;
         const double change = out.rate_trend_s_per_day_per_min * out.span_s / 60.0;
-        char buf[256];
-        std::snprintf(buf, sizeof(buf),
-                      "la marcha cambia durante la medida: %+.1f s/d en %.0f s (%+.1f ± %.1f "
-                      "s/d por minuto); el reloj aún se está asentando",
-                      change, out.span_s, out.rate_trend_s_per_day_per_min,
-                      out.rate_trend_sigma_s_per_day_per_min);
-        warnings_out.emplace_back(buf);
+        advtg::warn::append(codes, warnings_out,
+                            advtg::warn::make(ADVTG_WARN_RATE_TREND, 0, change, out.span_s,
+                                              out.rate_trend_s_per_day_per_min,
+                                              out.rate_trend_sigma_s_per_day_per_min));
     }
 
     if (!cfg.quartz) {
@@ -1041,8 +1041,7 @@ void compute_metrics_cpp(const NativeBeat* beats, std::size_t n_beats,
         } else {
             chosen = eval_be_cand(memo, 4, kf_drop.data(), tf_drop.data(), kf_drop.size(), cfg);
             chosen.point = 4;
-            warnings_out.emplace_back(
-                "error de batimiento medido en t_fine (inicio de P3): sin instantes de P1 válidos");
+            advtg::warn::append(codes, warnings_out, advtg::warn::make(ADVTG_WARN_BE_ON_T_FINE));
         }
         out.beat_error_point = chosen.point;
         out.beat_error_ms = chosen.be;
@@ -1079,18 +1078,14 @@ void compute_metrics_cpp(const NativeBeat* beats, std::size_t n_beats,
         }
         if (!cfg.has_lift_angle) {
             out.amplitude_indicative = 1;
-            char buf[160];
-            std::snprintf(buf, sizeof(buf),
-                          "ángulo de levantamiento desconocido: se usan %g°; la amplitud es orientativa",
-                          kDefaultLiftAngleDeg);
-            warnings_out.emplace_back(buf);
+            advtg::warn::append(
+                codes, warnings_out,
+                advtg::warn::make(ADVTG_WARN_UNKNOWN_LIFT_ANGLE, 0, kDefaultLiftAngleDeg));
         }
         if (!is_finite(out.amplitude_deg)) {
-            char buf[160];
-            std::snprintf(buf, sizeof(buf),
-                          "amplitud no disponible (sin t_lift en las plantillas o fuera de %g-%g°)",
-                          cfg.amp_lo_deg, cfg.amp_hi_deg);
-            warnings_out.emplace_back(buf);
+            advtg::warn::append(
+                codes, warnings_out,
+                advtg::warn::make(ADVTG_WARN_NO_AMPLITUDE, 0, cfg.amp_lo_deg, cfg.amp_hi_deg));
         } else if (is_finite(amps[0]) && is_finite(amps[1]) &&
                    std::fabs(amps[0] - amps[1]) > cfg.amplitude_mismatch_deg) {
             const double r0 = drop_rise_samples(tpl0, fs);
@@ -1103,24 +1098,18 @@ void compute_metrics_cpp(const NativeBeat* beats, std::size_t n_beats,
                 if (ro >= cfg.drop_sharpness_ratio * rp) sharp = p;
             }
             if (sharp < 0) {
-                char buf[160];
-                std::snprintf(buf, sizeof(buf),
-                              "amplitud de tic y tac distinta (%.0f° / %.0f°): revisar la "
-                              "identificación de P1/P3",
-                              amps[0], amps[1]);
-                warnings_out.emplace_back(buf);
+                advtg::warn::append(
+                    codes, warnings_out,
+                    advtg::warn::make(ADVTG_WARN_AMP_MISMATCH, 0, amps[0], amps[1]));
             } else {
-                const char* names[2] = {"tic", "tac"};
                 const double mean_orig = out.amplitude_deg;
                 out.amplitude_parity = sharp + 1;  // 1="tic", 2="tac"
                 out.amplitude_deg = amps[sharp];
                 out.amplitude_la_uncertainty_deg *= amps[sharp] / mean_orig;
-                char buf[192];
-                std::snprintf(buf, sizeof(buf),
-                              "amplitud tomada del %s (%.0f°): la caída del %s no es nítida "
-                              "(daría %.0f°)",
-                              names[sharp], amps[sharp], names[1 - sharp], amps[1 - sharp]);
-                warnings_out.emplace_back(buf);
+                advtg::warn::append(
+                    codes, warnings_out,
+                    advtg::warn::make(ADVTG_WARN_AMP_ONE_PARITY, sharp, amps[sharp],
+                                      amps[1 - sharp]));
             }
         }
     }

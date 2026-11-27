@@ -19,6 +19,7 @@
 #include "advtg_detector.hpp"
 #include "advtg_dsp.hpp"
 #include "advtg_simd.hpp"
+#include "advtg_warnings.hpp"
 
 namespace advtg::core {
 namespace {
@@ -365,6 +366,7 @@ struct BeatDetector::Impl {
     double lock_sample = 0.0;
     std::int64_t n_p[3] = {0, 0, 0};
     std::vector<std::string> warnings;
+    std::vector<advtg_warning> warning_codes;
     bool locked = false;
     bool ever_locked = false;
     double period = 8000.0;
@@ -544,6 +546,7 @@ struct BeatDetector::Impl {
         lock_sample = 0.0;
         n_p[0] = n_p[1] = n_p[2] = 0;
         warnings.clear();
+        warning_codes.clear();
         locked = false;
         ever_locked = false;
         period = period_nom;
@@ -706,15 +709,9 @@ struct BeatDetector::Impl {
 
     void warn_interference(const dsp::InterferenceFilter& f) {
         if (f.peak_excess_db < kInterferenceWarnDb) return;
-        for (const auto& w : warnings) {
-            if (starts_with(w, "interferencia")) return;
-        }
-        char buf[256];
-        std::snprintf(buf, sizeof(buf),
-                      "interferencia a %.1f kHz, %.0f dB sobre el ruido de fondo (filtrada): "
-                      "aleja el micrófono de cargadores, pantallas o reguladores de luz",
-                      f.peak_hz / 1000.0, f.peak_excess_db);
-        warnings.emplace_back(buf);
+        advtg::warn::append_unique_code(
+            warning_codes, warnings,
+            advtg::warn::make(ADVTG_WARN_INTERFERENCE, 0, f.peak_hz / 1000.0, f.peak_excess_db));
     }
 
     void warn_no_lock(double end_idx) {
@@ -723,14 +720,10 @@ struct BeatDetector::Impl {
                 std::max(5.0 * fs, 2.0 * static_cast<double>(W_acq))) {
             return;
         }
-        for (const auto& w : warnings) {
-            if (starts_with(w, "sin enganche")) return;
-        }
-        char buf[256];
-        std::snprintf(buf, sizeof(buf),
-                      "sin enganche tras %.1f s: ¿BPH mal configurado (%g) o señal sin batimientos?",
-                      (end_idx - static_cast<double>(first_index)) / fs, c.bph);
-        warnings.emplace_back(buf);
+        advtg::warn::append_unique_code(
+            warning_codes, warnings,
+            advtg::warn::make(ADVTG_WARN_NO_LOCK, 0,
+                              (end_idx - static_cast<double>(first_index)) / fs, c.bph));
     }
 
     void lose_lock() {
@@ -811,21 +804,9 @@ struct BeatDetector::Impl {
         if (parity) {
             const double dev = period / period_nom - 1.0;
             if (std::fabs(dev) > c.period_warn) {
-                bool has_w = false;
-                for (const auto& ws : warnings) {
-                    if (starts_with(ws, "periodo observado")) {
-                        has_w = true;
-                        break;
-                    }
-                }
-                if (!has_w) {
-                    char buf[256];
-                    std::snprintf(buf, sizeof(buf),
-                                  "periodo observado %+.2f %% respecto al nominal (%g BPH): "
-                                  "¿BPH mal configurado?",
-                                  dev * 100.0, c.bph);
-                    warnings.emplace_back(buf);
-                }
+                advtg::warn::append_unique_code(
+                    warning_codes, warnings,
+                    advtg::warn::make(ADVTG_WARN_WRONG_BPH, 0, dev * 100.0, c.bph));
             }
         }
     }
@@ -2047,6 +2028,10 @@ NativeDetectorStats BeatDetector::stats() const {
 }
 
 const std::vector<std::string>& BeatDetector::warnings() const { return impl_->warnings; }
+
+const std::vector<advtg_warning>& BeatDetector::warning_codes() const {
+    return impl_->warning_codes;
+}
 
 void BeatDetector::templates(NativeTemplateHeader& hdr0, std::vector<double>& env0,
                              NativeTemplateHeader& hdr1, std::vector<double>& env1) const {
