@@ -1,6 +1,6 @@
 # Qt 6 Widgets application (phase 0: skeleton). Executable: adv-tg-qt (adv-tg stays the 2.x
 # Python application until the 3.0 release).
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets PrintSupport Network)
 qt_standard_project_setup()
 
 qt_add_executable(advtg_app src/main.cpp)

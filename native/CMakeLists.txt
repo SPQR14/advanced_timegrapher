@@ -43,6 +43,7 @@ option(ADVTG_WITH_AUDIO_CAPTURE "PortAudio capture (desktop)" ${_advtg_capture_d
 option(ADVTG_WITH_RENDERER "CPU graph rasterizer (desktop Qt plots)" ON)
 option(ADVTG_STATIC "Static library (iOS / embedding) instead of a shared one" OFF)
 option(ADVTG_BUILD_EXAMPLES "Build the plain-C example (examples/advtg_replay.c)" OFF)
+option(ADVTG_STATIC_MSVC_RUNTIME "Static MSVC CRT (/MT) for self-contained Python ctypes DLL" ON)
 
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _proc)
 if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
@@ -113,11 +114,11 @@ set_target_properties(${_libname} PROPERTIES
 if(WIN32)
   set_target_properties(${_libname} PROPERTIES PREFIX "")
 endif()
-if(MSVC)
+if(MSVC AND ADVTG_STATIC_MSVC_RUNTIME)
   # Static C/C++ runtime (/MT): the DLL must not need MSVCP140.dll / VCRUNTIME140.dll, which a
   # clean Windows does not have and which ctypes would not find next to it in the bundle.
   set_property(TARGET ${_libname} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-elseif(WIN32)
+elseif(WIN32 AND NOT MSVC)
   message(WARNING "advtg_native on Windows should be built with MSVC: MinGW would make the DLL "
                   "depend on libstdc++-6.dll / libgcc_s / libwinpthread (not self-contained)")
 endif()

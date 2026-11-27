@@ -53,6 +53,9 @@ Dependencias que se sustituyen:
 | soundfile | libsndfile (LGPL-2.1, enlace dinámico) |
 | numpy | Ya sustituido por el motor |
 | certifi | Almacén de certificados del sistema vía Qt Network |
+| zipfile (`utils/report.py`) | `miniz` (MIT, enlace estático / vcpkg) |
+| json (`adc_calibration.json`, API GitHub) | `nlohmann/json` (MIT, solo cabeceras, sin dependencia de Qt para reutilización móvil) |
+| logging y rutas (`utils/logger_setup.py`, `config_dir()`) | Helpers C++ multiplataforma con las rutas de `GEMINI.md` (`~/Library/Logs/adv_tg`, `%LOCALAPPDATA%\adv_tg\logs`, `~/.local/state/adv_tg/logs` y `config_dir()`); assets estáticos (`watch_db.csv`, iconos) en Qt Resource System (`.qrc`) |
 | pytest | Catch2 o GoogleTest + ctest |
 | PyInstaller | CMake + windeployqt / macdeployqt / linuxdeploy + CPack |
 
@@ -85,26 +88,38 @@ Dependencias que se sustituyen:
   - Catch2 + ctest en CI;
   - Qt 6 en los runners (Linux EL9, macOS, Windows MSVC).
 - **Decisiones cerradas** (sección 6).
-- **Salida:** CI compila un "hola mundo" Qt C++ en las tres plataformas y ctest ejecuta las
-  comparaciones con los archivos dorados contra el motor actual.
+- **Salida:** CI compila un "hola mundo" Qt C++ en las tres plataformas y en contenedor
+  `almalinux:9` (`glibc 2.34`, job `cpp-app-el9`), y ctest ejecuta las comparaciones con
+  los archivos dorados contra el motor actual.
 
 ### Fase 1 — Completar la biblioteca C++ por debajo de la GUI (versión 2.1)
 
-Todo lo que la GUI llama y aún es Python pasa a C++ detrás de la API C:
+Todo lo que la GUI llama y aún es Python pasa a C++ detrás de la API C, manteniendo esta
+capa **sin dependencia de Qt** (en `native/` o en una biblioteca intermedia `core_app/`) para
+reutilizarla en futuras apps móviles:
 
 - E/S de audio con libsndfile, incluidas las etiquetas Vorbis/WAV `ADV_TG_*` que usan la
   calibración y la repetición (`utils/audio_files.py`).
-- Calibración del ADC con GPS PPS (`utils/adc_calibration.py`, `tools/adc_calibration.py`).
+- Calibración del ADC con GPS PPS (`utils/adc_calibration.py`, `tools/adc_calibration.py`) y
+  lectura/escritura atómica de `adc_calibration.json` con `nlohmann/json`.
 - Diagnóstico y rasgos (`analysis/features.py`) y el análisis completo del tren de rodaje
   (hoy solo sus núcleos son nativos).
-- Base de calibres (CSV), informes CSV y utilidades de seguridad (`utils/security.py`:
-  saneado de CSV y nombres de archivo).
+- Base de calibres (CSV), informes `.zip` (`utils/report.py` con `miniz`: `report.txt`,
+  logs, `adc_calibration.json` y grabación `.flac`), exportación CSV y utilidades de
+  seguridad (`utils/security.py`: saneado de CSV y nombres de archivo).
+- Logger y rutas escribibles multiplataforma conforme a `GEMINI.md` (`~/Library/Logs/adv_tg`,
+  `%LOCALAPPDATA%\adv_tg\logs`, `~/.local/state/adv_tg/logs` y `config_dir()`).
+- Revisar `advtg_session_metric_warnings` y `advtg_session_detector_warnings` en `advtg.h`
+  (hoy cadenas fijas en español) hacia códigos localizables para mantener la paridad bilingüe
+  EN/ES en la GUI.
 - Generador sintético (`mock/`) para tests C++.
-- **Salida:** la app Python usa estas funciones nativas; archivos dorados y suite Python en
-  verde; se publica como 2.1.
+- **Salida:** la app Python usa estas funciones nativas; archivos dorados (incluidos batch y
+  PPS en `tests/cpp/`) y suite Python en verde; se publica como 2.1.
 
 ### Fase 2 — Runtime en vivo en C++: un proceso, sin GIL (versión 2.2)
 
+- `portaudio` pasa a ser dependencia explícita del build y empaquetado C++ (`vcpkg.json` en
+  Windows, Homebrew en macOS, `libportaudio2` en Linux), al dejar de depender de `sounddevice`.
 - Un objeto `LiveRuntime` C++ con hilos sustituye a `capture_process`, `analysis_process`,
   `process_capture`, `capture_worker`, `measure_worker`, `pps_worker` y `file_replay`:
   - hilo de captura: PortAudio y escritura en el `SampleStream` sin bloqueos (ya existe);
@@ -128,8 +143,11 @@ Se construye en paralelo a la GUI Python; se publica como beta junto a la 2.x es
 - **Gráficas:** cinta de papel, osciloscopio con marcadores P1/P2/P3 y forma de onda en vivo,
   con zoom, centrado, exportación e impresión (`QPrinter`). QCustomPlot o QPainter propio.
   Hay que verificar con escalado 1.0×, 1.25×, 1.5× y 2.0× (la lección del fallo de la 2.0.0).
+  Se retira `native/src/graph_renderer.cpp` (`ADVTG_WITH_RENDERER`, desactivado por defecto en
+  `native_plots.py`).
 - **Diálogos** (`dialogs.py`, `analysis_dialog.py`), aviso de actualización
-  (QNetworkAccessManager), política MSIX y traducciones EN/ES.
+  (`QNetworkAccessManager` + `nlohmann/json`), política MSIX, traducciones EN/ES y assets
+  estáticos (`watch_db.csv`, iconos) embebidos vía Qt Resource System (`.qrc`).
 - **Hoja de estilo:** los QSS actuales sirven tal cual en Qt C++.
 - **Salida:**
   - lista de paridad de funciones completa, revisada con capturas lado a lado en las tres
@@ -151,8 +169,11 @@ Se construye en paralelo a la GUI Python; se publica como beta junto a la 2.x es
   AppImage; deb y rpm con CPack o los scripts actuales; las mismas verificaciones en Debian 12,
   Ubuntu 22.04/24.04, Rocky 9 y Fedora.
 - **macOS:** macdeployqt; mínimo macOS 11; DMG.
-- **Windows:** windeployqt; MSVC con runtime estático o el runtime de Qt incluido; Inno Setup
-  + MSIX para la Store.
+- **Windows:** windeployqt; los binarios oficiales de Qt 6 (`aqtinstall`) y `vcpkg`
+  (`x64-windows`) enlazan con el CRT dinámico (`/MD`), por lo que Inno Setup y MSIX
+  distribuirán el VC++ Redistributable (o sus DLLs). `advtg_native` conserva `/MT` por defecto
+  en 2.x para `ctypes` (`ADVTG_STATIC_MSVC_RUNTIME=ON`) y en 3.0 se compila todo en `/MD`
+  (`-DADVTG_STATIC_MSVC_RUNTIME=OFF`).
 - `check_native_deps.py` se amplía a todo el bundle.
 - Los mismos cinco instalables con los mismos nombres, `SHA256SUMS.txt` y firma GPG.
 
@@ -180,11 +201,15 @@ Se construye en paralelo a la GUI Python; se publica como beta junto a la 2.x es
 
 1. **GUI: Qt 6 Widgets.** Porte directo de la interfaz actual, con los mismos widgets y QSS.
    QML se reconsiderará solo para una futura app móvil, sin tocar el motor.
-2. **Gráficas: QCustomPlot** (GPL-3, un solo archivo, con impresión y exportación).
+2. **Gráficas: QCustomPlot** (GPL-3, un solo archivo, con impresión vía `Qt6::PrintSupport` y
+   exportación). Frente a Qt 6.11 requiere validar un PoC antes de la fase 3 (parche
+   `QT_VERSION_CHECK(6, 2, 0)` para `moc` en QCustomPlot 2.1.1, `/bigobj` en MSVC y
+   supresión de avisos de deprecación en su unidad de compilación); si no compensa, se usa
+   `QPainter` propio (las tres gráficas solo dibujan unos miles de puntos).
 3. **Dependencias:**
    - Qt 6.11.3 oficial instalado con aqtinstall 3.3.0;
    - vcpkg en modo manifiesto (`vcpkg.json`, baseline vcpkg 2026.10.16, commit `9eec002`)
-     para libsndfile y Catch2 en Windows;
+     para `libsndfile`, `catch2`, `portaudio`, `nlohmann-json` y `miniz` en Windows;
    - paquetes del sistema en Linux y macOS;
    - Catch2 v3.16.1 por FetchContent cuando el sistema no trae Catch2 3.
 4. **Paquete Python:** se congela en 2.x como biblioteca de investigación (wheel puro con la
@@ -196,10 +221,10 @@ Se construye en paralelo a la GUI Python; se publica como beta junto a la 2.x es
 |---|---|---|
 | Archivos dorados de v2.0.1 (10 relojes: lotes + en vivo; 2 PPS) | `tests/golden/`, `scripts/make_golden.py` | Generados y deterministas (`--check`) |
 | Test Python contra los dorados (motor nativo) | `tests/test_golden.py` | 23 tests en verde |
-| Test C++ contra los dorados, a través de `advtg.h` y libsndfile | `tests/cpp/` | 10 grabaciones, 3 902 comprobaciones en verde |
+| Test C++ contra los dorados, a través de `advtg.h` y libsndfile | `tests/cpp/` | 10 relojes en vivo, 3 902 comprobaciones en verde (lotes y PPS entran en fase 1) |
 | Línea base y su contrato `ADV_TG_BENCH` | `scripts/baseline.py`, `adv_tg/tools/bench.py` | Medida en Linux; `build.yml` mide los binarios empaquetados de las 3 plataformas |
-| Esqueleto C++ (CMake raíz, `app/` Qt 6 Widgets, Catch2) | `CMakeLists.txt`, `app/`, `vcpkg.json` | Compila sin avisos; `--version` y `--smoke-test` |
-| CI de la app C++ en las 3 plataformas | `ci.yml`, job `cpp-app` | Pendiente de su primera ejecución |
+| Esqueleto C++ (CMake raíz, `app/` Qt 6 Widgets, Catch2) | `CMakeLists.txt`, `app/`, `vcpkg.json` | Compila sin avisos; `--version`, `--smoke-test` y `ADV_TG_BENCH=startup` |
+| CI de la app C++ en las 3 plataformas + AlmaLinux 9 | `ci.yml`, jobs `cpp-app` y `cpp-app-el9` | Pendiente de su primera ejecución |
 
 Hallazgo de la fase 0: en los Hamilton H-50 (P1 débil, Notch activo), la referencia numpy
 elige otro candidato de frente de desbloqueo (`t_p1`, hasta 36 muestras) en algunos latidos.

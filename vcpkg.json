@@ -9,6 +9,9 @@
       "default-features": false,
       "features": [ "external-libs" ]
     },
-    "catch2"
+    "catch2",
+    "portaudio",
+    "nlohmann-json",
+    "miniz"
   ]
 }
