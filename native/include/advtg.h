@@ -51,6 +51,18 @@
 extern "C" {
 #endif
 
+/* ------------------------------------------------------------------ return codes */
+enum {
+    ADVTG_OK = 0,
+    ADVTG_ERR_INVALID = -1,
+    ADVTG_ERR_IO = -2,
+    ADVTG_ERR_FORMAT = -3,
+    ADVTG_ERR_CORRUPT_STORE = -4,
+    ADVTG_ERR_NOT_ENOUGH_BEATS = -5,
+    ADVTG_ERR_MEMORY_LIMIT = -6,
+    ADVTG_ERR_UNAVAILABLE = -7
+};
+
 /* ------------------------------------------------------------------ beat flags */
 enum {
     ADVTG_BEAT_P1_MISSING = 1,
@@ -93,7 +105,7 @@ typedef struct advtg_adc_drift {
     int64_t n_points;
     int64_t n_segments;
     int32_t level;           /* ADVTG_CLOCK_* */
-    int32_t method;          /* 0 none, 1 host-envelope, 2 reference, 3 manual */
+    int32_t method;          /* 0 none, 1 host-envelope, 2 reference, 3 manual, 4 pps */
     int32_t note_kind;       /* ADVTG_DRIFT_NOTE_* */
     int32_t _pad;
 } advtg_adc_drift;
@@ -144,6 +156,34 @@ typedef struct advtg_detector_stats {
     double normalizer_gain_db;
     int32_t has_lock_sample, locked, has_normalizer, started, finished, has_norm_next;
 } advtg_detector_stats;
+
+/* ------------------------------------------------------------------ localizable warnings */
+enum {
+    ADVTG_WARN_NONE = 0,
+    ADVTG_WARN_INTERFERENCE = 1,          /* args: [freq_khz, excess_db] */
+    ADVTG_WARN_NO_LOCK = 2,               /* args: [seconds, bph] */
+    ADVTG_WARN_WRONG_BPH = 3,             /* args: [dev_pct, bph] */
+    ADVTG_WARN_RATE_UNCALIBRATED = 4,     /* no args */
+    ADVTG_WARN_FEW_BEATS = 5,             /* param_int: min_beats_per_parity */
+    ADVTG_WARN_RATE_TREND = 6,            /* args: [change_spd, span_s, trend_spd_min, sigma] */
+    ADVTG_WARN_BE_ON_T_FINE = 7,          /* no args */
+    ADVTG_WARN_UNKNOWN_LIFT_ANGLE = 8,    /* args: [default_lift_deg] */
+    ADVTG_WARN_NO_AMPLITUDE = 9,          /* args: [amp_lo_deg, amp_hi_deg] */
+    ADVTG_WARN_AMP_MISMATCH = 10,         /* args: [amp_tic_deg, amp_tac_deg] */
+    ADVTG_WARN_AMP_ONE_PARITY = 11,       /* param_int: 0=tic,1=tac; args: [used_deg, other_deg] */
+    ADVTG_WARN_AMP_MISMATCH_INDICATIVE = 12, /* args: [tic_deg, tac_deg] */
+    ADVTG_WARN_SATURATED_BEATS = 13       /* param_int: count; args: [suggest_normalize (0/1)] */
+};
+
+typedef struct advtg_warning {
+    int32_t code;
+    int32_t param_int;
+    double args[4];
+} advtg_warning;
+
+/* Format a warning into buf in "es" or "en"; returns full length in bytes. */
+ADVTG_C_API int32_t advtg_format_warning(const advtg_warning* w, const char* lang, char* buf,
+                                         int32_t cap);
 
 /* ------------------------------------------------------------------ session */
 typedef struct advtg_session_config {
@@ -230,12 +270,123 @@ ADVTG_C_API int32_t advtg_session_metric_warnings(const advtg_session* s, char* 
                                                   int32_t cap);
 ADVTG_C_API int32_t advtg_session_detector_warnings(const advtg_session* s, char* buf,
                                                     int32_t cap);
+ADVTG_C_API int32_t advtg_session_metric_warning_codes(const advtg_session* s,
+                                                       advtg_warning* out, int32_t cap);
+ADVTG_C_API int32_t advtg_session_detector_warning_codes(const advtg_session* s,
+                                                         advtg_warning* out, int32_t cap);
 ADVTG_C_API int advtg_session_detector_stats(const advtg_session* s, advtg_detector_stats* out);
 /* (samples before the reference instant, total samples) of the oscilloscope window. */
 ADVTG_C_API void advtg_session_display_window(const advtg_session* s, int64_t* pre,
                                               int64_t* len);
 /* Last error message (thread-local; s may be NULL). */
 ADVTG_C_API const char* advtg_session_last_error(const advtg_session* s);
+
+/* ------------------------------------------------------------------ batch detector & metrics */
+typedef struct advtg_detector_config {
+    double sample_rate;
+    double bph;
+    double lift_angle_deg;       /* NaN or <= 0 -> 52.0 */
+    int32_t quartz;
+    int32_t normalize;
+} advtg_detector_config;
+
+typedef struct advtg_detector advtg_detector;
+
+ADVTG_C_API void advtg_detector_config_default(advtg_detector_config* cfg, double sample_rate,
+                                               double bph);
+ADVTG_C_API advtg_detector* advtg_detector_create(const advtg_detector_config* cfg);
+ADVTG_C_API void advtg_detector_destroy(advtg_detector* d);
+ADVTG_C_API void advtg_detector_reset(advtg_detector* d);
+/* Feed chunk[0..n) starting at start_index. Returns total beats produced (>= 0, or < 0 on error);
+ * copies up to cap items into out, and keeps all produced beats of this call available via
+ * advtg_detector_last_beats(). */
+ADVTG_C_API int64_t advtg_detector_process(advtg_detector* d, const double* chunk, size_t n,
+                                           int64_t start_index, advtg_beat* out, int64_t cap);
+ADVTG_C_API int64_t advtg_detector_flush(advtg_detector* d, advtg_beat* out, int64_t cap);
+ADVTG_C_API int64_t advtg_detector_last_beats(const advtg_detector* d, advtg_beat* out,
+                                              int64_t cap);
+ADVTG_C_API int advtg_detector_stats_get(const advtg_detector* d, advtg_detector_stats* out);
+ADVTG_C_API int32_t advtg_detector_warnings(const advtg_detector* d, char* buf, int32_t cap);
+ADVTG_C_API int32_t advtg_detector_warning_codes(const advtg_detector* d, advtg_warning* out,
+                                                 int32_t cap);
+
+typedef struct advtg_metrics_config {
+    double sample_rate;
+    double bph;
+    double lift_angle_deg;
+    double adc_drift_ppm;
+    double adc_drift_sigma_ppm;
+    double window_s;
+    double window_step_s;
+    int32_t quartz;
+    int32_t has_lift_angle;
+    int32_t compute_windows;
+    int32_t _pad;
+} advtg_metrics_config;
+
+ADVTG_C_API void advtg_metrics_config_default(advtg_metrics_config* cfg, double sample_rate,
+                                              double bph);
+/* Compute batch metrics over beats[0..n_beats) using templates from det (or empty if det == NULL).
+ * Thread-local windows and warnings from this call are readable via advtg_metrics_last_*(). */
+ADVTG_C_API int advtg_metrics_compute(const advtg_detector* det, const advtg_beat* beats,
+                                      size_t n_beats, const advtg_metrics_config* cfg,
+                                      advtg_metrics* out);
+ADVTG_C_API int64_t advtg_metrics_last_windows(advtg_window_rate* out, int64_t cap);
+ADVTG_C_API int32_t advtg_metrics_last_warnings(char* buf, int32_t cap);
+ADVTG_C_API int32_t advtg_metrics_last_warning_codes(advtg_warning* out, int32_t cap);
+
+/* ------------------------------------------------------------------ GPS PPS detector & calibrator */
+typedef struct advtg_pps_pulse {
+    double index;
+    double snr_db;
+    double peak;
+} advtg_pps_pulse;
+
+typedef struct advtg_pps_detector advtg_pps_detector;
+
+ADVTG_C_API advtg_pps_detector* advtg_pps_detector_create(double sample_rate,
+                                                          double threshold_sigma);
+ADVTG_C_API void advtg_pps_detector_destroy(advtg_pps_detector* d);
+ADVTG_C_API void advtg_pps_detector_reset(advtg_pps_detector* d, int64_t start_index);
+/* Feed chunk[0..n). Returns total pulses found (>= 0, or < 0 on error); copies up to cap into
+ * out and stores full list in d (readable via advtg_pps_detector_last_pulses). */
+ADVTG_C_API int64_t advtg_pps_detector_process(advtg_pps_detector* d, const double* chunk,
+                                               size_t n, int64_t start_index,
+                                               advtg_pps_pulse* out, int64_t cap);
+ADVTG_C_API int64_t advtg_pps_detector_last_pulses(const advtg_pps_detector* d,
+                                                   advtg_pps_pulse* out, int64_t cap);
+ADVTG_C_API int64_t advtg_pps_detector_rejected(const advtg_pps_detector* d);
+
+typedef struct advtg_pps_estimate {
+    advtg_adc_drift drift;
+    int64_t pulses;
+    int64_t used;
+    int64_t missing;
+    int64_t jumps;
+    int64_t rejected;
+    double span_s;
+    double jitter_us;
+    double excess;
+    int32_t valid;
+    int32_t ready;
+    char note[256];
+} advtg_pps_estimate;
+
+typedef struct advtg_pps_calibrator advtg_pps_calibrator;
+
+ADVTG_C_API advtg_pps_calibrator* advtg_pps_calibrator_create(double sample_rate,
+                                                              double nominal_period_s,
+                                                              double reference_sigma_ppm);
+ADVTG_C_API void advtg_pps_calibrator_destroy(advtg_pps_calibrator* c);
+ADVTG_C_API void advtg_pps_calibrator_reset(advtg_pps_calibrator* c);
+ADVTG_C_API int advtg_pps_calibrator_add(advtg_pps_calibrator* c, const double* indices,
+                                         size_t n);
+ADVTG_C_API int advtg_pps_calibrator_estimate(advtg_pps_calibrator* c, advtg_pps_estimate* out);
+/* Returns total segment points (>= 0); copies up to cap (t_s, residual_us) from last estimate. */
+ADVTG_C_API int64_t advtg_pps_calibrator_residuals(const advtg_pps_calibrator* c, double* t_s,
+                                                   double* residual_us, int64_t cap);
+ADVTG_C_API int advtg_pps_calibrate_samples(const double* samples, size_t n, double sample_rate,
+                                            double chunk_s, advtg_pps_estimate* out);
 
 /* ------------------------------------------------------------------ sample stream */
 /* Lock-free SPSC ring of float32 samples with a log of block stamps (core/sample_stream.py).
@@ -270,6 +421,408 @@ ADVTG_C_API int advtg_butter_bandpass_sos(int order, double lo_hz, double hi_hz,
                                           double* sos, int cap);
 ADVTG_C_API int advtg_sosfilt_zi(const double* sos, int n_sec, double* zi);
 ADVTG_C_API int64_t advtg_sosfiltfilt_padlen(const double* sos, int n_sec);
+
+/* ------------------------------------------------------------------ audio file I/O (libsndfile) */
+typedef struct advtg_audio_file_info {
+    int64_t frames;
+    int32_t sample_rate;
+    int32_t channels;
+    double duration_s;
+    char format[16];
+    char subtype[16];
+} advtg_audio_file_info;
+
+typedef struct advtg_audio_tag {
+    const char* key;
+    const char* value; /* NULL deletes the tag on update */
+} advtg_audio_tag;
+
+typedef void (*advtg_tag_cb)(const char* key, const char* value, void* user);
+
+ADVTG_C_API int advtg_set_sndfile_library(const char* path);
+ADVTG_C_API const char* advtg_audio_last_error(void);
+ADVTG_C_API int advtg_audio_info(const char* path, advtg_audio_file_info* out);
+/* Read decoded samples (interleaved float64) into out[0..cap). If out == NULL or cap is smaller
+ * than frames * channels, returns ADVTG_ERR_INVALID (call advtg_audio_info first).
+ * max_bytes <= 0 disables the memory limit check. comment_buf may be NULL. */
+ADVTG_C_API int advtg_audio_read_f64(const char* path, int64_t max_bytes, double* out,
+                                     size_t cap_samples, advtg_audio_file_info* info_out,
+                                     char* comment_buf, int32_t comment_cap);
+/* Select one channel from interleaved float64 (frames x channels). mode == -1 selects max_energy;
+ * mode >= 0 selects that channel index. */
+ADVTG_C_API int advtg_audio_select_channel(const double* interleaved, int64_t frames,
+                                           int32_t channels, int32_t mode, double* mono_out);
+ADVTG_C_API int advtg_audio_read_mono(const char* path, int32_t channel_mode, int64_t max_bytes,
+                                      double* out, size_t cap_frames,
+                                      advtg_audio_file_info* info_out);
+ADVTG_C_API int advtg_audio_read_tags(const char* path, advtg_tag_cb cb, void* user);
+ADVTG_C_API int advtg_audio_update_tags(const char* path, const advtg_audio_tag* tags,
+                                        size_t n_tags);
+ADVTG_C_API int advtg_audio_write_f64(const char* path, const double* samples, int64_t frames,
+                                      int32_t channels, int32_t sample_rate,
+                                      const char* subtype, const char* comment,
+                                      const advtg_audio_tag* tags, size_t n_tags,
+                                      int64_t* clipped_out);
+
+typedef struct advtg_audio_reader advtg_audio_reader;
+ADVTG_C_API advtg_audio_reader* advtg_audio_reader_open(const char* path, int64_t blocksize,
+                                                        int32_t channel_mode);
+ADVTG_C_API int advtg_audio_reader_info(const advtg_audio_reader* r, advtg_audio_file_info* out,
+                                        int32_t* selected_channel_out);
+/* Read next block. Returns frames read (> 0), 0 on EOF, or < 0 on error. */
+ADVTG_C_API int64_t advtg_audio_reader_read_block(advtg_audio_reader* r, double* out,
+                                                  size_t cap_samples, int64_t* start_index_out);
+ADVTG_C_API void advtg_audio_reader_close(advtg_audio_reader* r);
+
+typedef struct advtg_audio_writer advtg_audio_writer;
+ADVTG_C_API advtg_audio_writer* advtg_audio_writer_open(const char* path, int32_t sample_rate,
+                                                        int32_t channels, const char* subtype,
+                                                        const char* comment,
+                                                        const advtg_audio_tag* tags,
+                                                        size_t n_tags);
+ADVTG_C_API int advtg_audio_writer_write(advtg_audio_writer* w, const double* samples,
+                                         int64_t frames, int32_t channels,
+                                         int64_t* clipped_now_out);
+ADVTG_C_API int advtg_audio_writer_set_tag(advtg_audio_writer* w, const char* key,
+                                           const char* value);
+ADVTG_C_API int advtg_audio_writer_close(advtg_audio_writer* w, int discard,
+                                         int64_t* frames_written_out,
+                                         int64_t* clipped_total_out);
+
+/* ------------------------------------------------------------------ paths & logger */
+ADVTG_C_API int32_t advtg_config_dir(char* buf, int32_t cap);
+ADVTG_C_API int32_t advtg_default_log_dir(char* buf, int32_t cap);
+ADVTG_C_API int advtg_log_init(const char* log_dir, const char* log_name);
+ADVTG_C_API int advtg_log_write(int level, const char* component, const char* msg);
+ADVTG_C_API int32_t advtg_log_file_path(char* buf, int32_t cap);
+
+/* ------------------------------------------------------------------ security */
+ADVTG_C_API int32_t advtg_sanitize_csv_cell(const char* in, char* out, int32_t cap);
+ADVTG_C_API int32_t advtg_safe_filename_base(const char* name, const char* fallback, char* out,
+                                             int32_t cap);
+ADVTG_C_API int32_t advtg_anonymize_text(const char* text, const char* username,
+                                         const char* home_variants_nl, char* out, int32_t cap);
+
+/* ------------------------------------------------------------------ watch caliber database */
+typedef struct advtg_watch_caliber {
+    char name[128];
+    int32_t bph;
+    int32_t _pad;
+    double lift_angle_deg;
+} advtg_watch_caliber;
+
+/* Returns total calibers loaded (>= 1); copies up to cap entries into out. */
+ADVTG_C_API int32_t advtg_load_watch_db(const char* csv_path, advtg_watch_caliber* out,
+                                        int32_t cap);
+
+/* ------------------------------------------------------------------ calibration store & tags */
+typedef struct advtg_calibration {
+    char device[256];
+    int32_t sample_rate;
+    int32_t _pad;
+    advtg_adc_drift drift;
+    int64_t measured_at_epoch_s;
+    char note[256];
+} advtg_calibration;
+
+ADVTG_C_API const char* advtg_cal_last_error(void);
+ADVTG_C_API int32_t advtg_cal_format_iso(int64_t epoch_s, char* buf, int32_t cap);
+ADVTG_C_API int advtg_cal_parse_iso(const char* iso, int64_t* epoch_s_out);
+ADVTG_C_API double advtg_cal_age_days(int64_t measured_at_epoch_s, int64_t now_epoch_s);
+ADVTG_C_API void advtg_cal_effective(const advtg_calibration* cal, int64_t now_epoch_s,
+                                     double aging_ppm_per_year, advtg_adc_drift* drift_out);
+/* Serialize / parse ADV_TG_ADC_DRIFT_* tags (advtg_tag_cb receives each key/value). */
+ADVTG_C_API int advtg_drift_to_tags(const advtg_adc_drift* drift, const char* note,
+                                    const char* calibrated_at_iso, advtg_tag_cb cb, void* user);
+/* Returns 1 if parsed, 0 if ADV_TG_ADC_DRIFT_PPM missing, < 0 on invalid tags. */
+ADVTG_C_API int advtg_drift_from_tags(const advtg_audio_tag* tags, size_t n_tags,
+                                      advtg_adc_drift* drift_out, char* note_buf, int32_t note_cap);
+/* Store operations (path == NULL uses config_dir()/adc_calibration.json). */
+ADVTG_C_API int32_t advtg_cal_store_records(const char* store_path, const char* device_filter,
+                                            int32_t sample_rate_filter, advtg_calibration* out,
+                                            int32_t cap);
+/* Returns 1 if found, 0 if none, < 0 on error (ADVTG_ERR_CORRUPT_STORE on corrupt JSON). */
+ADVTG_C_API int advtg_cal_store_best(const char* store_path, const char* device,
+                                     int32_t sample_rate, int64_t now_epoch_s,
+                                     double aging_ppm_per_year, advtg_calibration* out);
+ADVTG_C_API int advtg_cal_store_add(const char* store_path, const advtg_calibration* cal);
+ADVTG_C_API int32_t advtg_cal_store_forget(const char* store_path, const char* device,
+                                           int32_t sample_rate_filter);
+ADVTG_C_API int advtg_cal_recording_tags(const char* store_path, const char* device,
+                                         int32_t sample_rate, int64_t now_epoch_s,
+                                         advtg_tag_cb cb, void* user,
+                                         int* has_cal_out, advtg_calibration* cal_out);
+
+/* ------------------------------------------------------------------ audio devices, CSV & report */
+typedef struct advtg_audio_device_info {
+    int32_t device_id;         /* -1 for synthetic generator */
+    int32_t max_input_channels;
+    double default_samplerate;
+    int32_t is_synthetic;
+    int32_t _pad;
+    char name[256];
+} advtg_audio_device_info;
+
+ADVTG_C_API int advtg_set_portaudio_library(const char* path);
+ADVTG_C_API int32_t advtg_list_input_devices(advtg_audio_device_info* out, int32_t cap);
+ADVTG_C_API int32_t advtg_audio_devices_text(char* buf, int32_t cap);
+
+typedef struct advtg_csv_result_row {
+    const char* test_name;
+    const char* caliber;
+    int32_t bph;
+    double lift_angle;
+    int32_t sample_rate;
+    const char* position;
+    const char* record_type;
+    const char* elapsed_s;
+    const char* rate_spd;
+    const char* beat_error_ms;
+    const char* amplitude_deg;
+    const char* confidence;
+    const char* snr_db;
+} advtg_csv_result_row;
+
+typedef struct advtg_csv_global_row {
+    const char* test_name;
+    const char* caliber;
+    int32_t bph;
+    double lift_angle;
+    const char* position;
+    const char* rate_spd;
+    const char* beat_error_ms;
+    const char* amplitude_deg;
+    const char* confidence;
+    const char* global_mean_spd;
+    const char* positional_delta_spd;
+} advtg_csv_global_row;
+
+ADVTG_C_API int advtg_write_results_csv(const char* path, const advtg_csv_result_row* rows,
+                                        size_t n_rows);
+ADVTG_C_API int advtg_write_global_stats_csv(const char* path, const advtg_csv_global_row* rows,
+                                             size_t n_rows);
+ADVTG_C_API int advtg_write_traces_csv(const char* path, const double* even_x, const double* even_y,
+                                       size_t n_even, const double* odd_x, const double* odd_y,
+                                       size_t n_odd, const double* osc_x, const double* osc_y,
+                                       size_t n_osc, const double* wav_x, const double* wav_y,
+                                       size_t n_wav);
+
+ADVTG_C_API int32_t advtg_report_default_name(const char* version, int64_t now_epoch_s, char* buf,
+                                              int32_t cap);
+/* Build bug/result .zip report atomically with miniz. notes_buf receives '\n'-separated Spanish notes. */
+ADVTG_C_API int advtg_report_build(const char* dest_path, const char* version,
+                                   const char* system_info, const char* runtime_info,
+                                   const char* description,
+                                   const advtg_audio_tag* settings, size_t n_settings,
+                                   const char* recording_path, const char* log_dir,
+                                   const char* calibrations_path, const char* username,
+                                   const char* home_variants_nl, int64_t max_logs_bytes,
+                                   int64_t max_recording_bytes, char* notes_buf,
+                                   int32_t notes_cap);
+
+/* ------------------------------------------------------------------ gear-train & diagnosis */
+enum {
+    ADVTG_GEAR_COMP_ESCAPE = 0,
+    ADVTG_GEAR_COMP_FOURTH = 1,
+    ADVTG_GEAR_SERIES_TIMING = 0,
+    ADVTG_GEAR_SERIES_ENERGY = 1
+};
+
+enum {
+    ADVTG_GEAR_WARN_SHORT_ESCAPE = 1,
+    ADVTG_GEAR_WARN_SHORT_FOURTH = 2,
+    ADVTG_GEAR_WARN_MANY_MISSING = 4
+};
+
+typedef struct advtg_gear_component {
+    int32_t name;            /* ADVTG_GEAR_COMP_* */
+    int32_t series;          /* ADVTG_GEAR_SERIES_* */
+    double expected_period_s;
+    double period_s;
+    double amplitude;
+    double rate_ripple_s_per_day;
+    double fap;
+    int32_t resolvable;
+    int32_t significant;
+} advtg_gear_component;
+
+typedef struct advtg_gear_summary {
+    double sample_rate;
+    double bph;
+    double duration_s;
+    double rate_s_per_day;
+    double lift_angle_deg;
+    double escape_period_s;
+    int64_t beats_detected;
+    int64_t missing_beats;
+    int64_t outliers;
+    int64_t n_series;
+    int32_t escape_teeth;
+    uint32_t warning_mask;   /* ADVTG_GEAR_WARN_* */
+} advtg_gear_summary;
+
+typedef struct advtg_feature_vector {
+    double window_start_s;
+    double window_end_s;
+    double rate_spd;
+    double beat_error_ms;
+    double amplitude_deg;
+    double escape_power;
+    double escape_amp_us;
+    double fourth_power;
+    double fourth_amp_us;
+    double d12_mean_ms;
+    double d12_var_ms2;
+    double d12_skew;
+    double d12_kurt;
+    double d23_mean_ms;
+    double d23_var_ms2;
+    double d23_skew;
+    double d23_kurt;
+    double e1_e2;
+    double e3_e2;
+    double spurious_fraction;
+    int64_t n_beats;
+    int64_t n_subevents;
+    int64_t timing_jumps;
+    int32_t whole;
+    int32_t _pad;
+} advtg_feature_vector;
+
+enum {
+    ADVTG_FINDING_REBANKING = 1,
+    ADVTG_FINDING_PALLET_LUBRICATION = 2,
+    ADVTG_FINDING_MAGNETISM = 3,
+    ADVTG_FINDING_ESCAPE_WHEEL = 4,
+    ADVTG_FINDING_FOURTH_WHEEL = 5
+};
+enum { ADVTG_FINDING_POSSIBLE = 0, ADVTG_FINDING_PROBABLE = 1 };
+
+typedef struct advtg_diagnostic_finding {
+    int32_t code;            /* ADVTG_FINDING_* */
+    int32_t level;           /* ADVTG_FINDING_POSSIBLE / PROBABLE */
+    double values[4];
+    char keys[4][32];
+    int32_t n_evidence;
+    int32_t _pad;
+} advtg_diagnostic_finding;
+
+typedef struct advtg_positional_record {
+    char name[8];            /* "DU", "DD", "CU", "CD", "CL", "CR" */
+    double rate_spd;
+    double beat_error_ms;
+    double amplitude_deg;
+} advtg_positional_record;
+
+typedef struct advtg_positional_deltas {
+    double delta_rate_hv_spd;
+    double delta_amp_hv_deg;
+    double be_spread_ms;
+    int32_t valid;
+    int32_t n_positions;
+    char positions[6][8];
+} advtg_positional_deltas;
+
+typedef struct advtg_gear_analysis advtg_gear_analysis;
+
+ADVTG_C_API double advtg_escape_wheel_period_s(double bph, int32_t teeth);
+ADVTG_C_API const char* advtg_gear_last_error(void);
+ADVTG_C_API advtg_gear_analysis* advtg_gear_extract(const double* samples, size_t n,
+                                                    double sample_rate, double bph,
+                                                    double lift_angle_deg, int32_t escape_teeth,
+                                                    int32_t* err_out, int64_t* beats_found_out);
+ADVTG_C_API int advtg_gear_recompute(advtg_gear_analysis* h, int32_t escape_teeth);
+ADVTG_C_API void advtg_gear_destroy(advtg_gear_analysis* h);
+ADVTG_C_API int advtg_gear_get_summary(const advtg_gear_analysis* h, advtg_gear_summary* out);
+ADVTG_C_API int advtg_gear_get_components(const advtg_gear_analysis* h,
+                                          advtg_gear_component out[4]);
+ADVTG_C_API int advtg_gear_series_copy(const advtg_gear_analysis* h, int64_t* k, double* t_s,
+                                       double* timing_residual_s, double* energy_rel,
+                                       double* p1_s, double* p2_s, double* p3_s, double* e1,
+                                       double* e2, double* e3, double* pre_p1_db,
+                                       double* amplitude_deg, int64_t cap);
+ADVTG_C_API int64_t advtg_gear_outliers_copy(const advtg_gear_analysis* h, double* outlier_t_s,
+                                             int64_t cap);
+ADVTG_C_API void advtg_gear_spectra_len(const advtg_gear_analysis* h, int64_t* ls_len_out,
+                                        int64_t* fft_len_out);
+ADVTG_C_API int advtg_gear_spectra_copy(const advtg_gear_analysis* h, int32_t series_kind,
+                                        double* freqs_hz, double* ls_power, int64_t ls_cap,
+                                        double* fft_freqs_hz, double* fft_amp, int64_t fft_cap);
+ADVTG_C_API int32_t advtg_gear_window_features(const advtg_gear_analysis* h, int32_t escape_teeth,
+                                               double window_s, advtg_feature_vector* out,
+                                               int32_t cap);
+ADVTG_C_API int advtg_gear_recording_features(const advtg_gear_analysis* h, int32_t escape_teeth,
+                                              advtg_feature_vector* out);
+ADVTG_C_API int advtg_compute_positional_deltas(const advtg_positional_record* recs, size_t n_recs,
+                                                advtg_positional_deltas* out);
+ADVTG_C_API int32_t advtg_diagnose(const advtg_feature_vector* whole,
+                                   const advtg_feature_vector* windows, size_t n_windows,
+                                   const advtg_positional_deltas* positional,
+                                   const advtg_gear_component* components, size_t n_components,
+                                   advtg_diagnostic_finding* out, int32_t cap);
+
+/* ------------------------------------------------------------------ mock & synthetic watch */
+typedef struct advtg_mock_telemetry_sample {
+    double rate_spd;
+    double beat_error_ms;
+    double amplitude_deg;
+    double confidence;
+    double snr_db;
+} advtg_mock_telemetry_sample;
+
+typedef struct advtg_mock_telemetry_drift {
+    double effective_fs;
+    double drift_ppm;
+    double rate_bias_spd;
+    double sigma_ppm;
+    double confidence;
+} advtg_mock_telemetry_drift;
+
+typedef struct advtg_mock_telemetry advtg_mock_telemetry;
+
+ADVTG_C_API double advtg_mock_beat_delta_t_s(double amplitude_deg, double lift_angle_deg,
+                                             int32_t bph);
+ADVTG_C_API double advtg_mock_beat_interval_s(int32_t bph, double rate_spd);
+ADVTG_C_API void advtg_mock_add_beat(double* buf, size_t n, double fs, double t_beat_s,
+                                     double dt_p3_s, int is_tock);
+ADVTG_C_API int advtg_mock_generate_tick_train(double duration_s, int32_t fs, int32_t bph,
+                                               double rate_spd, double beat_error_ms,
+                                               double amplitude_deg, double lift_angle_deg,
+                                               double snr_db, uint64_t seed, double* out,
+                                               size_t cap);
+ADVTG_C_API advtg_mock_telemetry* advtg_mock_telemetry_create(uint64_t seed);
+ADVTG_C_API void advtg_mock_telemetry_destroy(advtg_mock_telemetry* m);
+ADVTG_C_API void advtg_mock_telemetry_step(advtg_mock_telemetry* m, double elapsed_s, double dt_s,
+                                           double stabilization_s, double base_rate_spd,
+                                           double base_beat_error_ms, double base_amplitude_deg,
+                                           advtg_mock_telemetry_sample* out);
+ADVTG_C_API void advtg_mock_telemetry_get_drift(advtg_mock_telemetry* m, double elapsed_s,
+                                                double nominal_fs,
+                                                advtg_mock_telemetry_drift* out);
+
+/* Analytic synthetic mechanical watch for C++ tests (mirrors tests/synth.py). */
+typedef struct advtg_synth_config {
+    double bph;
+    double rate_s_per_day;
+    double beat_error_ms;
+    double amplitude_deg;
+    double lift_angle_deg;
+    double snr_db;
+    double jitter_us;
+    double odd_jitter_us;
+    double p1_gain;
+    double phase_mod_period_s[2];
+    double phase_mod_amp_us[2];
+    double level_mod_period_s[2];
+    double level_mod_depth[2];
+    int32_t sample_rate;
+    int32_t quartz;
+    double seconds;
+    uint64_t seed;
+} advtg_synth_config;
+
+ADVTG_C_API void advtg_synth_config_default(advtg_synth_config* cfg);
+ADVTG_C_API int64_t advtg_synth_watch(const advtg_synth_config* cfg, double* out, size_t cap);
 
 #ifdef __cplusplus
 }

@@ -179,6 +179,10 @@ class AdcDrift:
         return cls(float(ppm), 0.0, float(sigma_ppm), ClockLevel.EXTERNAL, "manual", note=note)
 
 
+_INT_TO_METHOD = {0: "none", 1: "host-envelope", 2: "reference", 3: "manual", 4: "pps"}
+_METHOD_TO_INT = {v: k for k, v in _INT_TO_METHOD.items()}
+
+
 # --------------------------------------------------------------------------- recording tags
 def drift_to_tags(drift: AdcDrift, *, calibrated_at: str | None = None) -> dict[str, str]:
     """Tags that store ``drift`` in a recording (``ADV_TG_ADC_DRIFT_*``).
@@ -193,6 +197,43 @@ def drift_to_tags(drift: AdcDrift, *, calibrated_at: str | None = None) -> dict[
         and, when available, ``SPAN_S``, ``CALIBRATED_AT`` and ``NOTE``.
     """
     p = DRIFT_TAG_PREFIX
+    from adv_tg import native_bridge
+
+    if native_bridge.have("advtg_drift_to_tags"):
+        cdll = native_bridge.lib()
+        assert cdll is not None
+        ns = native_bridge.NativeAdcDriftStruct(
+            ppm=float(drift.ppm),
+            sigma_ppm=float(drift.sigma_ppm),
+            systematic_ppm=float(drift.systematic_ppm),
+            span_s=float(drift.span_s),
+            residual_us=float(drift.residual_us),
+            n_points=int(drift.n_points),
+            n_segments=int(drift.n_segments),
+            level=int(drift.level),
+            method=_METHOD_TO_INT.get(drift.method, 0),
+            note_kind=0,
+            _pad=0,
+        )
+        out: dict[str, str] = {}
+
+        def _on_tag(k: bytes | None, v: bytes | None, _user: object) -> None:
+            if k is not None and v is not None:
+                out[k.decode("utf-8", errors="replace")] = v.decode("utf-8", errors="replace")
+
+        cb = native_bridge.TAG_CB_TYPE(_on_tag)
+        rc = int(
+            cdll.advtg_drift_to_tags(
+                ctypes.byref(ns),
+                drift.note.encode("utf-8") if drift.note else None,
+                calibrated_at.encode("utf-8") if calibrated_at else None,
+                cb,
+                None,
+            )
+        )
+        if rc == 0:
+            return out
+
     tags = {
         f"{p}PPM": format(drift.ppm, ".9g"),
         f"{p}SIGMA_PPM": format(drift.sigma_ppm, ".6g"),
@@ -222,6 +263,37 @@ def drift_from_tags(tags: Mapping[str, str]) -> AdcDrift | None:
     p = DRIFT_TAG_PREFIX
     if f"{p}PPM" not in up:
         return None
+    from adv_tg import native_bridge
+
+    if native_bridge.have("advtg_drift_from_tags"):
+        cdll = native_bridge.lib()
+        assert cdll is not None
+        items = [(str(k).encode("utf-8"), str(v).encode("utf-8")) for k, v in tags.items()]
+        arr = (native_bridge.NativeAudioTagStruct * max(1, len(items)))()
+        for idx, (kb, vb) in enumerate(items):
+            arr[idx].key = kb
+            arr[idx].value = vb
+        ns = native_bridge.NativeAdcDriftStruct()
+        note_buf = ctypes.create_string_buffer(256)
+        rc = int(
+            cdll.advtg_drift_from_tags(arr, len(items), ctypes.byref(ns), note_buf, len(note_buf))
+        )
+        if rc == 0:
+            return None
+        if rc < 0:
+            raise ValueError("etiquetas de calibración del reloj no válidas")
+        return AdcDrift(
+            float(ns.ppm),
+            float(ns.sigma_ppm),
+            float(ns.systematic_ppm),
+            ClockLevel(int(ns.level)),
+            _INT_TO_METHOD.get(int(ns.method), "none"),
+            span_s=float(ns.span_s),
+            n_points=int(ns.n_points),
+            n_segments=int(ns.n_segments),
+            residual_us=float(ns.residual_us),
+            note=note_buf.value.decode("utf-8", errors="replace"),
+        )
     try:
         ppm = float(up[f"{p}PPM"])
         sigma = float(up.get(f"{p}SIGMA_PPM", "0"))

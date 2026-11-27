@@ -195,6 +195,16 @@ ADVTG_C_API int32_t advtg_session_detector_warnings(const advtg_session* s, char
     return s ? copy_text(s->impl.detector_warnings(), buf, cap) : -1;
 }
 
+ADVTG_C_API int32_t advtg_session_metric_warning_codes(const advtg_session* s,
+                                                       advtg_warning* out, int32_t cap) {
+    return s ? static_cast<int32_t>(copy_items(s->impl.metric_warning_codes(), out, cap)) : -1;
+}
+
+ADVTG_C_API int32_t advtg_session_detector_warning_codes(const advtg_session* s,
+                                                         advtg_warning* out, int32_t cap) {
+    return s ? static_cast<int32_t>(copy_items(s->impl.detector_warning_codes(), out, cap)) : -1;
+}
+
 ADVTG_C_API int advtg_session_detector_stats(const advtg_session* s, advtg_detector_stats* out) {
     if (!s || !out) return -1;
     const auto st = s->impl.detector_stats();

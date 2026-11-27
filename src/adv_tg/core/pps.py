@@ -425,7 +425,29 @@ class PpsCalibrator:
         self.period = float(nominal_period_s) * self.fs  # samples
         self.reference_sigma_ppm = float(reference_sigma_ppm)
         self._jump = JUMP_MS * 1e-3 * self.fs
+        self._native_cal: int | None = None
+        if _nb.have(
+            "advtg_pps_calibrator_create",
+            "advtg_pps_calibrator_destroy",
+            "advtg_pps_calibrator_reset",
+            "advtg_pps_calibrator_add",
+            "advtg_pps_calibrator_estimate",
+            "advtg_pps_calibrator_residuals",
+        ):
+            h = _nb.lib().advtg_pps_calibrator_create(
+                self.fs, float(nominal_period_s), self.reference_sigma_ppm
+            )
+            if h:
+                self._native_cal = int(h)
         self.reset()
+
+    def __del__(self) -> None:
+        h = getattr(self, "_native_cal", None)
+        if h and _nb is not None:
+            cdll = _nb.lib()
+            if cdll is not None and hasattr(cdll, "advtg_pps_calibrator_destroy"):
+                cdll.advtg_pps_calibrator_destroy(ctypes.c_void_p(h))
+            self._native_cal = None
 
     def reset(self) -> None:
         self._seg_t: list[float] = []
@@ -435,6 +457,8 @@ class PpsCalibrator:
         self.pulses = 0
         self.jumps = 0
         self.rejected = 0
+        if self._native_cal:
+            _nb.lib().advtg_pps_calibrator_reset(ctypes.c_void_p(self._native_cal))
 
     def _predict_err(self, t: float, t_ref: float, k_drift: float) -> tuple[int, float]:
         n = int(round((t - t_ref) / self.period))
@@ -449,6 +473,20 @@ class PpsCalibrator:
 
     def add(self, indices: ArrayLike) -> None:
         """Add pulse instants (absolute samples, increasing)."""
+        if self._native_cal:
+            arr = _nb.f64(np.asarray(indices, dtype=np.float64).reshape(-1))
+            cdll = _nb.lib()
+            assert cdll is not None
+            if arr.size > 0:
+                cdll.advtg_pps_calibrator_add(
+                    ctypes.c_void_p(self._native_cal), _nb.ptr(arr), arr.size
+                )
+            est = _nb.NativePpsEstimateStruct()
+            cdll.advtg_pps_calibrator_estimate(ctypes.c_void_p(self._native_cal), ctypes.byref(est))
+            self.pulses = int(est.pulses)
+            self.jumps = int(est.jumps)
+            self.rejected = int(est.rejected)
+            return
         for t in np.asarray(indices, dtype=np.float64).reshape(-1).tolist():
             if not math.isfinite(t):
                 continue
@@ -484,6 +522,56 @@ class PpsCalibrator:
 
     def estimate(self) -> PpsEstimate:
         """Fit the current segment (cheap enough to call a few times per second)."""
+        if self._native_cal:
+            cdll = _nb.lib()
+            assert cdll is not None
+            h = ctypes.c_void_p(self._native_cal)
+            est = _nb.NativePpsEstimateStruct()
+            cdll.advtg_pps_calibrator_estimate(h, ctypes.byref(est))
+            self.pulses = int(est.pulses)
+            self.jumps = int(est.jumps)
+            self.rejected = int(est.rejected)
+            d = est.drift
+            note = est.note.decode("utf-8", errors="replace")
+            n_res = max(0, int(cdll.advtg_pps_calibrator_residuals(h, None, None, 0)))
+            if n_res > 0:
+                t_s = np.empty(n_res, dtype=np.float64)
+                res_us = np.empty(n_res, dtype=np.float64)
+                cdll.advtg_pps_calibrator_residuals(h, _nb.ptr(t_s), _nb.ptr(res_us), n_res)
+            else:
+                t_s = np.empty(0, dtype=np.float64)
+                res_us = np.empty(0, dtype=np.float64)
+            if int(d.level) != int(ClockLevel.EXTERNAL):
+                drift = AdcDrift.uncalibrated(
+                    note or f"pocos pulsos ({int(est.used)} < {MIN_PULSES})"
+                )
+            else:
+                drift = AdcDrift(
+                    ppm=float(d.ppm),
+                    sigma_ppm=float(d.sigma_ppm),
+                    systematic_ppm=float(d.systematic_ppm),
+                    level=ClockLevel(int(d.level)),
+                    method="pps",
+                    span_s=float(d.span_s),
+                    n_points=int(d.n_points),
+                    n_segments=int(d.n_segments),
+                    residual_us=float(d.residual_us),
+                    note=note,
+                )
+            return PpsEstimate(
+                drift=drift,
+                pulses=int(est.pulses),
+                used=int(est.used),
+                missing=int(est.missing),
+                jumps=int(est.jumps),
+                rejected=int(est.rejected),
+                span_s=float(est.span_s),
+                jitter_us=float(est.jitter_us),
+                excess=float(est.excess),
+                ready=bool(est.ready),
+                t_s=t_s,
+                residual_us=res_us,
+            )
         t = np.asarray(self._seg_t, dtype=np.float64)
         k = np.asarray(self._seg_k, dtype=np.float64)
         common = dict(pulses=self.pulses, jumps=self.jumps, rejected=self.rejected)

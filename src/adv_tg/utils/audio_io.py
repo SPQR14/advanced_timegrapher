@@ -74,6 +74,42 @@ def _enumerate_input_devices() -> list[AudioDeviceInfo]:
     ]
 
     try:
+        import sys
+
+        from adv_tg import native_bridge
+
+        sd_mod = sys.modules.get("sounddevice")
+        sd_patched = sd_mod is not None and getattr(
+            getattr(sd_mod, "query_devices", None), "__module__", "sounddevice"
+        ) not in ("sounddevice", "_sounddevice")
+        if not sd_patched and native_bridge.have("advtg_list_input_devices"):
+            native_bridge.ensure_portaudio_hint()
+            cdll = native_bridge.lib()
+            assert cdll is not None
+            cap = 64
+            buf = (native_bridge.NativeAudioDeviceInfoStruct * cap)()
+            n = int(cdll.advtg_list_input_devices(buf, cap))
+            if n > cap:
+                buf = (native_bridge.NativeAudioDeviceInfoStruct * n)()
+                n = int(cdll.advtg_list_input_devices(buf, n))
+            if n > 0:
+                out = [
+                    AudioDeviceInfo(
+                        device_id=None if buf[i].is_synthetic else int(buf[i].device_id),
+                        name=buf[i].name.decode("utf-8", errors="replace"),
+                        max_input_channels=int(buf[i].max_input_channels),
+                        default_samplerate=float(buf[i].default_samplerate),
+                        is_synthetic=bool(buf[i].is_synthetic),
+                    )
+                    for i in range(n)
+                ]
+                logger.info(
+                    "Enumerated %d audio input source(s) (1 synthetic + %d hardware)",
+                    len(out),
+                    len(out) - 1,
+                )
+                return out
+
         import sounddevice as sd
 
         raw_devices = sd.query_devices()

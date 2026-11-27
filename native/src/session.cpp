@@ -389,7 +389,9 @@ void MeasurementSession::compute_metrics(bool compute_windows, core::NativeMetri
     std::vector<core::NativeBeat> bl(beats_.begin(), beats_.end());
     m = core::NativeMetricsResult{};
     metric_warnings_.clear();
-    core::compute_metrics_cpp(bl.data(), bl.size(), t[0], t[1], mc, m, windows_, metric_warnings_);
+    metric_warning_codes_.clear();
+    core::compute_metrics_cpp(bl.data(), bl.size(), t[0], t[1], mc, m, windows_, metric_warnings_,
+                              &metric_warning_codes_);
     have_points_ = std::isfinite(m.rate_s_per_day);
     if (have_points_) {
         points_[0] = m.rate_point_0_p1;

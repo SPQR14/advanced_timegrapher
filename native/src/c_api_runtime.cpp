@@ -162,6 +162,33 @@ ADVTG_API const char* advtg_cap_last_error(const void* h) {
     return h ? static_cast<const NativeAudioCapture*>(h)->last_error() : "";
 }
 
+#else
+
+ADVTG_C_API int advtg_set_portaudio_library(const char*) { return ADVTG_ERR_UNAVAILABLE; }
+
+ADVTG_C_API int32_t advtg_list_input_devices(advtg_audio_device_info* out, int32_t cap) {
+    if (out && cap > 0) {
+        std::memset(out, 0, sizeof *out);
+        out->device_id = -1;
+        out->max_input_channels = 1;
+        out->default_samplerate = 48000.0;
+        out->is_synthetic = 1;
+        std::snprintf(out->name, sizeof out->name, "Synthetic Ground-Truth Generator");
+    }
+    return 1;
+}
+
+ADVTG_C_API int32_t advtg_audio_devices_text(char* buf, int32_t cap) {
+    const char* msg = "(PortAudio not available: disabled in build)";
+    const std::size_t len = std::strlen(msg);
+    if (buf && cap > 0) {
+        const std::size_t n = std::min<std::size_t>(len, static_cast<std::size_t>(cap - 1));
+        std::memcpy(buf, msg, n);
+        buf[n] = '\0';
+    }
+    return static_cast<int32_t>(len);
+}
+
 #endif  // ADVTG_WITH_AUDIO_CAPTURE
 
 #if ADVTG_WITH_RENDERER

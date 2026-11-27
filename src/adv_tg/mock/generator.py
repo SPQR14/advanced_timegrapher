@@ -36,6 +36,14 @@ _TOCK_TONE: float = 0.96
 
 def beat_delta_t_s(amplitude_deg: float, lift_angle_deg: float, bph: int) -> float:
     """Return the P1->P3 interval (s) that corresponds to an amplitude and lift angle."""
+    from adv_tg import native_bridge
+
+    if native_bridge.have("advtg_mock_beat_delta_t_s"):
+        cdll = native_bridge.lib()
+        assert cdll is not None
+        return float(
+            cdll.advtg_mock_beat_delta_t_s(float(amplitude_deg), float(lift_angle_deg), int(bph))
+        )
     f0 = float(bph) / 7200.0
     ratio = min(0.999, max(1e-6, lift_angle_deg / (2.0 * max(amplitude_deg, 1.0))))
     return float(np.arcsin(ratio) / (np.pi * f0))
@@ -43,6 +51,12 @@ def beat_delta_t_s(amplitude_deg: float, lift_angle_deg: float, bph: int) -> flo
 
 def beat_interval_s(bph: int, rate_spd: float) -> float:
     """Return the mean beat interval (s) of a watch running at ``rate_spd``."""
+    from adv_tg import native_bridge
+
+    if native_bridge.have("advtg_mock_beat_interval_s"):
+        cdll = native_bridge.lib()
+        assert cdll is not None
+        return float(cdll.advtg_mock_beat_interval_s(int(bph), float(rate_spd)))
     return (3600.0 / float(bph)) / (1.0 + rate_spd / SECONDS_PER_DAY)
 
 

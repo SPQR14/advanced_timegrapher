@@ -107,20 +107,25 @@ def find_built(build_dir: Path, suffix: str) -> Path:
 def build_direct(a: argparse.Namespace, build_dir: Path) -> Path:
     """Fallback without CMake: g++/clang++ only (x86_64 and arm64)."""
     cxx = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
+    cc = os.environ.get("CC") or shutil.which("gcc") or shutil.which("clang") or "cc"
     if not cxx:
         raise SystemExit("neither cmake nor g++/clang++ found")
     build_dir.mkdir(parents=True, exist_ok=True)
     src = sorted((NATIVE / "src").glob("*.cpp"))
     want = {s.strip() for s in a.sources.split(",") if s.strip()}
     x86 = platform.machine().lower() in ("x86_64", "amd64")
-    base = [
-        "-std=c++20", "-O3", "-DNDEBUG", "-fPIC", "-fvisibility=hidden", "-fno-math-errno",
+    common = [
+        "-O3", "-DNDEBUG", "-fPIC", "-fvisibility=hidden", "-fno-math-errno",
         "-fno-trapping-math", "-ffp-contract=fast", "-funroll-loops", "-fno-fast-math",
-        f"-I{NATIVE / 'include'}", f"-I{NATIVE / 'src'}", "-DADVTG_VERSION_STRING=\"2.0.0\"",
-        "-DADVTG_BUILDING",
+        f"-I{NATIVE / 'include'}", f"-I{NATIVE / 'src'}", f"-I{NATIVE / 'third_party'}",
+        f"-I{NATIVE / 'third_party' / 'miniz'}", "-DADVTG_VERSION_STRING=\"2.0.0\"",
+        "-DADVTG_BUILDING", "-DMINIZ_NO_STDIO", "-DADVTG_WITH_AUDIO_CAPTURE=1",
+        "-DADVTG_WITH_AUDIO_IO=1", "-DADVTG_WITH_RENDERER=1",
     ]  # fmt: skip
+    base = ["-std=c++20", *common]
     if sys.platform == "darwin":
         base.append(f"-mmacosx-version-min={MACOS_MIN}")
+        common.append(f"-mmacosx-version-min={MACOS_MIN}")
     if x86:
         base += ["-DADVTG_HAVE_SSE42", "-DADVTG_HAVE_AVX2", "-DADVTG_HAVE_AVX512"]
         arch = {"native": ["-march=native"], "zen5": ["-march=znver5"]}.get(
@@ -142,6 +147,11 @@ def build_direct(a: argparse.Namespace, build_dir: Path) -> Path:
         "filters.cpp": ["-ffp-contract=off"],
     }  # fmt: skip
     objs: list[str] = []
+    miniz_c = NATIVE / "third_party" / "miniz" / "miniz.c"
+    if miniz_c.is_file():
+        miniz_o = build_dir / "miniz.o"
+        _run([cc, "-std=c11", *common, *arch, "-w", "-c", str(miniz_c), "-o", str(miniz_o)])
+        objs.append(str(miniz_o))
     for f in src:
         n = f.name
         is_core = n in ("c_api.cpp", "simd_dispatch.cpp") or n.startswith("simd_level_")

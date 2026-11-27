@@ -48,11 +48,31 @@ MAX_RECORDING_BYTES = 20 * 1024 * 1024
 
 def default_report_name(now: datetime | None = None) -> str:
     """``adv_tg_report_<version>_<date>_<time>.zip``."""
+    from adv_tg import native_bridge
+
+    if native_bridge.have("advtg_report_default_name"):
+        cdll = native_bridge.lib()
+        assert cdll is not None
+        epoch_s = int(now.timestamp()) if now is not None else 0
+        return native_bridge.call_str_buf(
+            cdll.advtg_report_default_name, __version__.encode("utf-8"), epoch_s, initial=128
+        )
     return f"adv_tg_report_{__version__}_{(now or datetime.now()):%Y%m%d_%H%M%S}.zip"
 
 
 def audio_devices_text() -> str:
     """One line per PortAudio device (inputs and outputs), or why they are not available."""
+    from adv_tg import native_bridge
+
+    sd_mod = sys.modules.get("sounddevice")
+    sd_patched = sd_mod is not None and getattr(
+        getattr(sd_mod, "query_devices", None), "__module__", "sounddevice"
+    ) not in ("sounddevice", "_sounddevice")
+    if not sd_patched and native_bridge.have("advtg_audio_devices_text"):
+        native_bridge.ensure_portaudio_hint()
+        cdll = native_bridge.lib()
+        assert cdll is not None
+        return native_bridge.call_str_buf(cdll.advtg_audio_devices_text, initial=2048)
     try:
         from adv_tg.audio.capture import load_sounddevice
 
@@ -114,6 +134,79 @@ def build_report(
         dest = dest.with_suffix(".zip")
     log_dir = log_dir or LoggerSetup.LOG_DIR
     calibrations = calibrations or config_dir() / "adc_calibration.json"
+
+    from adv_tg import native_bridge
+    from adv_tg.utils.security import _home_variants
+
+    sd_mod = sys.modules.get("sounddevice")
+    sd_patched = sd_mod is not None and getattr(
+        getattr(sd_mod, "query_devices", None), "__module__", "sounddevice"
+    ) not in ("sounddevice", "_sounddevice")
+    if (
+        not sd_patched
+        and native_bridge.have("advtg_report_build")
+        and _log_files.__module__ == __name__
+    ):
+        native_bridge.ensure_portaudio_hint()
+        import ctypes
+        import getpass
+
+        cdll = native_bridge.lib()
+        assert cdll is not None
+        sys_info = f"{platform.platform()} ({sys.platform}, {platform.machine()})"
+        rt_lines = [
+            f"Python: {platform.python_version()} ({'frozen' if getattr(sys, 'frozen', False) else 'source'})"
+        ]
+        try:
+            from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR
+
+            rt_lines.append(f"Qt: {QT_VERSION_STR} / PyQt6 {PYQT_VERSION_STR}")
+        except Exception:
+            pass
+        rt_info = "\n".join(rt_lines)
+        items = list((settings or {}).items())
+        n_set = len(items)
+        tag_arr = (native_bridge.NativeAudioTagStruct * max(1, n_set))()
+        keep_bytes: list[tuple[bytes, bytes]] = []
+        for idx, (k, v) in enumerate(items):
+            kb = str(k).encode("utf-8")
+            vb = str(v).encode("utf-8")
+            keep_bytes.append((kb, vb))
+            tag_arr[idx].key = kb
+            tag_arr[idx].value = vb
+        try:
+            username = getpass.getuser()
+        except Exception:
+            username = ""
+        homes_nl = "\n".join(_home_variants())
+        notes_buf = ctypes.create_string_buffer(2048)
+        rc = int(
+            cdll.advtg_report_build(
+                str(dest).encode("utf-8"),
+                __version__.encode("utf-8"),
+                sys_info.encode("utf-8"),
+                rt_info.encode("utf-8"),
+                description.encode("utf-8"),
+                tag_arr if n_set else None,
+                n_set,
+                str(recording).encode("utf-8") if recording is not None else None,
+                str(log_dir).encode("utf-8"),
+                str(calibrations).encode("utf-8"),
+                username.encode("utf-8"),
+                homes_nl.encode("utf-8"),
+                int(MAX_LOGS_BYTES),
+                int(MAX_RECORDING_BYTES),
+                notes_buf,
+                len(notes_buf),
+            )
+        )
+        if rc == 0:
+            notes_out = [
+                ln for ln in notes_buf.value.decode("utf-8", errors="replace").splitlines() if ln
+            ]
+            _dbg.file_write(dest, logs=-1, recording=bool(recording is not None))
+            return dest, notes_out
+
     notes: list[str] = []
 
     lines = [
