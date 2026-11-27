@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(advtg_native VERSION 2.0.0 LANGUAGES C CXX)
+project(advtg_native VERSION 2.1.0 LANGUAGES C CXX)
 
 # Native engine of Advanced Timegrapher 2.0: DSP, beat detector, metrics, audio capture,
 # session worker and graph renderer, as ONE shared library with a C ABI (loaded by ctypes).
