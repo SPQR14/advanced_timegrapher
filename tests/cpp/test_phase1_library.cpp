@@ -4,10 +4,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -61,8 +63,10 @@ TEST_CASE("audio file I/O WAV and FLAC round-trip with tags", "[phase1][audio]")
     std::vector<double> stereo(static_cast<std::size_t>(frames * 2));
     for (int64_t i = 0; i < frames; ++i) {
         const double t = static_cast<double>(i) / fs_hz;
-        stereo[static_cast<std::size_t>(2 * i)] = 0.05 * std::sin(2.0 * M_PI * 440.0 * t);
-        stereo[static_cast<std::size_t>(2 * i + 1)] = 0.6 * std::sin(2.0 * M_PI * 880.0 * t);
+        stereo[static_cast<std::size_t>(2 * i)] =
+            0.05 * std::sin(2.0 * std::numbers::pi * 440.0 * t);
+        stereo[static_cast<std::size_t>(2 * i + 1)] =
+            0.6 * std::sin(2.0 * std::numbers::pi * 880.0 * t);
     }
 
     const advtg_audio_tag tags[] = {{"ADV_TG_DEVICE", "CM18 USB"}, {"ADV_TG_NOTE", "toma 1"}};

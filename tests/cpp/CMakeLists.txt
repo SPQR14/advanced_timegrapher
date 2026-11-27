@@ -51,5 +51,6 @@ target_compile_definitions(advtg_cpp_tests PRIVATE
 target_link_libraries(advtg_cpp_tests PRIVATE Catch2::Catch2WithMain advtg_native ${ADVTG_SNDFILE})
 if(MSVC)
   target_compile_options(advtg_cpp_tests PRIVATE /utf-8)
+  target_compile_definitions(advtg_cpp_tests PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
 endif()
 catch_discover_tests(advtg_cpp_tests)
