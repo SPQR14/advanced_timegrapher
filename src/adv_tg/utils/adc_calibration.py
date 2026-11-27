@@ -28,6 +28,57 @@ from pathlib import Path
 
 from adv_tg.core.adc_clock import AdcDrift, ClockLevel, drift_to_tags
 
+_INT_TO_METHOD = {0: "none", 1: "host-envelope", 2: "reference", 3: "manual", 4: "pps"}
+_METHOD_TO_INT = {v: k for k, v in _INT_TO_METHOD.items()}
+
+
+def _cal_from_c(c: object) -> Calibration:
+    d = c.drift  # type: ignore[attr-defined]
+    note = c.note.decode("utf-8", errors="replace")  # type: ignore[attr-defined]
+    return Calibration(
+        device=c.device.decode("utf-8", errors="replace"),  # type: ignore[attr-defined]
+        sample_rate=int(c.sample_rate),  # type: ignore[attr-defined]
+        drift=AdcDrift(
+            ppm=float(d.ppm),
+            sigma_ppm=float(d.sigma_ppm),
+            systematic_ppm=float(d.systematic_ppm),
+            level=ClockLevel(int(d.level)),
+            method=_INT_TO_METHOD.get(int(d.method), "none"),
+            span_s=float(d.span_s),
+            n_points=int(d.n_points),
+            n_segments=int(d.n_segments),
+            residual_us=float(d.residual_us),
+            note=note,
+        ),
+        measured_at=datetime.fromtimestamp(int(c.measured_at_epoch_s), tz=UTC),  # type: ignore[attr-defined]
+    )
+
+
+def _cal_to_c(cal: Calibration, nb: object) -> object:
+    d = cal.drift
+    drift_c = nb.NativeAdcDriftStruct(  # type: ignore[attr-defined]
+        ppm=float(d.ppm),
+        sigma_ppm=float(d.sigma_ppm),
+        systematic_ppm=float(d.systematic_ppm),
+        span_s=float(d.span_s),
+        residual_us=float(d.residual_us),
+        n_points=int(d.n_points),
+        n_segments=int(d.n_segments),
+        level=int(d.level),
+        method=_METHOD_TO_INT.get(d.method, 0),
+        note_kind=0,
+        _pad=0,
+    )
+    return nb.NativeCalibrationStruct(  # type: ignore[attr-defined]
+        device=cal.device.encode("utf-8")[:255],
+        sample_rate=int(cal.sample_rate),
+        _pad=0,
+        drift=drift_c,
+        measured_at_epoch_s=int(round(cal.measured_at.astimezone(UTC).timestamp())),
+        note=d.note.encode("utf-8")[:255],
+    )
+
+
 __all__ = [
     "CONFIG_DIR_ENV",
     "CRYSTAL_AGING_PPM_PER_YEAR",
@@ -51,6 +102,8 @@ MAX_HISTORY = 50
 _FILE_NAME = "adc_calibration.json"
 _FORMAT_VERSION = 1
 _DAYS_PER_YEAR = 365.25
+_ORIG_PLATFORM = sys.platform
+_ORIG_HOME = Path.home
 
 
 class CalibrationStoreError(Exception):
@@ -64,6 +117,13 @@ def config_dir() -> Path:
     macOS, ``%APPDATA%\\adv_tg`` on Windows and ``$XDG_CONFIG_HOME/adv_tg`` (default
     ``~/.config/adv_tg``) elsewhere.
     """
+    if sys.platform == _ORIG_PLATFORM and Path.home is _ORIG_HOME:
+        from adv_tg import native_bridge
+
+        if native_bridge.have("advtg_config_dir"):
+            cdll = native_bridge.lib()
+            assert cdll is not None
+            return Path(native_bridge.call_str_buf(cdll.advtg_config_dir))
     env = os.environ.get(CONFIG_DIR_ENV)
     if env:
         return Path(env).expanduser()
@@ -245,6 +305,27 @@ class CalibrationStore:
         self, device: str | None = None, sample_rate: int | None = None
     ) -> list[Calibration]:
         """Stored calibrations, oldest first (optionally of one device / sample rate)."""
+        from adv_tg import native_bridge
+
+        if native_bridge.have("advtg_cal_store_records"):
+            cdll = native_bridge.lib()
+            assert cdll is not None
+            cap = 64
+            buf = (native_bridge.NativeCalibrationStruct * cap)()
+            path_b = str(self.path).encode("utf-8")
+            dev_b = device.encode("utf-8") if device is not None else None
+            sr = int(sample_rate) if sample_rate is not None else 0
+            n = int(cdll.advtg_cal_store_records(path_b, dev_b, sr, buf, cap))
+            if n < 0:
+                err = cdll.advtg_cal_last_error().decode("utf-8", errors="replace")
+                raise CalibrationStoreError(
+                    f"no se pudo leer el archivo de calibraciones '{self.path}': {err}"
+                )
+            if n > cap:
+                buf = (native_bridge.NativeCalibrationStruct * n)()
+                n = int(cdll.advtg_cal_store_records(path_b, dev_b, sr, buf, n))
+            return [_cal_from_c(buf[i]) for i in range(n)]
+
         out = self._load()
         if device is not None:
             out = [r for r in out if _same_device(r.device, device)]
@@ -263,6 +344,32 @@ class CalibrationStore:
 
         Ties go to the most recent record.
         """
+        from adv_tg import native_bridge
+
+        if native_bridge.have("advtg_cal_store_best"):
+            import ctypes
+
+            cdll = native_bridge.lib()
+            assert cdll is not None
+            out = native_bridge.NativeCalibrationStruct()
+            now_s = int(round((now or _now()).astimezone(UTC).timestamp()))
+            rc = int(
+                cdll.advtg_cal_store_best(
+                    str(self.path).encode("utf-8"),
+                    device.encode("utf-8"),
+                    int(sample_rate),
+                    now_s,
+                    float(aging_ppm_per_year),
+                    ctypes.byref(out),
+                )
+            )
+            if rc < 0:
+                err = cdll.advtg_cal_last_error().decode("utf-8", errors="replace")
+                raise CalibrationStoreError(
+                    f"no se pudo leer el archivo de calibraciones '{self.path}': {err}"
+                )
+            return _cal_from_c(out) if rc > 0 else None
+
         return pick_best(self.records(device, sample_rate), now, aging_ppm_per_year)
 
     # ------------------------------------------------------------------ changes
@@ -274,6 +381,24 @@ class CalibrationStore:
             CalibrationStoreError: The existing file is unreadable.
         """
         calibration.validate()
+        from adv_tg import native_bridge
+
+        if native_bridge.have("advtg_cal_store_add"):
+            import ctypes
+
+            cdll = native_bridge.lib()
+            assert cdll is not None
+            cal_c = _cal_to_c(calibration, native_bridge)
+            rc = int(cdll.advtg_cal_store_add(str(self.path).encode("utf-8"), ctypes.byref(cal_c)))
+            if rc == 0:
+                return
+            err = cdll.advtg_cal_last_error().decode("utf-8", errors="replace")
+            if rc == -1:
+                raise ValueError(err)
+            raise CalibrationStoreError(
+                f"no se pudo leer el archivo de calibraciones '{self.path}': {err}"
+            )
+
         records = self._load()
         known = next(
             (r.device for r in records if _same_device(r.device, calibration.device)), None
@@ -297,6 +422,24 @@ class CalibrationStore:
 
     def forget(self, device: str, sample_rate: int | None = None) -> int:
         """Delete the calibrations of a device (optionally one sample rate). Returns how many."""
+        from adv_tg import native_bridge
+
+        if native_bridge.have("advtg_cal_store_forget"):
+            cdll = native_bridge.lib()
+            assert cdll is not None
+            sr = int(sample_rate) if sample_rate is not None else 0
+            rc = int(
+                cdll.advtg_cal_store_forget(
+                    str(self.path).encode("utf-8"), device.encode("utf-8"), sr
+                )
+            )
+            if rc < 0:
+                err = cdll.advtg_cal_last_error().decode("utf-8", errors="replace")
+                raise CalibrationStoreError(
+                    f"no se pudo leer el archivo de calibraciones '{self.path}': {err}"
+                )
+            return rc
+
         records = self._load()
         keep = [
             r
@@ -343,6 +486,46 @@ def recording_tags(
         CalibrationStoreError: The store file is unreadable.
     """
     now = now or _now()
+    if store is None or type(store) is CalibrationStore:
+        from adv_tg import native_bridge
+
+        if native_bridge.have("advtg_cal_recording_tags"):
+            import ctypes
+
+            cdll = native_bridge.lib()
+            assert cdll is not None
+            st = store or CalibrationStore()
+            out_tags: dict[str, str] = {}
+
+            def _on_tag(k: bytes | None, v: bytes | None, _u: object) -> None:
+                if k is not None and v is not None:
+                    out_tags[k.decode("utf-8", errors="replace")] = v.decode(
+                        "utf-8", errors="replace"
+                    )
+
+            cb = native_bridge.TAG_CB_TYPE(_on_tag)
+            has_cal = ctypes.c_int(0)
+            cal_c = native_bridge.NativeCalibrationStruct()
+            now_s = int(round(now.astimezone(UTC).timestamp()))
+            rc = int(
+                cdll.advtg_cal_recording_tags(
+                    str(st.path).encode("utf-8"),
+                    device.encode("utf-8") if device else None,
+                    int(sample_rate),
+                    now_s,
+                    cb,
+                    None,
+                    ctypes.byref(has_cal),
+                    ctypes.byref(cal_c),
+                )
+            )
+            if rc < 0:
+                err = cdll.advtg_cal_last_error().decode("utf-8", errors="replace")
+                raise CalibrationStoreError(
+                    f"no se pudo leer el archivo de calibraciones '{st.path}': {err}"
+                )
+            return out_tags, (_cal_from_c(cal_c) if has_cal.value else None)
+
     tags = {"ADV_TG_RECORDED_AT": _iso(now), "ADV_TG_SAMPLE_RATE": str(int(sample_rate))}
     if device:
         tags["ADV_TG_DEVICE"] = " ".join(device.split())

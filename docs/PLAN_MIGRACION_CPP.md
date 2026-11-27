@@ -222,10 +222,10 @@ Se construye en paralelo a la GUI Python; se publica como beta junto a la 2.x es
 |---|---|---|
 | Archivos dorados de v2.0.1 (10 relojes: lotes + en vivo; 2 PPS) | `tests/golden/`, `scripts/make_golden.py` | Generados y deterministas (`--check`) |
 | Test Python contra los dorados (motor nativo) | `tests/test_golden.py` | 23 tests en verde |
-| Test C++ contra los dorados, a través de `advtg.h` y libsndfile | `tests/cpp/` | 10 relojes en vivo, 3 902 comprobaciones en verde (lotes y PPS entran en fase 1) |
+| Test C++ contra los dorados, a través de `advtg.h` y libsndfile | `tests/cpp/` | 10 relojes en vivo + 10 por lotes + 2 PPS + pruebas unitarias de fase 1 (8 casos, 41 491 comprobaciones en verde) |
 | Línea base y su contrato `ADV_TG_BENCH` | `scripts/baseline.py`, `adv_tg/tools/bench.py` | Medida en Linux; `build.yml` mide los binarios empaquetados de las 3 plataformas |
 | Esqueleto C++ (CMake raíz, `app/` Qt 6 Widgets, Catch2) | `CMakeLists.txt`, `app/`, `vcpkg.json` | Compila sin avisos; `--version`, `--smoke-test` y `ADV_TG_BENCH=startup` |
-| CI de la app C++ en las 3 plataformas + AlmaLinux 9 | `ci.yml`, jobs `cpp-app` y `cpp-app-el9` | Pendiente de su primera ejecución |
+| CI de la app C++ en las 3 plataformas + AlmaLinux 9 | `ci.yml`, jobs `cpp-app` y `cpp-app-el9` | En verde: Ubuntu, macOS, Windows MSVC+vcpkg y AlmaLinux 9 glibc 2.34 |
 
 Hallazgo de la fase 0: en los Hamilton H-50 (P1 débil, Notch activo), la referencia numpy
 elige otro candidato de frente de desbloqueo (`t_p1`, hasta 36 muestras) en algunos latidos.
@@ -245,6 +245,20 @@ salidas del **motor nativo** de v2.0.1 (detalle en `tests/golden/protocol.py`).
 
 Los binarios empaquetados de cada plataforma se miden en cada ejecución de `build.yml`
 (artefactos `baseline-linux`, `baseline-macos` y `baseline-windows`).
+
+## 6c. Estado de la fase 1
+
+| Entregable | Dónde | Estado |
+|---|---|---|
+| API C99 de aplicación ampliada (ABI `ADVTG_ABI_VERSION == 1` aditiva) | `native/include/advtg.h` | Pasa `gcc -std=c99 -Wall -Wextra -pedantic -Werror -fsyntax-only` |
+| E/S de audio WAV/FLAC y etiquetas atómicas (`libsndfile` por `dlopen`/`LoadLibraryW`) | `native/src/audio_files.cpp`, `adv_tg/utils/audio_files.py` | Autocontenida (`DT_NEEDED` cero); guarda y lee PCM/FLOAT y Vorbis/WAV |
+| Detector/calibrador GPS PPS y detector/métricas por lotes | `native/src/pps.cpp`, `c_api_batch.cpp`, `adv_tg/core/pps.py` | 10 relojes por lotes y 2 PPS dentro de tolerancias `NATIVE` en C++ |
+| Persistencia JSON de calibraciones (`nlohmann/json` v3.11.3 MIT) | `native/src/calibration_store.cpp`, `adv_tg/utils/adc_calibration.py`, `adc_clock.py` | Historial 50/dispositivo, envejecimiento, etiquetas `pps` (`method = 4`) |
+| Tren de rodaje, QR Detrend, Bluestein FFT, rasgos y diagnóstico | `native/src/gear_train.cpp`, `features.cpp`, `adv_tg/analysis/` | Conectado desde Python con respaldo `ADV_TG_DISABLE_NATIVE=1` |
+| Informe `.zip` (`miniz` v3.0.2 MIT, `-DMINIZ_NO_STDIO`), CSV, seguridad, DB, logger, avisos ES/EN | `native/src/{report,csv_export,security,watch_db,paths_log,warnings,mock_generator}.cpp` | Conectado con `native_bridge.py`; dispositivos PortAudio vía `dlopen` |
+| Compilación estática móvil sin audio de escritorio (`ADVTG_STATIC=ON`) | `native/CMakeLists.txt` (`ADVTG_WITH_AUDIO_CAPTURE=OFF`, `AUDIO_IO=OFF`) | Compila `libadvtg_native.a` y `advtg_replay` sin avisos |
+| Pruebas C++ (dorados live + lotes + PPS + librería fase 1) | `tests/cpp/` | 8 casos de Catch2 en verde (41 491 comprobaciones) |
+| Pruebas de paridad Python nativo vs Python puro | `tests/test_native_phase1.py` | Compara salidas nativas frente a `ADV_TG_DISABLE_NATIVE=1` |
 
 ## 7. Riesgos
 

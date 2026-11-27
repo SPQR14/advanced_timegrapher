@@ -36,12 +36,14 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+from adv_tg import native_bridge as _nb
 from adv_tg.analysis.gear_train import (
     DEFAULT_ESCAPE_TEETH,
     FOURTH_WHEEL_MIN_RECORDING_S,
     FOURTH_WHEEL_PERIOD_S,
     BeatSeries,
     GearTrainReport,
+    _native_gear_handle,
     lomb_scargle,
     sine_fit,
 )
@@ -131,6 +133,65 @@ class FeatureVector:
             k: (None if isinstance(v, float) and not math.isfinite(v) else v)
             for k, v in asdict(self).items()
         }
+
+
+def _fv_from_c(v: object) -> FeatureVector:
+    return FeatureVector(
+        window_start_s=float(v.window_start_s),  # type: ignore[attr-defined]
+        window_end_s=float(v.window_end_s),  # type: ignore[attr-defined]
+        whole=bool(v.whole),  # type: ignore[attr-defined]
+        n_beats=int(v.n_beats),  # type: ignore[attr-defined]
+        rate_spd=float(v.rate_spd),  # type: ignore[attr-defined]
+        beat_error_ms=float(v.beat_error_ms),  # type: ignore[attr-defined]
+        amplitude_deg=float(v.amplitude_deg),  # type: ignore[attr-defined]
+        escape_power=float(v.escape_power),  # type: ignore[attr-defined]
+        escape_amp_us=float(v.escape_amp_us),  # type: ignore[attr-defined]
+        fourth_power=float(v.fourth_power),  # type: ignore[attr-defined]
+        fourth_amp_us=float(v.fourth_amp_us),  # type: ignore[attr-defined]
+        d12_mean_ms=float(v.d12_mean_ms),  # type: ignore[attr-defined]
+        d12_var_ms2=float(v.d12_var_ms2),  # type: ignore[attr-defined]
+        d12_skew=float(v.d12_skew),  # type: ignore[attr-defined]
+        d12_kurt=float(v.d12_kurt),  # type: ignore[attr-defined]
+        d23_mean_ms=float(v.d23_mean_ms),  # type: ignore[attr-defined]
+        d23_var_ms2=float(v.d23_var_ms2),  # type: ignore[attr-defined]
+        d23_skew=float(v.d23_skew),  # type: ignore[attr-defined]
+        d23_kurt=float(v.d23_kurt),  # type: ignore[attr-defined]
+        n_subevents=int(v.n_subevents),  # type: ignore[attr-defined]
+        e1_e2=float(v.e1_e2),  # type: ignore[attr-defined]
+        e3_e2=float(v.e3_e2),  # type: ignore[attr-defined]
+        spurious_fraction=float(v.spurious_fraction),  # type: ignore[attr-defined]
+        timing_jumps=int(v.timing_jumps),  # type: ignore[attr-defined]
+    )
+
+
+def _fv_to_c(v: FeatureVector) -> object:
+    return _nb.NativeFeatureVectorStruct(
+        window_start_s=float(v.window_start_s),
+        window_end_s=float(v.window_end_s),
+        rate_spd=float(v.rate_spd),
+        beat_error_ms=float(v.beat_error_ms),
+        amplitude_deg=float(v.amplitude_deg),
+        escape_power=float(v.escape_power),
+        escape_amp_us=float(v.escape_amp_us),
+        fourth_power=float(v.fourth_power),
+        fourth_amp_us=float(v.fourth_amp_us),
+        d12_mean_ms=float(v.d12_mean_ms),
+        d12_var_ms2=float(v.d12_var_ms2),
+        d12_skew=float(v.d12_skew),
+        d12_kurt=float(v.d12_kurt),
+        d23_mean_ms=float(v.d23_mean_ms),
+        d23_var_ms2=float(v.d23_var_ms2),
+        d23_skew=float(v.d23_skew),
+        d23_kurt=float(v.d23_kurt),
+        e1_e2=float(v.e1_e2),
+        e3_e2=float(v.e3_e2),
+        spurious_fraction=float(v.spurious_fraction),
+        n_beats=int(v.n_beats),
+        n_subevents=int(v.n_subevents),
+        timing_jumps=int(v.timing_jumps),
+        whole=1 if v.whole else 0,
+        _pad=0,
+    )
 
 
 @dataclass(frozen=True)
@@ -256,6 +317,21 @@ def window_features(
     series: BeatSeries, teeth: int = DEFAULT_ESCAPE_TEETH, window_s: float = WINDOW_S
 ) -> list[FeatureVector]:
     """One ``FeatureVector`` per ``window_s`` of the recording (from its first beat)."""
+    handle = _native_gear_handle(series)
+    if handle is not None and _nb.have("advtg_gear_window_features"):
+        import ctypes
+
+        cdll = _nb.lib()
+        assert cdll is not None
+        hp = ctypes.c_void_p(handle.ptr)
+        n_win = int(cdll.advtg_gear_window_features(hp, int(teeth), float(window_s), None, 0))
+        if n_win >= 0:
+            if n_win == 0:
+                return []
+            buf = (_nb.NativeFeatureVectorStruct * n_win)()
+            got = int(cdll.advtg_gear_window_features(hp, int(teeth), float(window_s), buf, n_win))
+            if got >= 0:
+                return [_fv_from_c(buf[i]) for i in range(got)]
     t = series.t_s
     if t.size == 0:
         return []
@@ -274,6 +350,22 @@ def window_features(
 
 def recording_features(series: BeatSeries, teeth: int = DEFAULT_ESCAPE_TEETH) -> FeatureVector:
     """``FeatureVector`` of the whole recording (with the fourth wheel from 180 s)."""
+    handle = _native_gear_handle(series)
+    if handle is not None and _nb.have("advtg_gear_recording_features"):
+        import ctypes
+
+        cdll = _nb.lib()
+        assert cdll is not None
+        v = _nb.NativeFeatureVectorStruct()
+        if (
+            int(
+                cdll.advtg_gear_recording_features(
+                    ctypes.c_void_p(handle.ptr), int(teeth), ctypes.byref(v)
+                )
+            )
+            == 0
+        ):
+            return _fv_from_c(v)
     sel = np.ones(series.k.size, dtype=bool)
     end = float(series.t_s[-1]) + 1e-9 if series.t_s.size else 0.0
     start = float(series.t_s[0]) if series.t_s.size else 0.0
@@ -284,6 +376,37 @@ def positional_deltas(
     positions: Mapping[str, tuple[float, float, float]],
 ) -> PositionalDeltas | None:
     """``positions``: name -> (rate s/d, beat error ms, amplitude deg). None without H and V."""
+    if _nb.have("advtg_compute_positional_deltas"):
+        import ctypes
+
+        cdll = _nb.lib()
+        assert cdll is not None
+        items = list(positions.items())
+        arr = (_nb.NativePositionalRecordStruct * max(1, len(items)))()
+        for idx, (name, rec) in enumerate(items):
+            arr[idx].name = str(name).encode("utf-8")[:7]
+            arr[idx].rate_spd = float(rec[0])
+            arr[idx].beat_error_ms = float(rec[1])
+            arr[idx].amplitude_deg = float(rec[2])
+        out = _nb.NativePositionalDeltasStruct()
+        rc = int(
+            cdll.advtg_compute_positional_deltas(
+                arr if items else None, len(items), ctypes.byref(out)
+            )
+        )
+        if rc >= 0:
+            if not out.valid:
+                return None
+            pos_names = tuple(
+                out.positions[i].value.decode("utf-8", errors="replace")
+                for i in range(int(out.n_positions))
+            )
+            return PositionalDeltas(
+                positions=pos_names,
+                delta_rate_hv_spd=float(out.delta_rate_hv_spd),
+                delta_amp_hv_deg=float(out.delta_amp_hv_deg),
+                be_spread_ms=float(out.be_spread_ms),
+            )
     h = [positions[p] for p in HORIZONTAL_POSITIONS if p in positions]
     v = [positions[p] for p in VERTICAL_POSITIONS if p in positions]
     if not h or not v:
@@ -306,6 +429,15 @@ def _level(n_signs: int, needed: int) -> str | None:
     return None
 
 
+_FINDING_CODE_NAMES = {
+    1: "rebanking",
+    2: "pallet_lubrication",
+    3: "magnetism",
+    4: "escape_wheel",
+    5: "fourth_wheel",
+}
+
+
 def diagnose(
     whole: FeatureVector,
     windows: list[FeatureVector],
@@ -313,6 +445,71 @@ def diagnose(
     gear: GearTrainReport | None = None,
 ) -> list[Finding]:
     """Rules over the features (see the module docstring: provisional thresholds)."""
+    if _nb.have("advtg_diagnose"):
+        import ctypes
+
+        cdll = _nb.lib()
+        assert cdll is not None
+        whole_c = _fv_to_c(whole)
+        n_win = len(windows)
+        win_arr = (_nb.NativeFeatureVectorStruct * max(1, n_win))()
+        for i, w in enumerate(windows):
+            win_arr[i] = _fv_to_c(w)
+        pos_c = None
+        if positional is not None:
+            pos_c = _nb.NativePositionalDeltasStruct(
+                delta_rate_hv_spd=float(positional.delta_rate_hv_spd),
+                delta_amp_hv_deg=float(positional.delta_amp_hv_deg),
+                be_spread_ms=float(positional.be_spread_ms),
+                valid=1,
+                n_positions=min(6, len(positional.positions)),
+            )
+            for idx, nm in enumerate(positional.positions[:6]):
+                pos_c.positions[idx].value = nm.encode("utf-8")[:7]
+        comps_c = None
+        n_comps = 0
+        if gear is not None and gear.components:
+            n_comps = len(gear.components)
+            comps_c = (_nb.NativeGearComponentStruct * n_comps)()
+            for idx, c in enumerate(gear.components):
+                comps_c[idx].name = 0 if c.name == "escape_wheel" else 1
+                comps_c[idx].series = 0 if c.series == "timing" else 1
+                comps_c[idx].expected_period_s = float(c.expected_period_s)
+                comps_c[idx].period_s = float(c.period_s)
+                comps_c[idx].amplitude = float(c.amplitude)
+                comps_c[idx].rate_ripple_s_per_day = float(c.rate_ripple_s_per_day)
+                comps_c[idx].fap = float(c.fap)
+                comps_c[idx].resolvable = 1 if c.resolvable else 0
+                comps_c[idx].significant = 1 if c.significant else 0
+        f_buf = (_nb.NativeDiagnosticFindingStruct * 8)()
+        n_found = int(
+            cdll.advtg_diagnose(
+                ctypes.byref(whole_c),
+                win_arr if n_win else None,
+                n_win,
+                ctypes.byref(pos_c) if pos_c is not None else None,
+                comps_c,
+                n_comps,
+                f_buf,
+                8,
+            )
+        )
+        if n_found >= 0:
+            findings: list[Finding] = []
+            for i in range(min(n_found, 8)):
+                f = f_buf[i]
+                ev = {
+                    f.keys[j].value.decode("utf-8", errors="replace"): float(f.values[j])
+                    for j in range(int(f.n_evidence))
+                }
+                findings.append(
+                    Finding(
+                        code=_FINDING_CODE_NAMES.get(int(f.code), "unknown"),
+                        level=LEVEL_PROBABLE if int(f.level) == 1 else LEVEL_POSSIBLE,
+                        evidence=ev,
+                    )
+                )
+            return findings
     out: list[Finding] = []
 
     # Rebanking / knocking: amplitude > 310 deg AND spurious sound before P1 AND abrupt

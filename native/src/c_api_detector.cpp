@@ -30,38 +30,6 @@ ADVTG_API void advtg_bd_destroy(void* h) { delete static_cast<BeatDetector*>(h);
 
 ADVTG_API void advtg_bd_reset(void* h) { static_cast<BeatDetector*>(h)->reset(); }
 
-ADVTG_API std::int64_t advtg_bd_process(void* h, const double* chunk, std::size_t n,
-                                        std::int64_t start_index, NativeBeat* out_beats,
-                                        std::size_t cap) {
-    try {
-        auto* bd = static_cast<BeatDetector*>(h);
-        thread_local std::vector<NativeBeat> beats;
-        beats.clear();
-        bd->process(chunk, n, start_index, beats);
-        const std::size_t m = beats.size();
-        if (m > cap) return -2 - static_cast<std::int64_t>(m);
-        if (m) std::memcpy(out_beats, beats.data(), m * sizeof(NativeBeat));
-        return static_cast<std::int64_t>(m);
-    } catch (...) {
-        return -1;
-    }
-}
-
-ADVTG_API std::int64_t advtg_bd_flush(void* h, NativeBeat* out_beats, std::size_t cap) {
-    try {
-        auto* bd = static_cast<BeatDetector*>(h);
-        thread_local std::vector<NativeBeat> beats;
-        beats.clear();
-        bd->flush(beats);
-        const std::size_t m = beats.size();
-        if (m > cap) return -2 - static_cast<std::int64_t>(m);
-        if (m) std::memcpy(out_beats, beats.data(), m * sizeof(NativeBeat));
-        return static_cast<std::int64_t>(m);
-    } catch (...) {
-        return -1;
-    }
-}
-
 ADVTG_API int advtg_bd_stats(void* h, NativeDetectorStats* out) {
     if (!h || !out) return -1;
     *out = static_cast<const BeatDetector*>(h)->stats();

@@ -7,6 +7,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 LOG_DIR_ENV_VAR = "ADV_TG_LOG_DIR"
+_ORIG_PLATFORM = sys.platform
+_ORIG_HOME = Path.home
 
 
 def default_log_dir() -> Path:
@@ -17,6 +19,13 @@ def default_log_dir() -> Path:
     on Windows and ``$XDG_STATE_HOME/adv_tg/logs`` (default ``~/.local/state/adv_tg/logs``)
     elsewhere. Child processes inherit the environment, so they log to the same folder.
     """
+    if sys.platform == _ORIG_PLATFORM and Path.home is _ORIG_HOME:
+        from adv_tg import native_bridge
+
+        if native_bridge.have("advtg_default_log_dir"):
+            cdll = native_bridge.lib()
+            assert cdll is not None
+            return Path(native_bridge.call_str_buf(cdll.advtg_default_log_dir))
     env = os.environ.get(LOG_DIR_ENV_VAR, "").strip()
     if env:
         return Path(env).expanduser().resolve()

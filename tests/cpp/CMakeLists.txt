@@ -21,9 +21,33 @@ else()
   set(ADVTG_SNDFILE PkgConfig::SNDFILE)
 endif()
 
-add_executable(advtg_cpp_tests test_golden_live.cpp)
-set_target_properties(advtg_cpp_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-target_compile_definitions(advtg_cpp_tests PRIVATE ADVTG_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set(ADVTG_MINIZ_C "${PROJECT_SOURCE_DIR}/native/third_party/miniz/miniz.c")
+if(MSVC)
+  set_source_files_properties("${ADVTG_MINIZ_C}" PROPERTIES COMPILE_OPTIONS "/w")
+else()
+  set_source_files_properties("${ADVTG_MINIZ_C}" PROPERTIES COMPILE_OPTIONS "-w")
+endif()
+
+add_executable(advtg_cpp_tests
+  test_golden_live.cpp
+  test_golden_batch_pps.cpp
+  test_phase1_library.cpp
+  "${ADVTG_MINIZ_C}"
+)
+set_target_properties(advtg_cpp_tests PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  CXX_STANDARD 20
+  CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(advtg_cpp_tests PRIVATE
+  "${PROJECT_SOURCE_DIR}/native/third_party"
+  "${PROJECT_SOURCE_DIR}/native/third_party/miniz"
+)
+target_compile_definitions(advtg_cpp_tests PRIVATE
+  ADVTG_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+  MINIZ_NO_STDIO
+)
 target_link_libraries(advtg_cpp_tests PRIVATE Catch2::Catch2WithMain advtg_native ${ADVTG_SNDFILE})
 if(MSVC)
   target_compile_options(advtg_cpp_tests PRIVATE /utf-8)

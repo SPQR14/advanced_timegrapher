@@ -43,7 +43,28 @@ from typing import Literal, Self
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from adv_tg import native_bridge as _nb
 from adv_tg.utils.debugger import Debugger
+
+
+def _native_audio_err() -> str:
+    cdll = _nb.lib()
+    if cdll is not None and hasattr(cdll, "advtg_audio_last_error"):
+        msg = cdll.advtg_audio_last_error()
+        if msg:
+            return msg.decode("utf-8", errors="replace")
+    return "error de audio nativo"
+
+
+def _soundfile_write_patched() -> bool:
+    import sys
+
+    sf_mod = sys.modules.get("soundfile")
+    if sf_mod is None:
+        return False
+    wfn = getattr(getattr(sf_mod, "SoundFile", None), "write", None)
+    return wfn is not None and getattr(wfn, "__module__", "") != "soundfile"
+
 
 __all__ = [
     "AudioData",
@@ -298,6 +319,25 @@ def audio_info(path: Path | str) -> AudioInfo:
         AudioFileError: If the file is missing, unsupported or corrupt.
     """
     p = Path(path)
+    if _nb.have("advtg_audio_info"):
+        _nb.ensure_sndfile_hint()
+        import ctypes
+
+        cdll = _nb.lib()
+        assert cdll is not None
+        ci = _nb.NativeAudioFileInfoStruct()
+        rc = int(cdll.advtg_audio_info(str(p).encode("utf-8"), ctypes.byref(ci)))
+        if rc == 0:
+            return AudioInfo(
+                sample_rate=int(ci.sample_rate),
+                channels=int(ci.channels),
+                frames=int(ci.frames),
+                duration_s=float(ci.duration_s),
+                format=ci.format.decode("utf-8", errors="replace"),
+                subtype=ci.subtype.decode("utf-8", errors="replace"),
+            )
+        if rc != -7:  # ADVTG_ERR_UNAVAILABLE
+            raise AudioFileError(_native_audio_err())
     _check_readable(p)
     try:
         i = _sf().info(str(p))
@@ -329,6 +369,60 @@ def read_audio(path: Path | str, max_bytes: int | None = MAX_IN_MEMORY_BYTES) ->
         AudioFileError: If the file is missing, unsupported, too large or corrupt.
     """
     p = Path(path)
+    if _nb.have("advtg_audio_read_f64"):
+        _nb.ensure_sndfile_hint()
+        import ctypes
+
+        try:
+            info = audio_info(p)
+            needed = info.frames * max(info.channels, 1) * 8
+            if max_bytes is not None and needed > max_bytes:
+                raise AudioFileError(
+                    f"el archivo '{p.name}' excede el límite de memoria para carga completa "
+                    f"({needed / 2**30:.1f} GiB > {max_bytes / 2**30:.1f} GiB); use iter_audio_blocks"
+                )
+            shape = (info.frames,) if info.channels <= 1 else (info.frames, info.channels)
+            buf = np.empty(shape, dtype=np.float64)
+            ci = _nb.NativeAudioFileInfoStruct()
+            comment_buf = ctypes.create_string_buffer(8192)
+            cdll = _nb.lib()
+            assert cdll is not None
+            rc = int(
+                cdll.advtg_audio_read_f64(
+                    str(p).encode("utf-8"),
+                    int(max_bytes) if max_bytes is not None else 0,
+                    _nb.ptr(buf),
+                    buf.size,
+                    ctypes.byref(ci),
+                    comment_buf,
+                    len(comment_buf),
+                )
+            )
+            if rc == 0:
+                comment_raw = comment_buf.value.decode("utf-8", errors="replace")
+                comment = comment_raw if comment_raw else None
+                _dbg.file_read(
+                    p,
+                    frames=info.frames,
+                    fs=info.sample_rate,
+                    channels=info.channels,
+                    fmt=info.format,
+                    subtype=info.subtype,
+                )
+                return AudioData(
+                    samples=buf,
+                    sample_rate=info.sample_rate,
+                    channels=info.channels,
+                    duration_s=info.duration_s,
+                    format=info.format,
+                    subtype=info.subtype,
+                    comment=comment,
+                )
+            if rc != -7:
+                raise AudioFileError(_native_audio_err())
+        except AudioFileError as exc:
+            _dbg.file_read(p, ok=False, error=exc)
+            raise
     sf = _sf()
     try:
         _check_readable(p)
@@ -395,12 +489,77 @@ def select_channel(data: AudioData | ArrayLike, mode: ChannelMode = "max_energy"
         return np.ascontiguousarray(x, dtype=np.float64)
     if x.ndim != 2:
         raise ValueError(f"forma de muestras no válida: {x.shape}")
+    if isinstance(mode, str):
+        if mode != "max_energy":
+            raise ValueError(f"modo de canal desconocido: {mode!r}")
+        mode_int = -1
+    else:
+        mode_int = int(mode)
+        if not 0 <= mode_int < x.shape[1]:
+            raise ValueError(f"canal {mode_int} fuera de rango (el archivo tiene {x.shape[1]})")
+    if _nb.have("advtg_audio_select_channel"):
+        xc = _nb.f64(x)
+        mono = np.empty(xc.shape[0], dtype=np.float64)
+        cdll = _nb.lib()
+        assert cdll is not None
+        if (
+            cdll.advtg_audio_select_channel(
+                _nb.ptr(xc), xc.shape[0], xc.shape[1], mode_int, _nb.ptr(mono)
+            )
+            == 0
+        ):
+            return mono
     energies = np.einsum("ij,ij->j", x, x)
     return np.ascontiguousarray(x[:, _channel_index(energies, mode)], dtype=np.float64)
 
 
 def read_mono(path: Path | str, mode: ChannelMode = "max_energy") -> tuple[int, NDArray]:
     """Convenience: ``(sample_rate, one channel as float64)`` of an audio file."""
+    if _nb.have("advtg_audio_read_mono"):
+        _nb.ensure_sndfile_hint()
+        import ctypes
+
+        p = Path(path)
+        info = audio_info(p)
+        if isinstance(mode, str):
+            if mode != "max_energy":
+                raise ValueError(f"modo de canal desconocido: {mode!r}")
+            mode_int = -1
+        else:
+            mode_int = int(mode)
+            if info.channels <= 1:
+                if mode_int != 0:
+                    raise ValueError(f"canal {mode_int} fuera de rango (la señal es mono)")
+            elif not 0 <= mode_int < info.channels:
+                raise ValueError(
+                    f"canal {mode_int} fuera de rango (el archivo tiene {info.channels})"
+                )
+        mono = np.empty(info.frames, dtype=np.float64)
+        ci = _nb.NativeAudioFileInfoStruct()
+        cdll = _nb.lib()
+        assert cdll is not None
+        rc = int(
+            cdll.advtg_audio_read_mono(
+                str(p).encode("utf-8"),
+                mode_int,
+                MAX_IN_MEMORY_BYTES,
+                _nb.ptr(mono),
+                mono.size,
+                ctypes.byref(ci),
+            )
+        )
+        if rc == 0:
+            _dbg.file_read(
+                p,
+                frames=info.frames,
+                fs=info.sample_rate,
+                channels=info.channels,
+                fmt=info.format,
+                subtype=info.subtype,
+            )
+            return int(ci.sample_rate), mono
+        if rc != -7:
+            raise AudioFileError(_native_audio_err())
     data = read_audio(path)
     return data.sample_rate, select_channel(data, mode)
 
@@ -415,6 +574,22 @@ def read_tags(path: Path | str) -> dict[str, str]:
         AudioFileError: If the file is missing, unsupported or corrupt.
     """
     p = Path(path)
+    if _nb.have("advtg_audio_read_tags"):
+        _nb.ensure_sndfile_hint()
+        cdll = _nb.lib()
+        assert cdll is not None
+        out: dict[str, str] = {}
+
+        def _on_tag(k: bytes | None, v: bytes | None, _u: object) -> None:
+            if k is not None and v is not None:
+                out[k.decode("utf-8", errors="replace")] = v.decode("utf-8", errors="replace")
+
+        cb = _nb.TAG_CB_TYPE(_on_tag)
+        rc = int(cdll.advtg_audio_read_tags(str(p).encode("utf-8"), cb, None))
+        if rc == 0:
+            return out
+        if rc != -7:
+            raise AudioFileError(_native_audio_err())
     _check_readable(p)
     fmt = audio_info(p).format
     try:
@@ -442,6 +617,29 @@ def update_tags(path: Path | str, tags: Mapping[str, str | None]) -> Path:
     """
     p = Path(path)
     new = _check_tags(tags)
+    if _nb.have("advtg_audio_update_tags"):
+        _nb.ensure_sndfile_hint()
+        cdll = _nb.lib()
+        assert cdll is not None
+        n_tags = len(new)
+        arr = (_nb.NativeAudioTagStruct * max(1, n_tags))()
+        keep: list[tuple[bytes, bytes | None]] = []
+        for idx, (k, v) in enumerate(new.items()):
+            kb = k.encode("utf-8")
+            vb = v.encode("utf-8") if v is not None else None
+            keep.append((kb, vb))
+            arr[idx].key = kb
+            arr[idx].value = vb
+        rc = int(
+            cdll.advtg_audio_update_tags(str(p).encode("utf-8"), arr if n_tags else None, n_tags)
+        )
+        if rc == 0:
+            _dbg.file_write(p, tags=len(new))
+            return p
+        if rc != -7:
+            err = AudioFileError(_native_audio_err())
+            _dbg.file_write(p, ok=False, error=err)
+            raise err
     fmt = audio_info(p).format
     try:
         if fmt == "FLAC":
@@ -494,6 +692,72 @@ def iter_audio_blocks(
     if int(blocksize) <= 0:
         raise ValueError(f"blocksize debe ser positivo (recibido {blocksize})")
     p = Path(path)
+    if _nb.have("advtg_audio_reader_open"):
+        _nb.ensure_sndfile_hint()
+        import ctypes
+
+        if channel is None:
+            ch_mode = -2
+        elif isinstance(channel, str):
+            if channel != "max_energy":
+                raise ValueError(f"modo de canal desconocido: {channel!r}")
+            ch_mode = -1
+        else:
+            ch_mode = int(channel)
+            if ch_mode < 0:
+                raise ValueError(f"canal {ch_mode} fuera de rango")
+        cdll = _nb.lib()
+        assert cdll is not None
+        info_pre = audio_info(p)
+        if channel is not None and not isinstance(channel, str):
+            if info_pre.channels <= 1:
+                if ch_mode != 0:
+                    raise ValueError(f"canal {ch_mode} fuera de rango (la señal es mono)")
+            elif not 0 <= ch_mode < info_pre.channels:
+                raise ValueError(
+                    f"canal {ch_mode} fuera de rango (el archivo tiene {info_pre.channels})"
+                )
+        reader = cdll.advtg_audio_reader_open(str(p).encode("utf-8"), int(blocksize), ch_mode)
+        if not reader:
+            err = AudioFileError(_native_audio_err())
+            _dbg.file_read(p, ok=False, error=err)
+            raise err
+        try:
+            ci = _nb.NativeAudioFileInfoStruct()
+            sel = ctypes.c_int32(-1)
+            cdll.advtg_audio_reader_info(reader, ctypes.byref(ci), ctypes.byref(sel))
+            _dbg.file_read(
+                p,
+                frames=int(ci.frames),
+                fs=int(ci.sample_rate),
+                channels=int(ci.channels),
+                blocks=True,
+            )
+            out_cols = 1 if (ch_mode != -2 or int(ci.channels) <= 1) else int(ci.channels)
+            buf = np.empty(int(blocksize) * out_cols, dtype=np.float64)
+            start_idx = ctypes.c_int64(0)
+            while True:
+                got = int(
+                    cdll.advtg_audio_reader_read_block(
+                        reader, _nb.ptr(buf), buf.size, ctypes.byref(start_idx)
+                    )
+                )
+                if got == 0:
+                    break
+                if got < 0:
+                    err = AudioFileError(_native_audio_err())
+                    _dbg.file_read(p, ok=False, error=err)
+                    raise err
+                if out_cols == 1:
+                    yield int(start_idx.value), np.array(buf[:got], copy=True)
+                else:
+                    yield (
+                        int(start_idx.value),
+                        np.array(buf[: got * out_cols].reshape(got, out_cols), copy=True),
+                    )
+        finally:
+            cdll.advtg_audio_reader_close(reader)
+        return
     sf = _sf()
     try:
         _check_readable(p)
@@ -609,8 +873,59 @@ def write_audio(
     p = Path(path)
     if int(sample_rate) <= 0:
         raise AudioFileError(f"tasa de muestreo no válida ({sample_rate}) para '{p}'")
-    fmt, sub = _resolve_format(p, subtype)
     tag_map = _check_tags(tags or {})
+    if _nb.have("advtg_audio_write_f64") and not _soundfile_write_patched():
+        _nb.ensure_sndfile_hint()
+        import ctypes
+
+        x = np.asarray(samples, dtype=np.float64)
+        if x.ndim not in (1, 2):
+            raise AudioFileError(f"forma de muestras no válida {x.shape} para '{p}'")
+        xc = np.ascontiguousarray(x, dtype=np.float64)
+        channels = 1 if xc.ndim == 1 else xc.shape[1]
+        n_tags = len(tag_map)
+        arr = (_nb.NativeAudioTagStruct * max(1, n_tags))()
+        keep: list[tuple[bytes, bytes | None]] = []
+        for idx, (k, v) in enumerate(tag_map.items()):
+            kb = k.encode("utf-8")
+            vb = v.encode("utf-8") if v is not None else None
+            keep.append((kb, vb))
+            arr[idx].key = kb
+            arr[idx].value = vb
+        clipped = ctypes.c_int64(0)
+        sub_eff = (subtype or ("FLOAT" if p.suffix.lower() == ".wav" else "PCM_24")).upper()
+        cdll = _nb.lib()
+        assert cdll is not None
+        rc = int(
+            cdll.advtg_audio_write_f64(
+                str(p).encode("utf-8"),
+                _nb.ptr(xc),
+                xc.shape[0],
+                channels,
+                int(sample_rate),
+                subtype.encode("utf-8") if subtype else None,
+                comment.encode("utf-8") if comment else None,
+                arr if n_tags else None,
+                n_tags,
+                ctypes.byref(clipped),
+            )
+        )
+        if rc == 0:
+            if clipped.value > 0:
+                _warn_clipped(p, int(clipped.value), sub_eff)
+            _dbg.file_write(
+                p,
+                frames=xc.shape[0],
+                fs=int(sample_rate),
+                fmt=p.suffix.upper().lstrip("."),
+                subtype=sub_eff,
+            )
+            return p
+        if rc != -7:
+            err = AudioFileError(_native_audio_err())
+            _dbg.file_write(p, ok=False, error=err)
+            raise err
+    fmt, sub = _resolve_format(p, subtype)
     data, clipped = _prepare(samples, sub, p)
     if clipped:
         _warn_clipped(p, clipped, sub)
@@ -684,10 +999,40 @@ class AudioWriter:
         self._warned = False
         self._tmp: Path | None = None
         self._file = None
+        self._native_w: int | None = None
 
     def open(self) -> Self:
         """Open the temporary file (called by ``__enter__``)."""
-        if self._file is not None:
+        if self._file is not None or self._native_w is not None:
+            return self
+        if _nb.have("advtg_audio_writer_open") and not _soundfile_write_patched():
+            _nb.ensure_sndfile_hint()
+            cdll = _nb.lib()
+            assert cdll is not None
+            tag_map = _check_tags(self.tags)
+            n_tags = len(tag_map)
+            arr = (_nb.NativeAudioTagStruct * max(1, n_tags))()
+            keep: list[tuple[bytes, bytes | None]] = []
+            for idx, (k, v) in enumerate(tag_map.items()):
+                kb = k.encode("utf-8")
+                vb = v.encode("utf-8") if v is not None else None
+                keep.append((kb, vb))
+                arr[idx].key = kb
+                arr[idx].value = vb
+            w = cdll.advtg_audio_writer_open(
+                str(self.path).encode("utf-8"),
+                self.sample_rate,
+                self.channels,
+                self.subtype.encode("utf-8"),
+                self.comment.encode("utf-8") if self.comment else None,
+                arr if n_tags else None,
+                n_tags,
+            )
+            if not w:
+                err = AudioFileError(_native_audio_err())
+                _dbg.file_write(self.path, ok=False, error=err)
+                raise err
+            self._native_w = int(w)
             return self
         self._tmp = _temp_path(self.path)
         try:
@@ -714,6 +1059,35 @@ class AudioWriter:
 
     def write(self, block: ArrayLike) -> None:
         """Append a block of samples."""
+        if self._native_w is not None:
+            import ctypes
+
+            x = np.asarray(block, dtype=np.float64)
+            if x.ndim not in (1, 2):
+                raise AudioFileError(f"forma de muestras no válida {x.shape} para '{self.path}'")
+            xc = np.ascontiguousarray(x, dtype=np.float64)
+            expected = 1 if xc.ndim == 1 else xc.shape[1]
+            clipped_now = ctypes.c_int64(0)
+            cdll = _nb.lib()
+            assert cdll is not None
+            rc = int(
+                cdll.advtg_audio_writer_write(
+                    ctypes.c_void_p(self._native_w),
+                    _nb.ptr(xc),
+                    xc.shape[0],
+                    expected,
+                    ctypes.byref(clipped_now),
+                )
+            )
+            if rc != 0:
+                raise AudioFileError(_native_audio_err())
+            if clipped_now.value > 0:
+                self.clipped_samples += int(clipped_now.value)
+                if not self._warned:
+                    self._warned = True
+                    _warn_clipped(self.path, int(clipped_now.value), self.subtype)
+            self.frames_written += xc.shape[0]
+            return
         if self._file is None:
             raise AudioFileError("AudioWriter no está abierto (usa 'with AudioWriter(...)')")
         data, clipped = _prepare(block, self.subtype, self.path)
@@ -730,6 +1104,47 @@ class AudioWriter:
 
     def close(self, *, discard: bool = False) -> None:
         """Finish the file (rename into place) or ``discard`` it. Idempotent."""
+        nw = self._native_w
+        if nw is not None:
+            import ctypes
+
+            self._native_w = None
+            cdll = _nb.lib()
+            assert cdll is not None
+            hw = ctypes.c_void_p(nw)
+            if not discard:
+                for k, v in _check_tags(self.tags).items():
+                    rc_tag = int(
+                        cdll.advtg_audio_writer_set_tag(
+                            hw, k.encode("utf-8"), v.encode("utf-8") if v is not None else None
+                        )
+                    )
+                    if rc_tag != 0:
+                        err = AudioFileError(_native_audio_err())
+                        cdll.advtg_audio_writer_close(hw, 1, None, None)
+                        _dbg.file_write(self.path, ok=False, error=err)
+                        raise err
+            frames_out = ctypes.c_int64(0)
+            clipped_out = ctypes.c_int64(0)
+            rc = int(
+                cdll.advtg_audio_writer_close(
+                    hw, 1 if discard else 0, ctypes.byref(frames_out), ctypes.byref(clipped_out)
+                )
+            )
+            if rc != 0 and not discard:
+                err = AudioFileError(_native_audio_err())
+                _dbg.file_write(self.path, ok=False, error=err)
+                raise err
+            if not discard:
+                _dbg.file_write(
+                    self.path,
+                    frames=self.frames_written,
+                    fs=self.sample_rate,
+                    fmt=self.format,
+                    subtype=self.subtype,
+                    clipped=self.clipped_samples,
+                )
+            return
         f, tmp = self._file, self._tmp
         self._file = None
         self._tmp = None

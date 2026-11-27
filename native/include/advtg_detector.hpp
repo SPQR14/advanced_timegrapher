@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "advtg.h"
 #include "advtg_bits.hpp"
 
 namespace advtg::core {
@@ -181,6 +182,7 @@ public:
 
     NativeDetectorStats stats() const;
     const std::vector<std::string>& warnings() const;
+    const std::vector<advtg_warning>& warning_codes() const;
     void templates(NativeTemplateHeader& hdr0, std::vector<double>& env0,
                    NativeTemplateHeader& hdr1, std::vector<double>& env1) const;
     void quartz_timing(std::int32_t& q0, std::int32_t& q1) const;

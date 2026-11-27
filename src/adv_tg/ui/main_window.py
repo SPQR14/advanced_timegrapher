@@ -2431,16 +2431,10 @@ class MainWin(QMainWindow):
 
         rows_written = 0
         try:
-            with out_path.open(mode="w", encoding="utf-8", newline="") as fh:
-                writer = csv.DictWriter(fh, fieldnames=headers)
-                writer.writeheader()
-
-                for rec in self._session_records:
-                    writer.writerow({k: sanitize_csv_cell(v) for k, v in rec.items()})
-                    rows_written += 1
-
-                if self._last_telemetry is not None and not self._session_records:
-                    summary_row = {
+            raw_rows: list[dict[str, object]] = list(self._session_records)
+            if self._last_telemetry is not None and not self._session_records:
+                raw_rows.append(
+                    {
                         "test_name": test_name,
                         "caliber": caliber,
                         "bph": cfg.bph,
@@ -2455,11 +2449,10 @@ class MainWin(QMainWindow):
                         "confidence": f"{self._last_telemetry.confidence:.3f}",
                         "snr_db": "",
                     }
-                    writer.writerow({k: sanitize_csv_cell(v) for k, v in summary_row.items()})
-                    rows_written += 1
-
-                for pos, pos_rec in self._saved_positions.items():
-                    pos_row = {
+                )
+            for pos, pos_rec in self._saved_positions.items():
+                raw_rows.append(
+                    {
                         "test_name": test_name,
                         "caliber": caliber,
                         "bph": cfg.bph,
@@ -2474,7 +2467,58 @@ class MainWin(QMainWindow):
                         "confidence": f"{pos_rec.confidence:.3f}",
                         "snr_db": "",
                     }
-                    writer.writerow({k: sanitize_csv_cell(v) for k, v in pos_row.items()})
+                )
+            from adv_tg import native_bridge
+
+            if native_bridge.have("advtg_write_results_csv"):
+                arr = (native_bridge.NativeCsvResultRowStruct * max(1, len(raw_rows)))()
+                keep: list[tuple[bytes, ...]] = []
+                for idx, r in enumerate(raw_rows):
+                    vals = tuple(
+                        str(r.get(k, "")).encode("utf-8")
+                        for k in (
+                            "test_name",
+                            "caliber",
+                            "position",
+                            "record_type",
+                            "elapsed_s",
+                            "rate_spd",
+                            "beat_error_ms",
+                            "amplitude_deg",
+                            "confidence",
+                            "snr_db",
+                        )
+                    )
+                    keep.append(vals)
+                    arr[idx].test_name = vals[0]
+                    arr[idx].caliber = vals[1]
+                    arr[idx].bph = int(float(r.get("bph", 0)))
+                    arr[idx].lift_angle = float(r.get("lift_angle", 0.0))
+                    arr[idx].sample_rate = int(float(r.get("sample_rate", 0)))
+                    arr[idx].position = vals[2]
+                    arr[idx].record_type = vals[3]
+                    arr[idx].elapsed_s = vals[4]
+                    arr[idx].rate_spd = vals[5]
+                    arr[idx].beat_error_ms = vals[6]
+                    arr[idx].amplitude_deg = vals[7]
+                    arr[idx].confidence = vals[8]
+                    arr[idx].snr_db = vals[9]
+                rc = int(
+                    native_bridge.lib().advtg_write_results_csv(  # type: ignore[union-attr]
+                        str(out_path).encode("utf-8"),
+                        arr if raw_rows else None,
+                        len(raw_rows),
+                    )
+                )
+                if rc == 0:
+                    _dbg.file_write(out_path, rows=len(raw_rows))
+                    return out_path
+
+            with out_path.open(mode="w", encoding="utf-8", newline="") as fh:
+                writer = csv.DictWriter(fh, fieldnames=headers)
+                writer.writeheader()
+                for r in raw_rows:
+                    writer.writerow({k: sanitize_csv_cell(v) for k, v in r.items()})
                     rows_written += 1
 
             _dbg.file_write(out_path, rows=rows_written)
@@ -2529,12 +2573,11 @@ class MainWin(QMainWindow):
         ]
 
         try:
-            with out_path.open(mode="w", encoding="utf-8", newline="") as fh:
-                writer = csv.DictWriter(fh, fieldnames=headers)
-                writer.writeheader()
-                for pos in positions_order:
-                    rec = self._saved_positions[pos]
-                    row = {
+            rows_data: list[dict[str, object]] = []
+            for pos in positions_order:
+                rec = self._saved_positions[pos]
+                rows_data.append(
+                    {
                         "test_name": test_name,
                         "caliber": caliber,
                         "bph": cfg.bph,
@@ -2547,8 +2590,9 @@ class MainWin(QMainWindow):
                         "global_mean_spd": "",
                         "positional_delta_spd": "",
                     }
-                    writer.writerow({k: sanitize_csv_cell(v) for k, v in row.items()})
-                summary = {
+                )
+            rows_data.append(
+                {
                     "test_name": test_name,
                     "caliber": caliber,
                     "bph": cfg.bph,
@@ -2561,7 +2605,55 @@ class MainWin(QMainWindow):
                     "global_mean_spd": f"{mean_rate:.2f}" if rates else "",
                     "positional_delta_spd": f"{max_delta:.2f}" if rates else "",
                 }
-                writer.writerow({k: sanitize_csv_cell(v) for k, v in summary.items()})
+            )
+            from adv_tg import native_bridge
+
+            if native_bridge.have("advtg_write_global_stats_csv"):
+                arr = (native_bridge.NativeCsvGlobalRowStruct * len(rows_data))()
+                keep_g: list[tuple[bytes, ...]] = []
+                for idx, r in enumerate(rows_data):
+                    vals = tuple(
+                        str(r[k]).encode("utf-8")
+                        for k in (
+                            "test_name",
+                            "caliber",
+                            "position",
+                            "rate_spd",
+                            "beat_error_ms",
+                            "amplitude_deg",
+                            "confidence",
+                            "global_mean_spd",
+                            "positional_delta_spd",
+                        )
+                    )
+                    keep_g.append(vals)
+                    arr[idx].test_name = vals[0]
+                    arr[idx].caliber = vals[1]
+                    arr[idx].bph = int(float(r["bph"]))
+                    arr[idx].lift_angle = float(r["lift_angle"])
+                    arr[idx].position = vals[2]
+                    arr[idx].rate_spd = vals[3]
+                    arr[idx].beat_error_ms = vals[4]
+                    arr[idx].amplitude_deg = vals[5]
+                    arr[idx].confidence = vals[6]
+                    arr[idx].global_mean_spd = vals[7]
+                    arr[idx].positional_delta_spd = vals[8]
+                rc = int(
+                    native_bridge.lib().advtg_write_global_stats_csv(  # type: ignore[union-attr]
+                        str(out_path).encode("utf-8"), arr, len(rows_data)
+                    )
+                )
+                if rc == 0:
+                    _dbg.file_write(
+                        out_path, positions=len(positions_order), delta_spd=round(max_delta, 2)
+                    )
+                    return out_path
+
+            with out_path.open(mode="w", encoding="utf-8", newline="") as fh:
+                writer = csv.DictWriter(fh, fieldnames=headers)
+                writer.writeheader()
+                for r in rows_data:
+                    writer.writerow({k: sanitize_csv_cell(v) for k, v in r.items()})
             _dbg.file_write(out_path, positions=len(positions_order), delta_spd=round(max_delta, 2))
             return out_path
         except Exception as exc:
@@ -2933,29 +3025,69 @@ class MainWin(QMainWindow):
                 x_osc, y_osc = self.osc_wave_curve.getData()
                 x_wav, y_wav = self.audio_waveform_curve.getData()
 
-                with out_path.open(mode="w", encoding="utf-8", newline="") as fh:
-                    writer = csv.writer(fh)
-                    writer.writerow(["trace_name", "x", "y"])
-                    if x_even is not None and y_even is not None:
-                        for x_val, y_val in zip(x_even, y_even):
-                            writer.writerow(
-                                ["paper_tape_even", f"{float(x_val):.6f}", f"{float(y_val):.4f}"]
-                            )
-                    if x_odd is not None and y_odd is not None:
-                        for x_val, y_val in zip(x_odd, y_odd):
-                            writer.writerow(
-                                ["paper_tape_odd", f"{float(x_val):.6f}", f"{float(y_val):.4f}"]
-                            )
-                    if x_osc is not None and y_osc is not None:
-                        for x_val, y_val in zip(x_osc, y_osc):
-                            writer.writerow(
-                                ["oscilloscope", f"{float(x_val):.6f}", f"{float(y_val):.6f}"]
-                            )
-                    if x_wav is not None and y_wav is not None:
-                        for x_val, y_val in zip(x_wav, y_wav):
-                            writer.writerow(
-                                ["audio_waveform", f"{float(x_val):.6f}", f"{float(y_val):.6f}"]
-                            )
+                from adv_tg import native_bridge
+
+                wrote_native = False
+                if native_bridge.have("advtg_write_traces_csv"):
+
+                    def _pair(xs: object, ys: object) -> tuple[object, object, int]:
+                        if xs is None or ys is None or len(xs) == 0 or len(ys) == 0:  # type: ignore[arg-type]
+                            empty = np.empty(0, dtype=np.float64)
+                            return empty, empty, 0
+                        n_p = min(len(xs), len(ys))  # type: ignore[arg-type]
+                        return native_bridge.f64(xs[:n_p]), native_bridge.f64(ys[:n_p]), n_p  # type: ignore[index]
+
+                    ex, ey, ne = _pair(x_even, y_even)
+                    ox, oy, no = _pair(x_odd, y_odd)
+                    sx, sy, ns_len = _pair(x_osc, y_osc)
+                    wx, wy, nw = _pair(x_wav, y_wav)
+                    rc = int(
+                        native_bridge.lib().advtg_write_traces_csv(  # type: ignore[union-attr]
+                            str(out_path).encode("utf-8"),
+                            native_bridge.ptr(ex) if ne else None,
+                            native_bridge.ptr(ey) if ne else None,
+                            ne,
+                            native_bridge.ptr(ox) if no else None,
+                            native_bridge.ptr(oy) if no else None,
+                            no,
+                            native_bridge.ptr(sx) if ns_len else None,
+                            native_bridge.ptr(sy) if ns_len else None,
+                            ns_len,
+                            native_bridge.ptr(wx) if nw else None,
+                            native_bridge.ptr(wy) if nw else None,
+                            nw,
+                        )
+                    )
+                    wrote_native = rc == 0
+
+                if not wrote_native:
+                    with out_path.open(mode="w", encoding="utf-8", newline="") as fh:
+                        writer = csv.writer(fh)
+                        writer.writerow(["trace_name", "x", "y"])
+                        if x_even is not None and y_even is not None:
+                            for x_val, y_val in zip(x_even, y_even):
+                                writer.writerow(
+                                    [
+                                        "paper_tape_even",
+                                        f"{float(x_val):.6f}",
+                                        f"{float(y_val):.4f}",
+                                    ]
+                                )
+                        if x_odd is not None and y_odd is not None:
+                            for x_val, y_val in zip(x_odd, y_odd):
+                                writer.writerow(
+                                    ["paper_tape_odd", f"{float(x_val):.6f}", f"{float(y_val):.4f}"]
+                                )
+                        if x_osc is not None and y_osc is not None:
+                            for x_val, y_val in zip(x_osc, y_osc):
+                                writer.writerow(
+                                    ["oscilloscope", f"{float(x_val):.6f}", f"{float(y_val):.6f}"]
+                                )
+                        if x_wav is not None and y_wav is not None:
+                            for x_val, y_val in zip(x_wav, y_wav):
+                                writer.writerow(
+                                    ["audio_waveform", f"{float(x_val):.6f}", f"{float(y_val):.6f}"]
+                                )
             elif ext == ".pdf":
                 printer = QPrinter(QPrinter.PrinterMode.HighResolution)
                 printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
