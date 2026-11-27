@@ -1,0 +1,22 @@
+{
+ "n_beats": 1200,
+ "n_used_even": 560,
+ "n_used_odd": 587,
+ "n_excluded": 23,
+ "excluded_fraction": 0.019166666666666665,
+ "rate_s_per_day": -0.5510620506118613,
+ "rate_sigma_s_per_day": 0.03521189622052908,
+ "rate_uncertainty_s_per_day": 0.22071999213173454,
+ "beat_error_ms": null,
+ "beat_error_uncertainty_ms": null,
+ "beat_error_p3_ms": null,
+ "beat_error_point": "\u2014",
+ "amplitude_deg": null,
+ "amplitude_tic_deg": null,
+ "amplitude_tac_deg": null,
+ "amplitude_parity": "both",
+ "sigma_even_us": 1031.5801569633654,
+ "sigma_odd_us": 1394.309204337299,
+ "confidence": 0.470200850743985,
+ "span_s": 296.00079170357066
+}

@@ -150,6 +150,22 @@ jobs:
           ./dist/adv-tg/adv-tg --version
           ./dist/adv-tg/adv-tg --smoke-test
 
+      # Baseline of the C++ migration (docs/PLAN_MIGRACION_CPP.md, phase 0): informative only
+      - name: Baseline (startup, memory, GUI smoothness) of the frozen build
+        continue-on-error: true
+        run: |
+          /opt/venv/bin/python scripts/baseline.py --exe dist/adv-tg/adv-tg --runs 3 \
+            --seconds 20 --json baseline-linux.json
+
+      - name: Upload baseline
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: baseline-linux
+          path: baseline-linux.json
+          if-no-files-found: ignore
+
       - name: Build rpm, deb and AppImage
         run: |
           ./packaging/linux/build_rpm.sh "$VERSION"
@@ -369,6 +385,22 @@ jobs:
           "./dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --version
           "./dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --smoke-test
 
+      - name: Baseline (startup, memory, GUI smoothness) of the frozen build
+        continue-on-error: true
+        run: |
+          pip install psutil
+          python scripts/baseline.py --exe "dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" \
+            --runs 3 --seconds 20 --json baseline-macos.json
+
+      - name: Upload baseline
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: baseline-macos
+          path: baseline-macos.json
+          if-no-files-found: ignore
+
       - name: Build the DMG
         run: |
           ./packaging/macos/build_dmg.sh "dist/Advanced Timegrapher.app" \
@@ -448,6 +480,21 @@ jobs:
         run: |
           $p = Start-Process -FilePath "dist\adv-tg\adv-tg.exe" -ArgumentList "--smoke-test" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "smoke test failed with exit code $($p.ExitCode)" }
+
+      - name: Baseline (startup, memory, GUI smoothness) of the frozen build
+        continue-on-error: true
+        run: |
+          pip install psutil
+          python scripts/baseline.py --exe dist\adv-tg\adv-tg.exe --runs 3 --seconds 20 --json baseline-windows.json
+
+      - name: Upload baseline
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: baseline-windows
+          path: baseline-windows.json
+          if-no-files-found: ignore
 
       - name: Build the installer (Inno Setup)
         run: |
