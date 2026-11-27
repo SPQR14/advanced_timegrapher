@@ -207,7 +207,8 @@ Se construye en paralelo a la GUI Python; se publica como beta junto a la 2.x es
    supresión de avisos de deprecación en su unidad de compilación); si no compensa, se usa
    `QPainter` propio (las tres gráficas solo dibujan unos miles de puntos).
 3. **Dependencias:**
-   - Qt 6.11.3 oficial instalado con aqtinstall 3.3.0;
+   - Qt 6.11.3 oficial instalado con `aqtinstall` (fijado al commit `4c75985` de GitHub con el
+     PR #1048 para el formato de carpetas Windows de Qt ≥ 6.11 hasta que salga `> 3.3.0` en PyPI);
    - vcpkg en modo manifiesto (`vcpkg.json`, baseline vcpkg 2026.10.16, commit `9eec002`)
      para `libsndfile`, `catch2`, `portaudio`, `nlohmann-json` y `miniz` en Windows;
    - paquetes del sistema en Linux y macOS;

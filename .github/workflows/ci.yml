@@ -108,7 +108,8 @@ jobs:
       - name: Install Qt ${{ env.QT_VERSION }} (official binaries)
         shell: bash
         run: |
-          python -m pip install "aqtinstall==3.3.0"
+          # Pinned commit includes PR #1048 (Windows Qt >= 6.11 folder layout) until aqtinstall > 3.3.0 on PyPI.
+          python -m pip install "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4"
           aqt install-qt ${{ matrix.qt_host }} desktop "$QT_VERSION" ${{ matrix.qt_arch }} \
             --outputdir "$RUNNER_TEMP/Qt"
           echo "QT_ROOT=$RUNNER_TEMP/Qt/$QT_VERSION/${{ matrix.qt_dir }}" >> "$GITHUB_ENV"
@@ -186,7 +187,8 @@ jobs:
 
       - name: Install Qt ${{ env.QT_VERSION }} (official binaries)
         run: |
-          /usr/bin/python3.12 -m pip install "aqtinstall==3.3.0"
+          # Pinned commit includes PR #1048 (Windows Qt >= 6.11 folder layout) until aqtinstall > 3.3.0 on PyPI.
+          /usr/bin/python3.12 -m pip install "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4"
           /usr/bin/python3.12 -m aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 \
             --outputdir /tmp/Qt
           echo "QT_ROOT=/tmp/Qt/$QT_VERSION/gcc_64" >> "$GITHUB_ENV"
