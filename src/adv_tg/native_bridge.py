@@ -1725,20 +1725,64 @@ def ptr(a: NDArray) -> ctypes.c_void_p:
 _HINTED_LIBS: set[tuple[int, str]] = set()
 
 
+def _select_platform_dll(matches: list[Path]) -> Path:
+    """Pick the architecture-matching library when a wheel ships multiple variants.
+
+    For example, ``_sounddevice_data`` on Windows ships 32-bit, 64-bit, ARM64 and
+    ``-asio`` DLLs side by side; naive alphabetical sorting picks ``libportaudio32bit-asio.dll``
+    on 64-bit Windows, which fails ``LoadLibraryW`` with ``ERROR_BAD_EXE_FORMAT``.
+    """
+    if len(matches) <= 1 or sys.platform != "win32":
+        return matches[0]
+    import platform as _plat
+
+    mach = _plat.machine().lower()
+    is_arm64 = mach in ("arm64", "aarch64")
+    is_64 = sys.maxsize > 2**32
+
+    def _score(p: Path) -> tuple[int, int, str]:
+        name = p.name.lower()
+        if is_arm64:
+            arch_ok = 0 if "arm64" in name else 1
+        elif is_64:
+            arch_ok = 0 if ("64bit" in name or "x64" in name or "amd64" in name) else 1
+        else:
+            arch_ok = 0 if ("32bit" in name or "x86" in name) else 1
+        asio_penalty = 1 if "asio" in name else 0
+        return (arch_ok, asio_penalty, name)
+
+    return min(matches, key=_score)
+
+
 def _find_bundled_lib(pkg_name: str, patterns: tuple[str, ...]) -> str | None:
+    roots: list[Path] = []
     try:
         import importlib.util
 
         spec = importlib.util.find_spec(pkg_name)
         if spec and spec.submodule_search_locations:
-            base = Path(next(iter(spec.submodule_search_locations)))
-            for pat in patterns:
-                matches = sorted(base.rglob(pat))
-                if matches:
-                    return str(matches[0])
+            roots.append(Path(next(iter(spec.submodule_search_locations))))
     except Exception:
         pass
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cand = Path(meipass) / pkg_name
+        if cand.is_dir() and cand not in roots:
+            roots.append(cand)
+    for base in roots:
+        for pat in patterns:
+            matches = sorted(base.rglob(pat))
+            if matches:
+                return str(_select_platform_dll(matches))
     return None
+
+
+def _platform_lib_patterns(stem: str) -> tuple[str, ...]:
+    if sys.platform == "win32":
+        return (f"*{stem}*.dll",)
+    if sys.platform == "darwin":
+        return (f"*{stem}*.dylib",)
+    return (f"*{stem}*.so*",)
 
 
 def ensure_sndfile_hint() -> None:
@@ -1750,9 +1794,7 @@ def ensure_sndfile_hint() -> None:
     if key in _HINTED_LIBS:
         return
     _HINTED_LIBS.add(key)
-    path = _find_bundled_lib(
-        "_soundfile_data", ("*sndfile*.so*", "*sndfile*.dylib", "*sndfile*.dll")
-    )
+    path = _find_bundled_lib("_soundfile_data", _platform_lib_patterns("sndfile"))
     if path:
         cdll.advtg_set_sndfile_library(path.encode("utf-8"))
 
@@ -1766,9 +1808,7 @@ def ensure_portaudio_hint() -> None:
     if key in _HINTED_LIBS:
         return
     _HINTED_LIBS.add(key)
-    path = _find_bundled_lib(
-        "_sounddevice_data", ("*portaudio*.so*", "*portaudio*.dylib", "*portaudio*.dll")
-    )
+    path = _find_bundled_lib("_sounddevice_data", _platform_lib_patterns("portaudio"))
     if path:
         cdll.advtg_set_portaudio_library(path.encode("utf-8"))
 

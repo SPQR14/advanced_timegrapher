@@ -21,6 +21,15 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+    inputs:
+      skip_windows:
+        description: "Skip Windows build job (e.g. when pre-compiled locally on Windows)"
+        type: boolean
+        default: false
+      run_baseline:
+        description: "Run startup/memory/GUI baseline benchmark"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -122,9 +131,18 @@ jobs:
 
       # GCC 11 of Enterprise Linux 9: the library needs at most GLIBC 2.34, like the rest of
       # the bundle. One binary for every x86_64 CPU: SSE4.2 / AVX2 / AVX-512 chosen at run time.
+      - name: Cache Native C++20 Engine (EL9)
+        id: cache-native-linux
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: src/adv_tg/_native/libadvtg_native.so
+          key: native-el9-x86_64_universal-${{ hashFiles('native/**') }}
+
       - name: Build Native C++20 Engine
         run: |
-          /opt/venv/bin/python scripts/build_native.py --clean --target x86_64_universal
+          if [ "${{ steps.cache-native-linux.outputs.cache-hit }}" != "true" ] || [ ! -f src/adv_tg/_native/libadvtg_native.so ]; then
+            /opt/venv/bin/python scripts/build_native.py --clean --target x86_64_universal
+          fi
           /opt/venv/bin/python scripts/check_native_deps.py src/adv_tg/_native/libadvtg_native.so
           # the copy PyInstaller bundles is src/ (pathex in adv-tg.spec), not the pip-installed one
           PYTHONPATH=src /opt/venv/bin/python -c "from adv_tg import native_bridge as nb; from adv_tg.core.native_session import native_session_available as ok; assert nb.is_native_available() and ok(), 'native engine not loaded'; print(nb.native_arch_info())"
@@ -152,13 +170,14 @@ jobs:
 
       # Baseline of the C++ migration (docs/PLAN_MIGRACION_CPP.md, phase 0): informative only
       - name: Baseline (startup, memory, GUI smoothness) of the frozen build
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.run_baseline
         continue-on-error: true
         run: |
           /opt/venv/bin/python scripts/baseline.py --exe dist/adv-tg/adv-tg --runs 3 \
             --seconds 20 --json baseline-linux.json
 
       - name: Upload baseline
-        if: always()
+        if: always() && (startsWith(github.ref, 'refs/tags/v') || inputs.run_baseline)
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -364,9 +383,18 @@ jobs:
 
       # NEON + Apple clang for every Apple Silicon Mac (M1..M4); minimum macOS 11.0 like
       # Info.plist (MACOSX_DEPLOYMENT_TARGET, set for the job)
+      - name: Cache Native C++20 Engine (macOS)
+        id: cache-native-macos
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: src/adv_tg/_native/libadvtg_native.dylib
+          key: native-macos-apple_silicon-${{ env.MACOSX_DEPLOYMENT_TARGET }}-${{ hashFiles('native/**') }}
+
       - name: Build Native C++20 Engine
         run: |
-          python scripts/build_native.py --clean --target apple_silicon
+          if [ "${{ steps.cache-native-macos.outputs.cache-hit }}" != "true" ] || [ ! -f src/adv_tg/_native/libadvtg_native.dylib ]; then
+            python scripts/build_native.py --clean --target apple_silicon
+          fi
           python scripts/check_native_deps.py src/adv_tg/_native/libadvtg_native.dylib
           PYTHONPATH=src python -c "from adv_tg import native_bridge as nb; from adv_tg.core.native_session import native_session_available as ok; assert nb.is_native_available() and ok(), 'native engine not loaded'; print(nb.native_arch_info())"
 
@@ -386,6 +414,7 @@ jobs:
           "./dist/Advanced Timegrapher.app/Contents/MacOS/adv-tg" --smoke-test
 
       - name: Baseline (startup, memory, GUI smoothness) of the frozen build
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.run_baseline
         continue-on-error: true
         run: |
           pip install psutil
@@ -393,7 +422,7 @@ jobs:
             --runs 3 --seconds 20 --json baseline-macos.json
 
       - name: Upload baseline
-        if: always()
+        if: always() && (startsWith(github.ref, 'refs/tags/v') || inputs.run_baseline)
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -429,8 +458,9 @@ jobs:
   windows:
     name: Windows (setup.exe & Store MSIX)
     needs: meta
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_windows) }}
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       VERSION: ${{ needs.meta.outputs.version }}
       QT_QPA_PLATFORM: offscreen
@@ -454,10 +484,19 @@ jobs:
 
       # MSVC (Visual Studio generator, /fp:precise) with the C/C++ runtime linked statically
       # (/MT): the DLL needs no Visual C++ Redistributable on the user's machine
+      - name: Cache Native C++20 Engine (Windows)
+        id: cache-native-windows
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: src/adv_tg/_native/advtg_native.dll
+          key: native-windows-x86_64_universal-${{ hashFiles('native/**') }}
+
       - name: Build Native C++20 Engine
         run: |
-          python scripts/build_native.py --clean --target x86_64_universal
-          if ($LASTEXITCODE -ne 0) { throw "native build failed" }
+          if ("${{ steps.cache-native-windows.outputs.cache-hit }}" -ne "true" -or -not (Test-Path "src\adv_tg\_native\advtg_native.dll")) {
+            python scripts/build_native.py --clean --target x86_64_universal
+            if ($LASTEXITCODE -ne 0) { throw "native build failed" }
+          }
           python scripts/check_native_deps.py src\adv_tg\_native\advtg_native.dll
           if ($LASTEXITCODE -ne 0) { throw "native DLL is not self-contained" }
           $env:PYTHONPATH = "src"
@@ -467,28 +506,49 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller packaging/adv-tg.spec --noconfirm
 
-      - name: Verify SciPy and Native Engine in the bundle
+      - name: Verify SciPy, ICU and Native Engine in the bundle
         run: |
           $found = Get-ChildItem dist -Recurse -Filter "scipy*"
           if ($found) { throw "SciPy was bundled: $found" }
+          $icu = Get-ChildItem dist\adv-tg\_internal -Filter "icu*" -ErrorAction SilentlyContinue
+          if ($icu) { throw "Third-party ICU DLLs were bundled (shadowing System32\icuuc.dll): $icu" }
           python scripts/check_native_deps.py dist\adv-tg
           if ($LASTEXITCODE -ne 0) { throw "native DLL missing from the bundle or not self-contained" }
 
       # adv-tg.exe is a windowed program: PowerShell only waits for it, and only sees its
-      # exit code, through Start-Process -Wait
+      # exit code, through Start-Process -PassThru + WaitForExit with an explicit timeout.
       - name: Smoke Test Binary
         run: |
-          $p = Start-Process -FilePath "dist\adv-tg\adv-tg.exe" -ArgumentList "--smoke-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "smoke test failed with exit code $($p.ExitCode)" }
+          $logDir = Join-Path $env:RUNNER_TEMP "smoke-logs-bundle"
+          Remove-Item -Recurse -Force $logDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+          $env:ADV_TG_LOG_DIR = $logDir
+          $p = Start-Process -FilePath "dist\adv-tg\adv-tg.exe" -ArgumentList "--smoke-test" -PassThru
+          if (-not $p.WaitForExit(120000)) {
+            try { $p.Kill() } catch {}
+            Get-ChildItem $logDir -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "=== $($_.Name) ==="
+              Get-Content $_.FullName -Tail 80
+            }
+            throw "smoke test timed out after 120s"
+          }
+          if ($p.ExitCode -ne 0) {
+            Get-ChildItem $logDir -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "=== $($_.Name) ==="
+              Get-Content $_.FullName -Tail 80
+            }
+            throw "smoke test failed with exit code $($p.ExitCode)"
+          }
 
       - name: Baseline (startup, memory, GUI smoothness) of the frozen build
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.run_baseline
         continue-on-error: true
         run: |
           pip install psutil
           python scripts/baseline.py --exe dist\adv-tg\adv-tg.exe --runs 3 --seconds 20 --json baseline-windows.json
 
       - name: Upload baseline
-        if: always()
+        if: always() && (startsWith(github.ref, 'refs/tags/v') || inputs.run_baseline)
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -521,8 +581,26 @@ jobs:
           if (-not (Test-Path $exe)) { Get-Content $log -Tail 60; throw "$exe was not installed" }
           $lnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Advanced Timegrapher\Advanced Timegrapher.lnk"
           if (-not (Test-Path $lnk)) { throw "Start Menu shortcut was not created" }
-          $p = Start-Process -FilePath $exe -ArgumentList "--smoke-test" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { throw "installed application: smoke test failed with exit code $($p.ExitCode)" }
+          $smokeLogDir = Join-Path $env:RUNNER_TEMP "smoke-logs-installed"
+          Remove-Item -Recurse -Force $smokeLogDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $smokeLogDir | Out-Null
+          $env:ADV_TG_LOG_DIR = $smokeLogDir
+          $p = Start-Process -FilePath $exe -ArgumentList "--smoke-test" -PassThru
+          if (-not $p.WaitForExit(120000)) {
+            try { $p.Kill() } catch {}
+            Get-ChildItem $smokeLogDir -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "=== $($_.Name) ==="
+              Get-Content $_.FullName -Tail 80
+            }
+            throw "installed application: smoke test timed out after 120s"
+          }
+          if ($p.ExitCode -ne 0) {
+            Get-ChildItem $smokeLogDir -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "=== $($_.Name) ==="
+              Get-Content $_.FullName -Tail 80
+            }
+            throw "installed application: smoke test failed with exit code $($p.ExitCode)"
+          }
           $p = Start-Process -FilePath (Join-Path $dir "unins000.exe") -Wait -PassThru -ArgumentList `
             "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
           if ($p.ExitCode -ne 0) { throw "uninstall failed with exit code $($p.ExitCode)" }

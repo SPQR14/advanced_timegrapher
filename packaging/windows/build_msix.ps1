@@ -185,9 +185,30 @@ try {
             if (-not (Test-Path $aliasExe)) {
                 throw "AppExecutionAlias not found at $aliasExe"
             }
-            $p = Start-Process -FilePath $aliasExe -ArgumentList "--smoke-test" -Wait -PassThru
-            if ($p.ExitCode -ne 0) {
-                throw "MSIX smoke test failed with exit code $($p.ExitCode)"
+            $msixLogDir = Join-Path $workRoot "msix-smoke-logs"
+            New-Item -ItemType Directory -Force -Path $msixLogDir | Out-Null
+            $prevLogDir = $env:ADV_TG_LOG_DIR
+            $env:ADV_TG_LOG_DIR = $msixLogDir
+            try {
+                $p = Start-Process -FilePath $aliasExe -ArgumentList "--smoke-test" -PassThru
+                if (-not $p.WaitForExit(120000)) {
+                    try { $p.Kill() } catch {}
+                    Get-ChildItem $msixLogDir -ErrorAction SilentlyContinue | ForEach-Object {
+                        Write-Host "=== $($_.Name) ==="
+                        Get-Content $_.FullName -Tail 80
+                    }
+                    throw "MSIX smoke test timed out after 120s"
+                }
+                if ($p.ExitCode -ne 0) {
+                    Get-ChildItem $msixLogDir -ErrorAction SilentlyContinue | ForEach-Object {
+                        Write-Host "=== $($_.Name) ==="
+                        Get-Content $_.FullName -Tail 80
+                    }
+                    throw "MSIX smoke test failed with exit code $($p.ExitCode)"
+                }
+            } finally {
+                if ($null -eq $prevLogDir) { Remove-Item Env:ADV_TG_LOG_DIR -ErrorAction SilentlyContinue }
+                else { $env:ADV_TG_LOG_DIR = $prevLogDir }
             }
             Write-Host "MSIX smoke test passed via AppExecutionAlias!"
         } finally {
