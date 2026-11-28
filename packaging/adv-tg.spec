@@ -144,6 +144,19 @@ if sys.platform.startswith("linux"):
         b for b in a.binaries if not Path(b[0]).name.startswith(_SYSTEM_LIBS)
     ]
 
+# 5b. Windows: exclude third-party ICU DLLs that shadow C:\Windows\System32\icuuc.dll.
+# Qt 6 links against Windows 10/11's built-in System32/icuuc.dll (unversioned symbols).
+# If the build machine has a third-party ICU on PATH (MiKTeX, MSYS2, Strawberry Perl,
+# vcpkg...), PyInstaller bundles it into _internal/ and shadows System32/icuuc.dll,
+# crashing Qt6Core.dll at startup with 0xc0000139 (STATUS_ENTRYPOINT_NOT_FOUND).
+if sys.platform.startswith("win"):
+    _WIN_SHADOW_PREFIXES = ("icuuc", "icuin", "icudt")
+    a.binaries = [
+        b
+        for b in a.binaries
+        if not Path(b[0]).name.lower().startswith(_WIN_SHADOW_PREFIXES)
+    ]
+
 pyz = PYZ(a.pure)  # noqa: F821
 
 exe = EXE(  # noqa: F821

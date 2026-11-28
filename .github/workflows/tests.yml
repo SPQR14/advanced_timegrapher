@@ -5,16 +5,27 @@ on:
     branches:
       - develop
       - main
+    paths-ignore:
+      - "index.html"
+      - "CNAME"
+      - "README.md"
+      - "docs/*.md"
+      - "assets/**"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     name: Run Unit Tests (${{ matrix.os }})
     if: github.actor != 'dependabot[bot]'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:

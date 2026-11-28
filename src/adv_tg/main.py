@@ -159,7 +159,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 window = MainWin(translator=translator)
         except Exception as exc:
             logger.critical("Fatal error while creating the main window", exc_info=True)
-            QMessageBox.critical(None, "Fatal Startup Error", f"{type(exc).__name__}: {exc}")
+            if (
+                not smoke_test
+                and os.environ.get("QT_QPA_PLATFORM", "").strip().lower() != "offscreen"
+            ):
+                QMessageBox.critical(None, "Fatal Startup Error", f"{type(exc).__name__}: {exc}")
             return 1
 
         window.show()

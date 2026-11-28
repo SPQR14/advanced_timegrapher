@@ -3,18 +3,35 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ "main", "develop", "release/*" ]
+    paths-ignore:
+      - "index.html"
+      - "CNAME"
+      - "README.md"
+      - "docs/*.md"
+      - "assets/**"
   pull_request:
     branches: [ "main", "develop" ]
+    paths-ignore:
+      - "index.html"
+      - "CNAME"
+      - "README.md"
+      - "docs/*.md"
+      - "assets/**"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     name: Test on ${{ matrix.os }} (Python ${{ matrix.python-version }})
     if: github.actor != 'dependabot[bot]'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -50,10 +67,22 @@ jobs:
       # Tuned for the runner CPU (x86_64 on Linux/Windows, NEON on Apple Silicon macOS); the
       # suite then runs on the native engine, including the zero-tolerance parity tests
       # against the Python reference (tests/test_native_*.py).
+      - name: Cache Native C++20 Engine
+        id: cache-native
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            src/adv_tg/_native/*.so
+            src/adv_tg/_native/*.dylib
+            src/adv_tg/_native/*.dll
+          key: ci-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/**') }}
+
       - name: Build Native C++20 Engine
         shell: bash
         run: |
-          python scripts/build_native.py --target native
+          if [ "${{ steps.cache-native.outputs.cache-hit }}" != "true" ]; then
+            python scripts/build_native.py --target native
+          fi
           PYTHONPATH=src python -c "from adv_tg import native_bridge as nb; from adv_tg.core.native_session import native_session_available as ok; assert nb.is_native_available() and ok(), 'native engine not loaded'; print(nb.native_arch_info())"
 
       - name: Build mobile configuration on the host (static, no PortAudio, C99 example)
@@ -85,6 +114,7 @@ jobs:
     name: C++ app on ${{ matrix.os }}
     if: github.actor != 'dependabot[bot]'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -100,7 +130,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Cache Qt ${{ env.QT_VERSION }}
+        id: cache-qt
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/Qt/${{ env.QT_VERSION }}/${{ matrix.qt_dir }}
+          key: qt-${{ runner.os }}-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}
+
       - name: Set up Python (for aqtinstall)
+        if: steps.cache-qt.outputs.cache-hit != 'true'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
@@ -108,11 +146,20 @@ jobs:
       - name: Install Qt ${{ env.QT_VERSION }} (official binaries)
         shell: bash
         run: |
-          # Pinned commit includes PR #1048 (Windows Qt >= 6.11 folder layout) until aqtinstall > 3.3.0 on PyPI.
-          python -m pip install "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4"
-          aqt install-qt ${{ matrix.qt_host }} desktop "$QT_VERSION" ${{ matrix.qt_arch }} \
-            --outputdir "$RUNNER_TEMP/Qt"
+          if [ "${{ steps.cache-qt.outputs.cache-hit }}" != "true" ]; then
+            # Pinned commit includes PR #1048 (Windows Qt >= 6.11 folder layout) until aqtinstall > 3.3.0 on PyPI.
+            python -m pip install "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4"
+            aqt install-qt ${{ matrix.qt_host }} desktop "$QT_VERSION" ${{ matrix.qt_arch }} \
+              --outputdir "$RUNNER_TEMP/Qt"
+          fi
           echo "QT_ROOT=$RUNNER_TEMP/Qt/$QT_VERSION/${{ matrix.qt_dir }}" >> "$GITHUB_ENV"
+
+      - name: Cache vcpkg binaries (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-cache
+          key: vcpkg-win-${{ hashFiles('vcpkg.json') }}
 
       - name: Install C++ dependencies (Linux)
         if: runner.os == 'Linux'
@@ -131,11 +178,14 @@ jobs:
           cmake -S . -B build/app -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$QT_ROOT"
 
-      # vcpkg manifest (vcpkg.json): libsndfile + Catch2 built with MSVC
+      # vcpkg manifest (vcpkg.json): libsndfile + Catch2 built with MSVC (cached across runs)
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $vcpkgCache = Join-Path $env:RUNNER_TEMP "vcpkg-cache"
+          New-Item -ItemType Directory -Force -Path $vcpkgCache | Out-Null
+          $env:VCPKG_DEFAULT_BINARY_CACHE = $vcpkgCache
           cmake -S . -B build/app -A x64 `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT"
@@ -165,6 +215,7 @@ jobs:
     name: C++ app on AlmaLinux 9 (EL9 / glibc 2.34)
     if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     container: almalinux:9
     env:
       QT_VERSION: "6.11.3"
@@ -185,12 +236,21 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Cache Qt ${{ env.QT_VERSION }} (EL9)
+        id: cache-qt-el9
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/Qt/${{ env.QT_VERSION }}/gcc_64
+          key: qt-el9-${{ env.QT_VERSION }}-linux_gcc_64
+
       - name: Install Qt ${{ env.QT_VERSION }} (official binaries)
         run: |
-          # Pinned commit includes PR #1048 (Windows Qt >= 6.11 folder layout) until aqtinstall > 3.3.0 on PyPI.
-          /usr/bin/python3.12 -m pip install "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4"
-          /usr/bin/python3.12 -m aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 \
-            --outputdir /tmp/Qt
+          if [ "${{ steps.cache-qt-el9.outputs.cache-hit }}" != "true" ]; then
+            # Pinned commit includes PR #1048 (Windows Qt >= 6.11 folder layout) until aqtinstall > 3.3.0 on PyPI.
+            /usr/bin/python3.12 -m pip install "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@4c759852b1108cc801d8e24979136b895b5155d4"
+            /usr/bin/python3.12 -m aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 \
+              --outputdir /tmp/Qt
+          fi
           echo "QT_ROOT=/tmp/Qt/$QT_VERSION/gcc_64" >> "$GITHUB_ENV"
 
       - name: Configure
